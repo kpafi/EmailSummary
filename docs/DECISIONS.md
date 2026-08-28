@@ -476,3 +476,128 @@
   bei zwei verschiedenen Cloud-Providern wäre ein `[llm.critic] api_key` nötig — als
   bekannte Grenze in ARCHITECTURE §5 dokumentiert, nicht in WP4 gelöst (config.py gehört
   WP1).
+
+## ADR-026: Eigene Magic-Bytes-Tabelle, Offset 0, „Deklaration UND Inhalt"-Regel
+- Status: accepted
+- WP / Datum: WP3, 2026-08-28
+- Kontext: F-SEC-4/T6 verlangen, dass dem deklarierten MIME-Typ nie geglaubt wird, ohne
+  eine neue Dependency (`python-magic`/`filetype`) einzuführen. Offen war, wie streng die
+  Prüfung ist und ob erkannter Inhalt eine falsche Deklaration „korrigieren" darf.
+- Entscheidung: Kleine eigene Signaturtabelle in `sanitize/attachments.py` (~30 Präfixe:
+  Executables, Archive, OLE2, Bilder, RTF, `#!`-Skripte, SQLite, WASM, PDF), geprüft
+  **strikt an Offset 0**. Verarbeitet wird nur bei Deklaration ∈ Allowlist **und**
+  passendem Inhalt: PDF braucht `%PDF-` an Offset 0; text/plain und text/html dürfen
+  keine bekannte Binärsignatur tragen und müssen eine Text-Heuristik bestehen (kein
+  NUL-Byte, < 5 % Steuerbytes in 8-KB-Stichprobe). Jeder Widerspruch ⇒
+  `detected_kind="mismatch"` ⇒ nie verarbeitet. Inhalt, der wie ein Allowlist-Format
+  aussieht, aber anders deklariert ist, wird nie hochgestuft (`unknown`).
+- Alternativen: `%PDF-` in den ersten 1024 Bytes suchen (tolerant wie manche Viewer,
+  aber ein Polyglott-Einfallstor); Erkennung rein nach Inhalt statt Deklaration
+  (ein als `octet-stream` deklarierter PDF würde dann geöffnet — mehr Angriffsfläche
+  ohne Nutzerwert); `python-magic` (libmagic-Bindung: neue Dependency, riesige, extern
+  gepflegte Signaturbasis, NF-1/NF-2).
+- Konsequenzen: Legitime PDFs mit Vorspann-Bytes werden abgelehnt (selten; erscheinen
+  als „nicht verarbeitet" — fail-safe). Die Tabelle muss nicht vollständig sein: Sie
+  falsifiziert nur Allowlist-Deklarationen, Unbekanntes ist ohnehin geblockt.
+
+## ADR-027: Hidden-Text-Heuristik und Tag-Strip auch in Klartext — Über-Entfernung ist ok
+- Status: accepted
+- WP / Datum: WP3, 2026-08-28
+- Kontext: T2 (versteckter Injection-Text) ist nur heuristisch erkennbar; zugleich
+  verlangt das WP3-Akzeptanzkriterium „kein HTML-Tag im Output", obwohl ein Angreifer
+  `<script>` auch wörtlich in einen text/plain-Body schreiben kann.
+- Entscheidung: (a) Als versteckt gilt ein Element mit `display:none`,
+  `visibility:hidden|collapse`, `opacity:0`, `font-size:0` (0/0px/0pt/0em/0%),
+  `hidden`-Attribut oder weißer Schriftfarbe (#fff/#ffffff/white/rgb(255,255,255)) ohne
+  eigenen nicht-weißen Hintergrund — Mail-Hintergründe sind praktisch immer weiß.
+  Entfernte Elemente mit Textinhalt werden gezählt (`hidden_text_removed`).
+  (b) Nach Link-Scrub werden HTML-Tag-artige Sequenzen (`</?[A-Za-z]…>`) auch in
+  Klartext-Teilen durch Leerzeichen ersetzt. (c) Beides ist bewusst überschießend:
+  Ein legitimes `Name <adresse@example>` im Fließtext oder weißer Text auf dunklem
+  Inline-Bild geht verloren — Informationsverlust ist der akzeptierte Preis dafür, dass
+  kein Tag und möglichst wenig unsichtbarer Text das LLM bzw. den Nutzer erreicht.
+- Alternativen: CSS vollständig kaskadiert auswerten (praktisch ein Browser-Engine-
+  Nachbau, riesige Angriffsfläche); Tags nur in HTML-Teilen entfernen (verfehlt das
+  Akzeptanzkriterium für text/plain-Angriffe); gar keine Weiß-auf-Weiß-Heuristik
+  (T2-Standardtrick bliebe unerkannt).
+- Konsequenzen: `hidden_text_removed` ist ein Kritiker-Signal (F-CRIT-3). Bekannte
+  Lücken (dokumentiert, best effort): CSS-Klassen aus `<style>`-Blöcken, `position:
+  absolute; left:-9999px`, Farbwerte wie `#fffffe` werden nicht erkannt.
+
+## ADR-028: Link-Erkennung in sechs Pässen mit Platzhaltern; enge Bare-Domain-Politik
+- Status: accepted
+- WP / Datum: WP3, 2026-08-28
+- Kontext: I3/T3 verlangen, dass keine URL die Sanitize-Stufe übersteht, inklusive
+  Obfuskationen (`hxxp`, `(.)`, `[.]`, Leerzeichen-Einschub, `%68ttp`). Naive einzelne
+  Regexe übersehen Varianten oder springen auf die eigenen `[Link #n: domain]`-Marker an.
+- Entscheidung: `links.LinkCollector.scrub` läuft in sechs Pässen (Schema-URLs inkl.
+  obfuskiertem/percent-kodiertem Schema und ftp, `mailto:`, `tel:`, `www.`-Domains,
+  Domains mit obfuskierten Punkten, nackte Domains). Jeder Fund wird sofort durch einen
+  `\x00`-Platzhalter ersetzt (Eingabetext ist durch `unicode_clean` garantiert NUL-frei)
+  und erst am Ende zum Marker aufgelöst — spätere Pässe können Marker-Domains nicht
+  erneut treffen. Nackte Domains werden nur mit eng gesetzten Punkten und alphabetischer
+  TLD erkannt; ~70 bekannte Datei-Endungen (`rechnung.pdf`) sind ausgenommen.
+  Leerzeichen-Einschub wird nur in Schema-/www-/Obfuskations-Kontext akzeptiert, nie bei
+  nackten Domains (sonst würde „usw. der" zur Domain). Defang-Format bricht Schema,
+  Trenner und Punkte (`hxxps[:]//evil[.]com`), damit auch die optionale Fußnote keinem
+  Auto-Linkifier zum Opfer fällt; `www.`-Präfixe werden im Marker gestrippt.
+  Host-Extraktion nimmt den Teil hinter dem letzten `@` der Authority (Userinfo-Trick)
+  und dekodiert Punycode für Kennzeichnung und Mixed-Script-Prüfung.
+- Alternativen: Ein einziger „Super-Regex" (unwartbar, Marker-Reentranz ungelöst);
+  tld-Liste der IANA einbetten für Bare-Domains (Pflegeaufwand, NF-1); Bare-Domains gar
+  nicht erkennen (Phishing nennt Domains oft ohne Schema).
+- Konsequenzen: Bekannte, dokumentierte Lücken: `.zip`/`.js` existieren auch als echte
+  TLDs — ohne Schema werden solche Nennungen als Dateiname gewertet (mit Schema immer
+  erkannt; ohne Schema nicht klickbar, I3 bleibt gewahrt). Nach „URL. kleinwort" kann
+  der Spaced-Dot-Pass ein Folgewort verschlucken (Über-Entfernung, fail-safe).
+  Die Marker-Nummerierung folgt der Pass-Reihenfolge, nicht zwingend der Textreihenfolge.
+
+## ADR-029: PDF-Subprozess über `python -m`, stdin/stdout, RLIMIT_AS als Code-Konstante
+- Status: accepted
+- WP / Datum: WP3, 2026-08-28
+- Kontext: I7 verlangt Zeit-, Speicher- und Größenlimits für die PDF-Extraktion. Offen
+  war die Mechanik (multiprocessing vs. eigener Prozess) und wo das Speicherlimit lebt.
+- Entscheidung: `extract_pdf.extract_pdf_text` startet `sys.executable -m
+  maildigest.sanitize.extract_pdf` (derselbe Interpreter ⇒ dasselbe venv), schreibt die
+  PDF-Bytes auf stdin und liest gekürzten UTF-8-Text von stdout. Das Kind setzt **vor**
+  dem pdfminer-Import `RLIMIT_AS` (512 MB, Code-Konstante — der Wert schützt den Host,
+  nicht den Nutzerkomfort, darum kein Config-Feld) und kürzt den Output selbst; der
+  Elternprozess erzwingt den Timeout über `subprocess.run(timeout=…)` (Kill inklusive)
+  und prüft das Input-Limit vor dem Start. Jeder Fehler (Nicht-Null-Exit, Timeout,
+  OSError) ⇒ `None` ⇒ Anhang unverarbeitet. stderr wird verworfen und nie geloggt
+  (pdfminer-Meldungen können Mail-Inhalt enthalten, I5); auch `SystemExit(0)` des Kindes
+  wird nicht vom Fehler-Handler verschluckt (Exception-Filter ist `Exception`).
+- Alternativen: `multiprocessing`/`fork` (erbt den kompletten Eltern-Speicher inkl.
+  eventueller Secrets im Config-Objekt; RLIMIT-Setzen nach fork ist fehleranfällig);
+  Extraktion in-process mit Signal-Timeout (kein Schutz gegen Parser-Crash/Memory, T5);
+  konfigurierbares RSS-Limit (unnötige Config-Fläche).
+- Konsequenzen: Pro PDF fallen ~100-300 ms Interpreter-Start an — bei einem
+  Mail-Digest irrelevant. Auf Nicht-POSIX-Plattformen ohne `resource`-Modul bleibt nur
+  Timeout+Größenlimit (best effort, im Code als solches markiert).
+
+## ADR-030: MIME-Baum-Politik — rfc822 nie betreten, Tiefenlimit als Metadatum, Body-Aggregation
+- Status: accepted
+- WP / Datum: WP3, 2026-08-28
+- Kontext: ARCHITECTURE §3 lässt offen, wie mehrere Body-Teile, eingebettete Mails und
+  zu tiefe MIME-Bäume konkret behandelt werden; SECURITY §4 gibt nur die Grundsätze vor.
+- Entscheidung: (a) Der MIME-Baum wird manuell gelaufen (compat32-Parser, jeder
+  Header-Zugriff einzeln abgesichert); `message/*`-Teile werden **nie** betreten,
+  sondern als ein Anhang-Metadatum erfasst (T13) — auch nicht zur Body-Suche.
+  (b) Teile, die tiefer als `limits.max_mime_depth` verschachtelt sind, werden nicht
+  geparst, sondern als ein
+  synthetisches Metadatum `(mime-tiefe ueberschritten)` gezählt (T10) — sichtbar statt
+  still verworfen. (c) Body = alle Inline-`text/plain`-Teile, sonst alle
+  Inline-`text/html`-Teile; „Inline" = keine Attachment-Disposition und kein Dateiname.
+  (d) `text/html` mit Dateiname/Attachment-Disposition ist Smuggling-Vektor und bleibt
+  Metadatum (`processed=False`), obwohl der Typ auf der Allowlist steht.
+  (e) Verarbeitete Anhänge erhalten immer einen `AttachmentInfo`-Eintrag; die
+  Metadatenliste ist auf 100 Einträge gedeckelt (Teile-Bomben), `blocked_attachments`
+  zählt unabhängig davon korrekt.
+- Alternativen: `walk()` der stdlib (steigt in rfc822 hinein — genau der T13-Bypass);
+  nur den ersten Text-Teil als Body (verliert legitime multipart/mixed-Textfolgen);
+  policy.default-Parser (schöneres API, wirft aber bei bestimmten defekten Headern beim
+  Zugriff — jede solche Exception wäre ein vermeidbarer Fail-closed-Fall).
+- Konsequenzen: Eine Mail, die nur aus einer eingebetteten Mail besteht, hat leeren
+  Body und ein Anhang-Metadatum — WP7 meldet das als „nicht verarbeiteter Anhang".
+  Tiefe, legitime Newsletter-Verschachtelungen (> 10 Ebenen) verlieren Inhalt; das
+  Limit ist per Config anhebbar.

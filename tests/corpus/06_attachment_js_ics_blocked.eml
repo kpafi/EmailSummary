@@ -1,0 +1,29 @@
+X-Test-Purpose: Skript- und Kalender-Anhaenge (js, ics) werden geblockt, nur Metadatum
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Terminvorschlag und Tool
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-06@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B06"
+
+--B06
+Content-Type: text/plain; charset=utf-8
+
+Termin im Anhang, dazu das kleine Hilfsskript.
+
+--B06
+Content-Type: text/calendar; method=REQUEST
+Content-Disposition: attachment; filename="einladung.ics"
+Content-Transfer-Encoding: base64
+
+QkVHSU46VkNBTEVOREFSDQpWRVJTSU9OOjIuMA0KQkVHSU46VkVWRU5UDQpTVU1NQVJZOkluZXJ0
+ZXIgVGVzdC1UZXJtaW4NCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==
+--B06
+Content-Type: application/javascript
+Content-Disposition: attachment; filename="helfer.js"
+Content-Transfer-Encoding: base64
+
+Ly8gaW5lcnRlciBQbGF0emhhbHRlciwgd2lyZCBuaWUgYXVzZ2VmdWVocnQKY29uc29sZS5sb2co
+J3Rlc3QnKTsK
+--B06--

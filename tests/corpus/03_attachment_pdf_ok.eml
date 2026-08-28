@@ -1,0 +1,33 @@
+X-Test-Purpose: application/pdf-Anhang mit korrekten Magic Bytes wird im Subprozess extrahiert; URL im PDF-Text wird defangt
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Ihre Rechnung 4711
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-03@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B03"
+
+--B03
+Content-Type: text/plain; charset=utf-8
+
+Guten Tag, anbei die Rechnung als PDF.
+
+--B03
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="rechnung-4711.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq
+CjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIg
+NzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4g
+Pj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxNTAgPj4Kc3RyZWFtCkJUIC9GMSAxMiBU
+ZiA3MiA3MjAgVGQgMTQgVEwgKFJlY2hudW5nIE5yLiA0NzExIHVlYmVyIDg0LDMwIEV1cm8uKSBU
+aiBUKiAoWmFobGJhciBiaXMgMTUuMDkuIGF1ZiBLb250byBzaWVoZSBodHRwOi8vcmVjaG51bmct
+cG9ydGFsLmV4YW1wbGUvcGF5KSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5
+cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4
+cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1
+OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAw
+MDQ0MiAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVm
+CjUxMgolJUVPRgo=
+--B03--

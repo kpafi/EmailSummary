@@ -1,0 +1,30 @@
+X-Test-Purpose: Archiv (zip) und Executable (MZ) werden geblockt, nur Metadatum
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Setup-Dateien
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-05@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B05"
+
+--B05
+Content-Type: text/plain; charset=utf-8
+
+Bitte installieren: Archiv und Setup anbei.
+
+--B05
+Content-Type: application/zip
+Content-Disposition: attachment; filename="daten.zip"
+Content-Transfer-Encoding: base64
+
+UEsDBElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVS
+IElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIA==
+--B05
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="setup.exe"
+Content-Transfer-Encoding: base64
+
+TVpJTkVSVC1URVNULUVYRS1QTEFUWkhBTFRFUi1LRUlOLUNPREUgSU5FUlQtVEVTVC1FWEUtUExB
+VFpIQUxURVItS0VJTi1DT0RFIElORVJULVRFU1QtRVhFLVBMQVRaSEFMVEVSLUtFSU4tQ09ERSBJ
+TkVSVC1URVNULUVYRS1QTEFUWkhBTFRFUi1LRUlOLUNPREUg
+--B05--

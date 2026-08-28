@@ -1,0 +1,22 @@
+X-Test-Purpose: Office-Anhang (docx = ZIP-Magic) wird nie geoeffnet, nur Metadatum
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Vertrag zur Durchsicht
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-04@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B04"
+
+--B04
+Content-Type: text/plain; charset=utf-8
+
+Anbei der Vertrag als Word-Datei.
+
+--B04
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+Content-Disposition: attachment; filename="vertrag.docx"
+Content-Transfer-Encoding: base64
+
+UEsDBElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVS
+IElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIA==
+--B04--

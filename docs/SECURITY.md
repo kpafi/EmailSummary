@@ -50,28 +50,76 @@ gemacht**:
 | T13 | Mail-in-Mail (message/rfc822) schmuggelt Payloads an Filtern vorbei | Eingebettete Mails werden wie Anhänge behandelt: nicht geöffnet, nur Metadatum (WP3) |
 | T14 | Kompromittierte Zusammenfassung im Sammel-Digest geht unter | Kritiker-`high` erzwingt Einzelzustellung mit Banner (F-CRIT-2) |
 
-## 4. Sanitizer-Politik (Referenz für WP3)
+## 4. Sanitizer-Politik (verbindlich; umgesetzt in WP3, ADR-026 bis ADR-030)
 
 **Grundsatz: Allowlist, nie Blocklist.** Es wird definiert, was durchdarf — alles andere
 fällt raus. Ein neues gefährliches Dateiformat darf nie ein Update erfordern, um geblockt
 zu sein.
 
-- **Body:** `text/plain` bevorzugt; sonst `text/html` → Text-Konvertierung. Andere
-  Body-Typen ⇒ „nicht darstellbar".
-- **Anhänge, inhaltlich verarbeitet (nur diese drei):**
-  `text/plain`, `text/html`, `application/pdf` — nach Magic-Byte-Check, unter Limits.
+- **Body:** Existiert mindestens ein Inline-`text/plain`-Teil, bilden **alle**
+  Inline-`text/plain`-Teile (in MIME-Reihenfolge) den Body; sonst werden alle
+  Inline-`text/html`-Teile konvertiert. Andere Body-Typen ⇒ „nicht darstellbar"
+  (Anhang-Metadatum). „Inline" heißt: `Content-Disposition` ist nicht `attachment`
+  **und** kein Dateiname gesetzt.
+- **Anhänge, inhaltlich verarbeitet (nur diese zwei Fälle):** `text/plain`-Dateien und
+  `application/pdf` — nach Magic-Byte-Check, unter Limits. `text/html` ist **nur als
+  Inline-Body** erlaubt; eine `.html`-*Datei* ist HTML-Smuggling-Vektor und bleibt
+  Metadatum (`detected_kind="html"`, `processed=False`).
+- **Magic-Bytes-Verifikation (T6, ADR-026):** Dem Header-MIME wird nie geglaubt.
+  Verarbeitet wird nur, wenn der deklarierte Typ auf der Allowlist steht **und** der
+  Inhalt dazu passt: PDF ⇒ `%PDF-` exakt an Offset 0; text ⇒ keine bekannte
+  Binärsignatur (eigene kleine Tabelle in `sanitize/attachments.py`: MZ/ELF/Mach-O, ZIP/
+  RAR/7z/GZIP/BZIP2/XZ/CAB, OLE2, PNG/JPEG/GIF/BMP/TIFF, RTF, `#!`-Skripte, SQLite,
+  WASM, PDF) und Text-Heuristik bestanden (kein NUL, < 5 % Steuerbytes in 8 KB
+  Stichprobe). Widerspruch ⇒ `detected_kind="mismatch"` ⇒ nie verarbeitet. Ein
+  nicht-allowgelisteter Typ wird nie „hochgestuft", auch wenn sein Inhalt wie PDF aussieht.
 - **Anhänge, nur Metadatum (Beispiele, nicht abschließend):** Office (`.docx/.xlsx/.pptx`
   — Makros!), Archive (`.zip/.rar/.7z/.iso` — Smuggling), Executables/Skripte
   (`.exe/.js/.bat/.sh/.apk`), Kalender (`.ics` — Event-Injection), Bilder (Phishing-Screens,
-  Stego), `message/rfc822`, `.html`-Anhänge (Smuggling), alles Unbekannte.
-- **Link-Behandlung:** Ersetzen im Text durch `[Link #n: domain.tld]`; optional defangte
-  Vollliste als Fußnote (Config `links.footnote = true`, Default false). Erkennung muss
-  Obfuskation abdecken: `hxxp`, `(.)`, `[.]`, Leerzeichen-Einschub, URL-Encoding, `%68ttp`.
-- **Unicode:** Entfernen von U+200B–U+200F, U+202A–U+202E, U+2066–U+2069, U+FEFF u. ä.;
-  NFKC; Kennzeichnung gemischter Skripte in Domains.
-- **Limits (Defaults, per Config änderbar):** Mail gesamt 25 MB (drüber ⇒ nur Notiz),
-  Klartext 30 000 Zeichen, PDF-Input 10 MB, PDF-Output 50 000 Zeichen, PDF-Timeout 20 s,
-  MIME-Tiefe 10, Anhänge max. 20 Stück verarbeitet.
+  Stego), `message/rfc822` (T13: wird **nie** betreten, auch nicht rekursiv),
+  `.html`-Anhänge (Smuggling), alles Unbekannte. Erfasst werden sanitisierter Dateiname
+  (ASCII-Allowlist, Pfadanteile entfernt, max. 80 Zeichen), deklarierter MIME-Typ, Größe.
+- **Link-Behandlung (I3/T3, ADR-028):** Ersetzen im Text durch `[Link #n: domain.tld]`
+  (`mailto:` ⇒ `[Mail #n: domain]`, `tel:` ⇒ `[Tel #n]`); die defangte Vollliste steht
+  immer in `links_found` (`hxxps[:]//evil[.]com/…`, max. 100 Einträge à 300 Zeichen) und
+  wird nur bei `links.footnote = true` (Default false) zusätzlich als Fußnote an den
+  Body angehängt. Erkennung deckt Obfuskation ab: `hxxp`, `(.)`, `[.]`, `(dot)`,
+  Leerzeichen-Einschub, URL-Encoding (`%68ttp`), `www.`-Domains, nackte Domains
+  (eng gesetzte Punkte, alphabetische TLD; bekannte Datei-Endungen ausgenommen),
+  Userinfo-Tricks (`http://gut@boese/` ⇒ Domain ist `boese`). Ein `www.`-Präfix wird im
+  Marker gestrippt (Autolink-Gefahr im Messenger).
+- **Punycode/Homoglyphen (T12):** `xn--`-Domains werden im Marker gekennzeichnet und in
+  `punycode_domains` inkl. Unicode-Darstellung gelistet; Labels mit gemischten
+  Schriftsystemen landen in `mixed_script_domains`. Beides gilt auch für die
+  Absender-Domain.
+- **Unicode (F-SEC-10):** NFKC-Normalisierung; danach wird **jedes** Zeichen der
+  Unicode-Kategorie „C*" außer Tab/Zeilenumbruch entfernt und gezählt (deckt
+  U+200B..200F, U+202A..202E, U+2066..2069, U+FEFF, U+00AD, U+2060..2064 u. ä. ab —
+  bewusst kategorienbasiert statt Codepunkt-Blockliste). Gilt für Body, Anhangs-Texte,
+  Betreff und Absender-Anzeigename.
+- **HTML → Text (T2, ADR-027):** `script`/`style`/`head`/`template`/`noscript`/`iframe`/
+  `object`/`embed`/`svg`/`math` und Kommentare werden entfernt; unsichtbarer Text
+  (`display:none`, `visibility:hidden`, `opacity:0`, `font-size:0`, weiße Schrift ohne
+  eigenen nicht-weißen Hintergrund, `hidden`-Attribut) wird entfernt und im Report
+  gezählt (`hidden_text_removed`); Tracking-Pixel (≤ 2×2 px) werden ersatzlos entfernt;
+  Alt-Texte erscheinen als `[Bild: …]`; `href`-Ziele werden als Text sichtbar gemacht und
+  dann defangt. Zusätzlich werden HTML-Tag-artige Sequenzen auch in *Klartext*-Teilen
+  neutralisiert (fail-safe: lieber Über-Entfernung als ein Tag im Output).
+- **PDF-Extraktion (I7/T5, ADR-029):** `pdfminer.six` läuft ausschließlich in einem
+  Subprozess (`python -m maildigest.sanitize.extract_pdf`, PDF via stdin), mit Timeout
+  (Eltern-Prozess), `RLIMIT_AS` 512 MB (Code-Konstante) und Output-Kürzung im Kind.
+  stderr wird verworfen (I5). Jeder Fehler ⇒ Anhang „nicht verarbeitet", Pipeline läuft.
+- **Limits (Defaults, per Config änderbar):** Mail gesamt 25 MB (drüber ⇒
+  `SanitizeError` ⇒ Metadaten-Notiz, T10), Gesamt-Klartext 30 000 Zeichen über Body und
+  Anhangs-Texte hinweg (Kürzung mit `[gekürzt]`-Marker, `truncated=true`), PDF-Input
+  10 MB, PDF-Output 50 000 Zeichen, PDF-Timeout 20 s, MIME-Tiefe 10 (tiefere Teile ⇒
+  Metadatum „mime-tiefe ueberschritten"), Anhänge max. 20 Stück verarbeitet (weitere ⇒
+  Metadatum), Anhang-Metadatenliste max. 100 Einträge (`blocked_attachments` zählt
+  unabhängig davon korrekt).
+- **Deterministische Kritiker-Fakten (F-CRIT-3):** Der Report enthält zusätzlich
+  `reply_to_mismatch` (Reply-To-Adresse ≠ From-Adresse), `return_path_mismatch`
+  (nur wenn beide Domains bekannt sind, ADR-020) und `auth_results` (best-effort-Parse
+  von `Authentication-Results`: `spf`/`dkim`/`dmarc`, erste Nennung gewinnt).
 
 ## 5. Prompt-Härtung (Referenz für WP5/WP6)
 

@@ -1,0 +1,23 @@
+X-Test-Purpose: Executable (MZ-Magic) als application/pdf deklariert: Magic-Bytes-Mismatch, detected_kind=mismatch, wird nie verarbeitet (T6)
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Wichtige Rechnung als PDF
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-09@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B09"
+
+--B09
+Content-Type: text/plain; charset=utf-8
+
+Bitte oeffnen Sie die beigefuegte PDF-Rechnung.
+
+--B09
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="rechnung.pdf"
+Content-Transfer-Encoding: base64
+
+TVpJTkVSVC1URVNULUVYRS1QTEFUWkhBTFRFUi1LRUlOLUNPREUgSU5FUlQtVEVTVC1FWEUtUExB
+VFpIQUxURVItS0VJTi1DT0RFIElORVJULVRFU1QtRVhFLVBMQVRaSEFMVEVSLUtFSU4tQ09ERSBJ
+TkVSVC1URVNULUVYRS1QTEFUWkhBTFRFUi1LRUlOLUNPREUg
+--B09--

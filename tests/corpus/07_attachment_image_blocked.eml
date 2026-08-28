@@ -1,0 +1,30 @@
+X-Test-Purpose: Bilder (inline und als Anhang) werden nie geoeffnet, nur Metadatum
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Fotos vom Event
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-07@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B07"
+
+--B07
+Content-Type: text/plain; charset=utf-8
+
+Zwei Fotos anbei.
+
+--B07
+Content-Type: image/png
+Content-Disposition: inline
+Content-ID: <bild1@corpus>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgpJTkVSVC1URVNULVBORy1QTEFUWkhBTFRFUiBJTkVSVC1URVNULVBORy1QTEFUWkhB
+TFRFUiBJTkVSVC1URVNULVBORy1QTEFUWkhBTFRFUiA=
+--B07
+Content-Type: image/jpeg
+Content-Disposition: attachment; filename="event.jpg"
+Content-Transfer-Encoding: base64
+
+/9j/4ElORVJULVRFU1QtSlBFRy1QTEFUWkhBTFRFUiBJTkVSVC1URVNULUpQRUctUExBVFpIQUxU
+RVIgSU5FUlQtVEVTVC1KUEVHLVBMQVRaSEFMVEVSIA==
+--B07--

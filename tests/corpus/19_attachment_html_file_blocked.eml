@@ -1,0 +1,23 @@
+X-Test-Purpose: text/html als Datei-Anhang (HTML-Smuggling): wird nicht verarbeitet, nur Metadatum — HTML ist nur als Inline-Body erlaubt
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Ihr Angebot als HTML
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-19@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B19"
+
+--B19
+Content-Type: text/plain; charset=utf-8
+
+Das Angebot liegt als HTML-Datei bei.
+
+--B19
+Content-Type: text/html; charset=utf-8
+Content-Disposition: attachment; filename="angebot.html"
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+PHNjcmlwdD5sb2NhdGlvbj0naHR0cHM6Ly9zbXVnZ2xlLXppZWwuZXhhbXBs
+ZS94Jzwvc2NyaXB0PjxwPkhUTUwtU0NITVVHR0VMLUlOSEFMVCBkYXJmIG5pZSBpbSBPdXRwdXQg
+c3RlaGVuLjwvcD48L2JvZHk+PC9odG1sPg==
+--B19--

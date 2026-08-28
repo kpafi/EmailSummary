@@ -34,6 +34,13 @@ line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
 
+[tool.ruff.lint.per-file-ignores]
+# Tests und Korpus-Generator enthalten ABSICHTLICH Homoglyphen, Zero-Width- und
+# Bidi-Zeichen als Angriffs-Testdaten (WP3) — die Ambiguität ist dort der Testfall.
+"tests/**" = ["RUF001", "RUF002", "RUF003"]
+# Der Korpus-Generator baut Mails bewusst als lesbare Listen-Konkatenation auf.
+"tests/corpus/_make_corpus.py" = ["RUF005"]
+
 [tool.ruff.lint]
 select = [
     "E",    # pycodestyle errors

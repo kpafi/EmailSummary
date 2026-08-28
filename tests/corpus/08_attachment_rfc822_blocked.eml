@@ -1,0 +1,25 @@
+X-Test-Purpose: message/rfc822-Anhang wird als Anhang behandelt, nie geoeffnet; sein Inhalt darf nirgends im Output auftauchen (T13)
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Weitergeleitete Nachricht
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-08@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B08"
+
+--B08
+Content-Type: text/plain; charset=utf-8
+
+Ich leite dir die Mail von gestern weiter.
+
+--B08
+Content-Type: message/rfc822
+Content-Disposition: attachment
+
+From: boese@innere-mail.example
+Subject: Innere Mail
+Content-Type: text/plain; charset=utf-8
+
+GEHEIMER-INNERER-INHALT: Klick auf https://schmuggel.example/payload jetzt!
+
+--B08--

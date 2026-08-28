@@ -1,0 +1,11 @@
+X-Test-Purpose: Bidi-Steuerzeichen (RLO U+202E) in Betreff und Body werden entfernt und gezaehlt (T2); Dateiname-Umkehr-Trick wirkungslos
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: =?utf-8?b?QW5oYW5nOiBGb3Rv4oCuZ3BqLmV4ZeKArCBhbnNlaGVu?=
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-12@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Der Anhang Foto‮gpj.exe‬ ist ein harmloses Bild, ehrlich.
+Gruss, dein Kollege.

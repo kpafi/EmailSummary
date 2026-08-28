@@ -1,0 +1,21 @@
+X-Test-Purpose: kaputtes MIME (fehlende End-Boundary, ungueltiges Base64, defekte Header) darf keine Exception ausloesen
+From: kaputt@corpus-test.example
+To: empfaenger@corpus-test.example
+Subject: =?utf-8?B?a2FwdXR0ZXIgQmV0cmVmZg=!?=
+Diese Zeile ist kein gueltiger Header
+Message-ID: <corpus-16@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B16"
+
+--B16
+Content-Type: text/plain; charset=utf-8
+
+Sichtbarer Text vor dem kaputten Teil.
+
+--B16
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="defekt.pdf"
+Content-Transfer-Encoding: base64
+
+!!!das ist kein base64###
+--FALSCHE-BOUNDARY

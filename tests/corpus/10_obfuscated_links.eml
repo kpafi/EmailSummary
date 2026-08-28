@@ -1,0 +1,20 @@
+X-Test-Purpose: Link-Obfuskation: hxxp, (.), [.], (dot), Leerzeichen-Einschub, URL-Encoding %68ttp, www-Domain, nackte Domain, mailto, tel
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Bitte Zugang bestaetigen
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-10@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Ihr Konto wird gesperrt! Bestaetigen Sie hier:
+hxxps://konto-check(.)example/login
+oder hier: h t t p s : / / verify . example . org / session
+Encodiert: %68ttp://encoded-ziel.example/pfad?x=1
+Klassisch: https://normal-link.example/abc
+Defangte Domain: sicherheit[.]example[dot]net
+Mit www: www.portal-beispiel.example/start
+Nackt: phishing-seite.example
+Schreiben Sie an mailto:support@fake-hilfe.example
+oder rufen Sie tel:+49 30 555 0100 an.
+Keine Domain: die Datei backup.zip und das README.md bleiben Text.

@@ -1,0 +1,76 @@
+X-Test-Purpose: MIME-Rekursion (14 verschachtelte multipart-Ebenen, Limit 10): tiefe Teile werden verworfen, Pipeline laeuft weiter (T10)
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Tief verschachtelte Mail
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-18@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="R0"
+
+--R0
+Content-Type: text/plain; charset=utf-8
+
+Oberster Text-Teil.
+
+--R0
+Content-Type: multipart/mixed; boundary="R1"
+
+--R1
+Content-Type: multipart/mixed; boundary="R2"
+
+--R2
+Content-Type: multipart/mixed; boundary="R3"
+
+--R3
+Content-Type: multipart/mixed; boundary="R4"
+
+--R4
+Content-Type: multipart/mixed; boundary="R5"
+
+--R5
+Content-Type: multipart/mixed; boundary="R6"
+
+--R6
+Content-Type: multipart/mixed; boundary="R7"
+
+--R7
+Content-Type: multipart/mixed; boundary="R8"
+
+--R8
+Content-Type: multipart/mixed; boundary="R9"
+
+--R9
+Content-Type: multipart/mixed; boundary="R10"
+
+--R10
+Content-Type: multipart/mixed; boundary="R11"
+
+--R11
+Content-Type: multipart/mixed; boundary="R12"
+
+--R12
+Content-Type: multipart/mixed; boundary="R13"
+
+--R13
+Content-Type: multipart/mixed; boundary="R14"
+
+--R14
+Content-Type: text/plain; charset=utf-8
+
+ZU-TIEF-VERSCHACHTELTER-TEXT der nicht auftauchen darf.
+
+--R14--
+--R13--
+--R12--
+--R11--
+--R10--
+--R9--
+--R8--
+--R7--
+--R6--
+--R5--
+--R4--
+--R3--
+--R2--
+--R1--
+--R0--

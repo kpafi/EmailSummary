@@ -1,0 +1,165 @@
+X-Test-Purpose: 25 text/plain-Anhaenge: max_attachments_processed=20 greift, die restlichen 5 bleiben unverarbeitete Metadaten (T10)
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Viele kleine Anhaenge
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-20@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B20"
+
+--B20
+Content-Type: text/plain; charset=utf-8
+
+25 Notizen anbei.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-01.txt"
+
+Inhalt der Notiz Nummer 1.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-02.txt"
+
+Inhalt der Notiz Nummer 2.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-03.txt"
+
+Inhalt der Notiz Nummer 3.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-04.txt"
+
+Inhalt der Notiz Nummer 4.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-05.txt"
+
+Inhalt der Notiz Nummer 5.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-06.txt"
+
+Inhalt der Notiz Nummer 6.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-07.txt"
+
+Inhalt der Notiz Nummer 7.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-08.txt"
+
+Inhalt der Notiz Nummer 8.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-09.txt"
+
+Inhalt der Notiz Nummer 9.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-10.txt"
+
+Inhalt der Notiz Nummer 10.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-11.txt"
+
+Inhalt der Notiz Nummer 11.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-12.txt"
+
+Inhalt der Notiz Nummer 12.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-13.txt"
+
+Inhalt der Notiz Nummer 13.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-14.txt"
+
+Inhalt der Notiz Nummer 14.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-15.txt"
+
+Inhalt der Notiz Nummer 15.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-16.txt"
+
+Inhalt der Notiz Nummer 16.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-17.txt"
+
+Inhalt der Notiz Nummer 17.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-18.txt"
+
+Inhalt der Notiz Nummer 18.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-19.txt"
+
+Inhalt der Notiz Nummer 19.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-20.txt"
+
+Inhalt der Notiz Nummer 20.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-21.txt"
+
+Inhalt der Notiz Nummer 21.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-22.txt"
+
+Inhalt der Notiz Nummer 22.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-23.txt"
+
+Inhalt der Notiz Nummer 23.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-24.txt"
+
+Inhalt der Notiz Nummer 24.
+
+--B20
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notiz-25.txt"
+
+Inhalt der Notiz Nummer 25.
+
+--B20--

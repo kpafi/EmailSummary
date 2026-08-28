@@ -1,0 +1,21 @@
+X-Test-Purpose: multipart/alternative mit text/plain und text/html; Body-Praeferenz text/plain, HTML-Teil wird ignoriert
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Projektupdate August
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-01@corpus-test.example>
+MIME-Version: 1.0
+Authentication-Results: mx.corpus-test.example; spf=pass smtp.mailfrom=corpus-test.example; dkim=pass; dmarc=pass
+Content-Type: multipart/alternative; boundary="B01"
+
+--B01
+Content-Type: text/plain; charset=utf-8
+
+Hallo Team, das Projekt liegt im Plan. Details morgen im Meeting.
+
+--B01
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Hallo Team, das Projekt liegt im Plan.</p><a href="https://nur-im-html-teil.example/track">Details</a></body></html>
+
+--B01--

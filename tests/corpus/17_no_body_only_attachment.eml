@@ -1,0 +1,27 @@
+X-Test-Purpose: Mail ohne Body-Teil, nur ein PDF-Anhang: body_text bleibt leer
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: 
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-17@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B17"
+
+--B17
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="einziger-inhalt.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq
+CjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIg
+NzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4g
+Pj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA5NSA+PgpzdHJlYW0KQlQgL0YxIDEyIFRm
+IDcyIDcyMCBUZCAxNCBUTCAoTnVyLUFuaGFuZy1NYWlsOiBkaWVzZXIgVGV4dCBzdGVodCBhdXNz
+Y2hsaWVzc2xpY2ggaW0gUERGLikgVGogRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9U
+eXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoK
+eHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAw
+NTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAw
+MDAzODYgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJl
+Zgo0NTYKJSVFT0YK
+--B17--

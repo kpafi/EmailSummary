@@ -1,0 +1,17 @@
+X-Test-Purpose: HTML-only-Body: script/style/Kommentare entfernen, Tracking-Pixel ignorieren, Alt-Text uebernehmen, hrefs defangen
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Newsletter KW 35
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-02@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><head><title>NL</title><style>p { color: red; }</style>
+<script>document.location='https://sofort-weg.example';</script></head>
+<body><!-- unsichtbarer Kommentar mit https://kommentar-link.example -->
+<p>Willkommen zum Newsletter!</p>
+<img src="https://tracker.example/pixel.gif" width="1" height="1">
+<img src="cid:logo" alt="Firmenlogo Herbstaktion">
+<p>Jetzt <a href="https://shop.example/aktion?id=99">im Shop</a> vorbeischauen.</p>
+</body></html>

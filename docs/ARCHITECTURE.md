@@ -58,10 +58,46 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `RawMail.size_bytes` korrekt aus `RFC822.SIZE`.
 
 ### Sanitizer (`sanitize/`)
+
 - Reiner Code, kein LLM, keine Netzwerkzugriffe.
 - Module: `attachments.py` (Allowlist + Magic Bytes), `html_to_text.py`, `links.py`,
-  `unicode_clean.py`, `extract_pdf.py` (Subprozess mit Limits).
+  `unicode_clean.py`, `extract_pdf.py` (Subprozess mit Limits), `sanitizer.py`
+  (Orchestrierung).
 - Politik und Limits: SECURITY.md §4 (dort verbindlich).
+
+**Stand WP3 (ADR-026 bis ADR-030):**
+
+- **Einstieg:** `sanitize.MailSanitizer` implementiert das `Sanitizer`-Protokoll aus
+  `pipeline.py` (`sanitize(raw: RawMail) -> SanitizedMail`). Konstruktor:
+  `MailSanitizer(limits: LimitsConfig | None, *, link_footnote: bool = False)`;
+  Komfort: `MailSanitizer.from_config(config)` (nutzt `[limits]` und `links.footnote`).
+- **Fehlerpfad:** `sanitize.SanitizeError` (Meldung ist ein konstantes Label wie
+  `mail_zu_gross`/`mime_unparsbar`, nie Mail-Inhalt — I5). Der Klassenname ist in
+  `pipeline._ERROR_CLASSES` auf `reason_class = "sanitize_error"` abgebildet (ADR-012).
+  Eine Mail über `limits.max_mail_bytes` (geprüft gegen `size_bytes` **und**
+  `len(mime_bytes)`) wirft vor jedem Parsing — der in WP2 offene Durchsetzungspunkt für
+  die Größenpolitik liegt damit hier.
+- **Ablauf je Mail:** Größencheck → `email.message_from_bytes` (compat32, robust gegen
+  kaputte Header) → manueller MIME-Walk mit Tiefenlimit (`message/rfc822` wird nie
+  betreten, T13) → Body-Aggregation (alle Inline-`text/plain`, sonst alle
+  Inline-`text/html` via `html_to_text`) → pro Text: `unicode_clean.clean_text` →
+  Link-Scrub (`links.LinkCollector`, eine Instanz pro Mail: `#n` läuft über Body,
+  Anhänge, Betreff, Anzeigename durch) → Tag-Strip auch für Klartext →
+  Gesamt-Klartext-Budget (`[gekürzt]`).
+- **Anhänge:** `attachments.detect_kind(declared_mime, data)` liefert
+  `pdf|text|html|mismatch|unknown`; verarbeitet werden nur `text` (Datei) und `pdf`
+  (Subprozess, `extract_pdf.extract_pdf_text(...) -> str | None`, `None` ⇒ unverarbeitet).
+  `attachment_texts`-Schlüssel sind die sanitisierten (kollisionsfrei gemachten)
+  Dateinamen und stimmen mit `AttachmentInfo.filename_sanitized` überein.
+  `blocked_attachments` = Anzahl der Einträge mit `processed=False`.
+- **Report:** vollständig befüllt inkl. `reply_to_mismatch` (Adressvergleich via
+  `parseaddr`, fehlendes Reply-To ⇒ False), `return_path_mismatch` (nur bei zwei
+  bekannten Domains), `auth_results` (Regex-Parse `spf|dkim|dmarc=wert`, erste Nennung
+  gewinnt), Punycode-/Mixed-Script-Kennzeichnung auch für die Absender-Domain.
+- **Nicht Aufgabe des Sanitizers:** `RawMail.date`/`from_domain` werden unverändert
+  übernommen (Vertrauensmodell aus ADR-020); die Nachrichten-Formatierung der
+  Anhang-Hinweise („⚠ 2 nicht verarbeitete Anhänge …") ist WP7 (`output/`), auf Basis
+  der `AttachmentInfo`-Liste.
 
 ### LLM-Schicht (`llm/`)
 

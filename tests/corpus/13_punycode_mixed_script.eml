@@ -1,0 +1,12 @@
+X-Test-Purpose: Punycode-Domain (xn--) wird gekennzeichnet inkl. Unicode-Darstellung; Homoglyphen-Domain mit kyrillischem a wird als mixed-script erkannt (T12)
+From: Absender Test <absender@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Sicherheitswarnung Ihres Kontos
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-13@corpus-test.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Ihr Konto: https://xn--pypal-4ve.com/secure jetzt bestaetigen.
+Alternativ: http://pаypal.com/login (sieht echt aus, ist es nicht).
+Viele Gruesse, Ihr Sicherheitsteam.
