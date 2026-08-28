@@ -1,0 +1,21 @@
+# Secrets & lokale Konfiguration — nie committen
+config.toml
+.env
+*.db
+*.sqlite*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
