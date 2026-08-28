@@ -114,6 +114,8 @@ per Testlauf verifiziert; Fallback bei Nichtverfügbarkeit: `opus`) und `effort:
 Hintergrund: Nur der Workflow-Mechanismus
 erlaubt es, den Reasoning-Effort pro Agent festzulegen; das einfache Agent-Tool hat keinen
 Effort-Parameter und erbt stillschweigend die Session-Einstellung (so wurde WP0 gestartet).
+Ausnahme auf Nutzer-Entscheid (2026-08-28): **WP3 (Sanitizer) läuft mit `model: 'fable'`
+und `effort: 'high'`** — sicherheitskritischste Komponente, Gründlichkeit vor Kosten.
 Parallelisierbare WPs (WP4 ∥ WP2/WP3; WP7 ∥ WP5/WP6) dürfen im selben Workflow-Lauf
 parallel gestartet werden; ansonsten gilt: ein WP pro Lauf, Ergebnis prüfen, dann das
 nächste starten. Der Cold-Test-Agent (WP11) wird ebenfalls so gestartet, aber mit dem
