@@ -99,3 +99,37 @@
   Wiederanlauf versendet `checked`-Nachrichten erneut. Schlimmstenfalls Doppelzustellung,
   nie stiller Verlust (F-OPS-3).
 - Konsequenzen: Seltene Duplikate im Messenger; akzeptiert.
+
+## ADR-009: Build-Backend hatchling + src-Layout
+- Status: accepted
+- WP / Datum: WP0, 2026-08-28
+- Kontext: WP0 braucht ein PEP-621-`pyproject.toml` mit Build-Backend. Das Paket liegt
+  bewusst unter `src/maildigest/` (src-Layout), damit Tests gegen die installierte
+  Distribution laufen und nicht versehentlich gegen das Quellverzeichnis importieren.
+- Entscheidung: `hatchling` als Build-Backend; Wheel-Ziel explizit auf `src/maildigest`
+  gesetzt (`[tool.hatch.build.targets.wheel] packages`).
+- Alternativen: `setuptools` (funktioniert ebenso, braucht für src-Layout aber mehr
+  Boilerplate bzw. `package-dir`-Konfiguration; historisch mehr Altlasten). Poetry/PDM
+  (eigene, nicht-PEP-621-nahe Metadaten bzw. zusätzliches Tooling — widerspricht dem
+  Lightweight-Prinzip).
+- Konsequenzen: Reine PEP-621-Metadaten, minimale Konfiguration, keine `setup.py`/
+  `setup.cfg`. Kein `readme`-Feld in `[project]`, da `README.md` erst in WP9/WP12
+  entsteht (ein fehlendes Readme-File würde den Build brechen).
+
+## ADR-010: Tooling-Regelsatz (ruff-Auswahl, mypy strict)
+- Status: accepted
+- WP / Datum: WP0, 2026-08-28
+- Kontext: Einheitliche Lint-/Typ-Basis ab Projektbeginn, ohne die Agenten mit
+  Rauschen auszubremsen. Sicherheitskritischer Code (Sanitizer, Output) profitiert von
+  strenger statischer Prüfung.
+- Entscheidung: `ruff` mit Regelgruppen `E,W,F,I,N,UP,B,C4,SIM,RUF` (Fehler,
+  Pyflakes, Import-Sortierung, Naming, Modernisierung, Bugbear, Comprehensions,
+  Simplify, Ruff-eigene), `line-length = 100`, `target-version = py311`.
+  `mypy` im `strict`-Modus für `src/` (`mypy_path = "src"`, `explicit_package_bases`,
+  `namespace_packages`), damit `mypy src/` mit src-Layout sauber auflöst.
+- Alternativen: Minimaler ruff-Default (nur `E,F`) — zu wenig für sicherheitsnahen
+  Code; zusätzlich `PL`/`ANN`/`D` — für ein Gerüst zu streng/geräuschig, kann später
+  per ADR nachgezogen werden. Getrennte Tools (flake8+isort+black) — mehr
+  Dependencies, widerspricht Lightweight.
+- Konsequenzen: Konsistenter Stil und früh greifende Typprüfung; Regelsatz ist bewusst
+  erweiterbar, wenn spätere WPs es rechtfertigen.

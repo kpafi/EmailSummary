@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "maildigest"
+version = "0.1.0"
+description = "Lightweight tool that summarizes, importance-filters and phishing-checks e-mails from a mirror mailbox and delivers text-only digests to a messenger."
+requires-python = ">=3.11"
+dependencies = [
+    "imap-tools",
+    "httpx",
+    "pydantic",
+    "beautifulsoup4",
+    "lxml",
+    "pdfminer.six",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+# src-Layout: Wheel enthält genau das Paket unter src/.
+[tool.hatch.build.targets.wheel]
+packages = ["src/maildigest"]
+
+# --- Ruff (Linter + Import-Sortierung), Begründung des Regelsatzes: ADR-010 ---
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort (Import-Reihenfolge)
+    "N",    # pep8-naming
+    "UP",   # pyupgrade (moderne Syntax)
+    "B",    # flake8-bugbear (häufige Bug-Muster)
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-spezifische Regeln
+]
+
+# --- Mypy: strict für den Produktionscode unter src/ ---
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+explicit_package_bases = true
+namespace_packages = true
+warn_unused_configs = true
+
+# --- Pytest ---
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
