@@ -81,6 +81,7 @@ _ERROR_CLASSES: dict[str, str] = {
     "LLMTimeout": "llm_timeout",
     "LLMRateLimited": "llm_rate_limited",
     "LLMInvalidResponse": "llm_invalid_response",
+    "LLMTransportError": "llm_transport_error",
     "ValidationError": "schema_invalid",
     "MessengerError": "delivery_error",
 }

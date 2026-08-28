@@ -23,7 +23,7 @@
 | F-CRIT-3 | Deterministische Signale (Reply-To≠From, Domain-Diskrepanzen, Punycode, Auth-Results, geblockte Anhänge) werden per Code berechnet und dem Kritiker als Fakten mitgegeben. | abgeleitet | open |
 | F-MSG-1 | Zustellung an mindestens Telegram und Discord; Signal optional über signal-cli. Adapter-Architektur für weitere Messenger. | Nutzer | open |
 | F-MSG-2 | Einrichtung des Messengers über CLI (`connect-messenger`) inkl. Testnachricht. | Nutzer | open |
-| F-LLM-1 | LLM-Provider ist austauschbar: mindestens Anthropic-API und OpenAI-kompatible Endpoints (deckt lokale Modelle ab). Auswahl + Modellname per Config. | Nutzer | open |
+| F-LLM-1 | LLM-Provider ist austauschbar: mindestens Anthropic-API und OpenAI-kompatible Endpoints (deckt lokale Modelle ab). Auswahl + Modellname per Config. | Nutzer | done (WP4) |
 | F-LLM-2 | Einrichtung des Providers über CLI (`connect-llm`) inkl. Testaufruf. | Nutzer | open |
 | F-OPS-1 | `maildigest run` läuft als Dauer-Prozess (Polling); `--once` verarbeitet einmalig und beendet sich (Cron-tauglich). | abgeleitet | in-progress (WP2) |
 | F-OPS-2 | `maildigest test` führt einen Ende-zu-Ende-Selbsttest mit einer Beispielmail aus. | abgeleitet | open |
@@ -34,7 +34,7 @@
 | ID | Anforderung | Status |
 |----|-------------|--------|
 | F-SEC-1 | Kein LLM erhält jemals rohes HTML, rohe MIME-Teile oder Anhangs-Binärdaten — ausschließlich sanitisierten Klartext (Invariante I1). | open |
-| F-SEC-2 | LLM-Aufrufe sind Text-in/Text-out ohne Tools/Function-Calling/Netzzugriff im Modellkontext (I2). | open |
+| F-SEC-2 | LLM-Aufrufe sind Text-in/Text-out ohne Tools/Function-Calling/Netzzugriff im Modellkontext (I2). | in-progress (WP4) |
 | F-SEC-3 | Zugestellte Nachrichten enthalten niemals klickbare URLs, Markdown-/HTML-Links, Dateianhänge oder ausführbare Inhalte. URLs höchstens defanged/als Domain-Text (I3). | open |
 | F-SEC-4 | Anhänge werden per Allowlist behandelt: nur `text/plain`, `text/html`, `application/pdf` werden inhaltlich verarbeitet; alles andere wird nur als Metadatum gemeldet. MIME-Typ wird per Magic-Bytes verifiziert. | open |
 | F-SEC-5 | Instruktionen im Mail-Inhalt („ignore previous instructions", versteckter Text, etc.) dürfen das Verhalten nicht ändern; Verdacht wird geflaggt und dem Nutzer angezeigt. | open |

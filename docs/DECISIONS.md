@@ -363,3 +363,116 @@
   Die „Unbekannt"-Konventionen sind ab jetzt Teil des `RawMail`-Vertrags und gehören nach
   ARCHITECTURE §3; nachfolgende WPs müssen leeres `from_domain` als „Domain unbekannt"
   behandeln, nicht als Domain.
+
+## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
+- Status: accepted
+- WP / Datum: WP4, 2026-08-28
+- Kontext: WP4 braucht Zugriff auf die Anthropic-Messages-API und auf OpenAI-kompatible
+  chat/completions-Endpunkte. Es gibt offizielle SDKs (`anthropic`, `openai`), die Auth,
+  Retries und Typisierung mitbringen.
+- Entscheidung: Beide Adapter sprechen direkt HTTP über das ohnehin vorhandene `httpx`. Der
+  genutzte API-Ausschnitt ist ein einziger POST mit vier Feldern; die gemeinsame Retry-/
+  Timeout-Mechanik liegt in `llm/_http.py` und ist damit für beide Provider identisch und
+  testbar.
+- Alternativen: Das Anthropic-SDK wurde geprüft und **verworfen**. Es wäre eine weitere
+  Laufzeit-Dependency (NF-1: ≤ 8 Pakete, NF-2: ADR-Pflicht) und bringt eine vollständige
+  Tool-Use-/Agent-Oberfläche mit (`tools`, `tool_runner`, `mcp_servers`, `container`,
+  Managed Agents), die wegen I2 aktiv vermieden werden müsste — ein Sicherheitsmerkmal, das
+  nur durch Disziplin statt durch Abwesenheit von Code gehalten würde. Ein zweites SDK
+  (`openai`) hätte dieselben Nachteile verdoppelt. Ein weiterer Punkt: mit zwei SDKs hätten
+  die Provider unterschiedliche Retry-Semantik (SDK-Default 2 Retries inkl. 408/409), was
+  der Politik aus PLAN.md WP4 widerspricht.
+- Konsequenzen: Wir tragen die Anpassung an API-Änderungen selbst (Header
+  `anthropic-version` ist im Code fixiert und muss bei Bedarf bewusst gehoben werden). Dafür
+  ist per grep prüfbar (WP12), dass kein Codepfad Tools ans Modell reicht, und beide
+  Provider verhalten sich bei 429/5xx/Timeout garantiert gleich.
+
+## ADR-022: `temperature` ist optional und wird nur bei explizitem Wert gesendet
+- Status: accepted
+- WP / Datum: WP4, 2026-08-28
+- Kontext: PLAN.md WP4 spezifiziert `complete(system, user, *, max_tokens: int,
+  temperature: float) -> str`. Aktuelle Anthropic-Modelle (Opus 4.7/4.8, Sonnet 5) sowie
+  Claude Fable 5 lehnen die Sampling-Parameter `temperature`/`top_p`/`top_k` mit HTTP 400
+  ab; das Feld ist dort entfernt.
+- Entscheidung: Die Signatur lautet `temperature: float | None = None`. `None` bedeutet
+  „Feld wird nicht in den Request-Körper aufgenommen", der Provider-Default gilt. Beide
+  Adapter fügen `temperature` nur ein, wenn ein Wert übergeben wurde. Jeder plankonforme
+  Aufruf mit einem float funktioniert unverändert; die Signatur ist eine Obermenge der
+  geplanten.
+- Alternativen: Signatur wie geplant lassen und immer senden — MailDigest wäre mit genau den
+  Modellen unbenutzbar, für die es gedacht ist (HTTP 400 auf jeden Aufruf). Ein
+  Config-Schalter `send_temperature` — zusätzliche Config-Fläche für einen Wert, den wir
+  ohnehin nie brauchen (Zusammenfassen und Phishing-Prüfung profitieren nicht von
+  Sampling-Tuning). Provider-spezifische Sonderlogik („bei Modell X weglassen") — bräuchte
+  eine pflegebedürftige Modell-Liste im Code, genau das, was ARCHITECTURE §5 mit „kein
+  hartkodierter Default" vermeiden will.
+- Konsequenzen: ARCHITECTURE §2 ist entsprechend präzisiert; PLAN.md WP4 bleibt an dieser
+  Stelle stale (PLAN ist rangniedriger als ARCHITECTURE und wird nicht rückwirkend
+  umgeschrieben). WP5/WP6 rufen ohne `temperature` auf, solange kein konkreter Bedarf
+  entsteht.
+
+## ADR-023: Retry-Politik der LLM-Schicht — nur 429/5xx, Timeouts nicht wiederholen
+- Status: accepted
+- WP / Datum: WP4, 2026-08-28
+- Kontext: PLAN.md WP4 verlangt „Retries mit Backoff bei 429/5xx (max. 3), Timeout 60 s".
+  Offen war, ob auch Timeouts und Verbindungsfehler wiederholt werden und wie `Retry-After`
+  behandelt wird.
+- Entscheidung: Wiederholt werden ausschließlich HTTP 429 und 5xx, insgesamt drei Versuche.
+  Wartezeit ist exponentiell (1 s, 2 s, Deckel 30 s); nennt der Server ein `Retry-After` in
+  Sekunden, gilt dieser Wert (ebenfalls gedeckelt) — HTTP-Datumsformate werden ignoriert
+  statt riskant geparst. Timeouts werden **nicht** wiederholt: Drei 60-s-Timeouts
+  blockierten die Pipeline drei Minuten pro Mail; die Wiederholung ganzer Stufen ist laut
+  ARCHITECTURE §6 Sache von WP8. Nicht wiederholbare Antworten (400/401/404) brechen sofort
+  ab. Die Wartefunktion ist injizierbar, damit Tests das Backoff prüfen können, ohne zu
+  warten.
+- Alternativen: SDK-typische Politik (auch 408/409 und Verbindungsfehler wiederholen) —
+  weiter gefasst als der Plan und bei 409 sinnlos. Jitter im Backoff — bei einem
+  Einzelprozess ohne Thundering-Herd-Problem unnötige Komplexität und schlechter testbar.
+- Konsequenzen: Ein transienter Verbindungsabbruch kostet die Mail einen Pipeline-Durchlauf
+  statt eines stillen Retrys — akzeptabel, weil WP8 ohnehin drei Stufen-Versuche vorsieht
+  und das Ergebnis fail-closed bleibt.
+
+## ADR-024: Schema-Reparatur ohne Echo der verworfenen Modellantwort
+- Status: accepted
+- WP / Datum: WP4, 2026-08-28
+- Kontext: `complete_json` bekommt laut PLAN.md WP4 genau einen Reparatur-Retry „mit
+  Fehlerhinweis". Üblich wäre, dem Modell seine ungültige Antwort samt Fehlermeldung
+  zurückzuspiegeln. Die Antwort ist jedoch untrusted (SECURITY §2) und kann Mail-Inhalt
+  inklusive Injection-Text enthalten.
+- Entscheidung: Der Reparaturhinweis wird an den **System-Prompt** angehängt (klar
+  gelabelter Block „KORREKTUR (vom Programm …)"), nicht an den User-Prompt — der enthält den
+  delimitierten Mail-Datenblock, und ihn zu verlängern würde die Trennung aus I8 aufweichen.
+  Der Hinweis enthält nur code-erzeugte Information: Feldpfade und pydantic-Fehler*typen*
+  (nicht die beanstandeten Werte, die unter `error['input']` stünden) sowie das JSON-Schema
+  aus `model_json_schema()`. Die verworfene Antwort wird nicht zurückgespiegelt. Auch die
+  `LLMInvalidResponse`-Meldung nennt nur Schemanamen und Ursachenkategorie.
+- Alternativen: Antwort + Fehlertext zurückspiegeln (Standardvorgehen, aber ein zweiter
+  Injection-Kanal und ein Weg, Mail-Inhalt in Logs zu tragen — I5/T1). Structured-Output-/
+  JSON-Mode-Parameter der Provider nutzen (nicht bei allen OpenAI-kompatiblen/lokalen
+  Servern verfügbar, würde die Provider-Gleichwertigkeit brechen).
+- Konsequenzen: Die Reparaturquote ist etwas niedriger als mit Echo, weil das Modell seinen
+  konkreten Fehler nicht sieht — dafür ist der zweite Aufruf genauso hart abgeschottet wie
+  der erste. Scheitert die Reparatur, greift ohnehin fail-closed (I6).
+
+## ADR-025: Provider-Factory mit Rollen-Parameter statt zweier Bauwege
+- Status: accepted
+- WP / Datum: WP4, 2026-08-28
+- Kontext: `[llm.critic]` ist laut ARCHITECTURE §5 ein Override mit Vererbung. WP5 und WP6
+  brauchen je einen Provider, ohne HTTP-Details zu kennen.
+- Entscheidung: Eine Funktion `build_provider(config, role)` mit
+  `LLMRole = Literal["summarizer", "critic"]`; die Rolle wählt zwischen den `[llm]`-Werten
+  und den WP1-Helpern `critic_provider()`/`critic_model()`/`critic_base_url()`. Ergänzend
+  `max_tokens_for(config, role)`, weil das Token-Limit zum Aufruf gehört, nicht zum
+  Provider-Objekt (ein Provider kann mit verschiedenen Limits benutzt werden). Fehlender
+  API-Key bei Provider `anthropic` erzeugt eine `ConfigError` (die Klasse aus `config.py`,
+  damit die Setup-UX in WP9 nur einen Fehlertyp behandeln muss) mit Nennung der
+  Umgebungsvariable, nie eines Wertes.
+- Alternativen: Zwei Funktionen `build_summarizer_provider`/`build_critic_provider`
+  (Duplikat, eine dritte Rolle kostet eine dritte Funktion). Ein Dataclass-Rückgabewert
+  `LLMSetup(provider, max_tokens)` (bindet Limit und Provider aneinander, obwohl sie
+  unterschiedliche Lebensdauer haben).
+- Konsequenzen: Der API-Key liegt weiterhin nur einmal unter `[llm]` und gilt für beide
+  Rollen; bei gemischten Providern (Kritiker auf lokalem Server) ist das unproblematisch,
+  bei zwei verschiedenen Cloud-Providern wäre ein `[llm.critic] api_key` nötig — als
+  bekannte Grenze in ARCHITECTURE §5 dokumentiert, nicht in WP4 gelöst (config.py gehört
+  WP1).

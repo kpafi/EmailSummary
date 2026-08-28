@@ -64,11 +64,37 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
 - Politik und Limits: SECURITY.md §4 (dort verbindlich).
 
 ### LLM-Schicht (`llm/`)
-- `base.py`: Protokoll `LLMProvider.complete(system, user, *, max_tokens, temperature) -> str`.
-  Kein Tool-Use im Interface (I2).
-- `anthropic.py`, `openai.py`: HTTP-Implementierungen (httpx), Retry/Timeout.
-- `schema.py`: `complete_json(...)` erzwingt pydantic-Schema (1 Reparatur-Retry).
-- `prompts.py`: alle Prompt-Texte zentral, mit Versions-Kommentar.
+
+**Stand WP4 (ADR-021 bis ADR-025):**
+
+- `base.py`: Protokoll
+  `LLMProvider.complete(system, user, *, max_tokens: int, temperature: float | None = None) -> str`.
+  Kein Tool-Use im Interface (I2). `temperature=None` (Default) bedeutet: Feld wird nicht
+  gesendet — aktuelle Modelle lehnen es mit HTTP 400 ab (ADR-022). Fehlerklassen: `LLMError`
+  (Basis), `LLMTimeout`, `LLMRateLimited`, `LLMInvalidResponse`, `LLMTransportError`
+  (HTTP-/Verbindungsfehler, die weder Timeout noch 429 sind). Konstanten
+  `DEFAULT_TIMEOUT_SECONDS = 60.0`, `MAX_ATTEMPTS = 3`.
+- `_http.py`: gemeinsame HTTP-Mechanik beider Provider (POST, Retry, Fehler-Mapping) —
+  garantiert identische Semantik. Wiederholt nur 429 und 5xx, max. 3 Versuche, Backoff
+  1 s/2 s (Deckel 30 s) bzw. `Retry-After` in Sekunden. Timeouts werden nicht wiederholt.
+  Fehlermeldungen enthalten Statuscode und `error.type`, nie den Antwortkörper (I5).
+- `anthropic.py`: `POST {base_url}/v1/messages`, Header `x-api-key` +
+  `anthropic-version: 2023-06-01`, Default-Host `https://api.anthropic.com`. Modell aus der
+  Config (kein Code-Default). Antwort = Verkettung aller `text`-Blöcke; ohne Textblock
+  `LLMInvalidResponse`.
+- `openai.py`: `POST {base_url}/chat/completions` (Default `https://api.openai.com/v1`),
+  Bearer-Auth nur wenn ein Key vorliegt — lokale Server (Ollama/vLLM) brauchen keinen.
+  System-Prompt als `role="system"`, Datenblock als `role="user"` (I8).
+- `schema.py`: `complete_json(provider, system, user, schema, *, max_tokens, temperature)`.
+  Extrahiert JSON robust aus Markdown-Codefences und Begleittext (klammerbalancierter Scan,
+  string-/escape-fest), validiert gegen pydantic, genau ein Reparatur-Retry, danach
+  `LLMInvalidResponse` (I6). Der Reparaturhinweis steht im System-Prompt und enthält
+  Feldpfade, Fehlertypen und das JSON-Schema — nie die verworfene Modellantwort (ADR-024).
+- `factory.py`: `build_provider(config, role)` mit `role = "summarizer" | "critic"`
+  (Override-Vererbung aus `[llm.critic]`), dazu `max_tokens_for(config, role)`. Fehlender
+  API-Key bei Provider `anthropic` ⇒ `ConfigError` mit Hinweis auf `MAILDIGEST_LLM_API_KEY`.
+- `prompts.py`: alle Prompt-Texte zentral, mit Versions-Kommentar (weiterhin Platzhalter,
+  entsteht in WP5/WP6).
 
 ### Agenten (`agents/`)
 - `summarizer.py`: baut Prompt (System + gelabelte Custom-Instructions + delimitierter
@@ -276,7 +302,10 @@ Ablauf und Entscheidungspunkte:
    Sache von WP8. `process_mail` wirft nie eine Stufen-Exception nach außen.
 5. `reason_class` wird aus dem Exception-**Klassennamen** abgeleitet (Tabelle in
    `pipeline._ERROR_CLASSES`), Fallback `"<stage>_error"`. Der Exception-Text wird nie
-   übernommen (I5).
+   übernommen (I5). Die Tabelle wurde bei der WP4-Integration um
+   `"LLMTransportError": "llm_transport_error"` ergänzt — ohne den Eintrag wäre jeder
+   HTTP-/Verbindungsfehler der LLM-Schicht im unscharfen Fallback gelandet (Verhalten war
+   auch vorher fail-closed, nur das Label war grob).
 
 ## 5. Konfiguration (`config.toml`, Schema in `config.py`)
 
@@ -354,10 +383,28 @@ max_attachments_processed = 20
   tatsächlichen Code-Defaults.
 - Neben `load_config(path)` gibt es `load_config_from_dict(data)` für CLI (WP9) und Tests.
 
+**Ergänzungen aus WP4 (ADR-025):**
+
+- `[llm] api_key` gilt für **beide** Rollen. Nutzt der Kritiker einen anderen *Cloud*-Provider
+  als der Summarizer, reicht ein gemeinsamer Key nicht; für den Regelfall (Kritiker auf
+  lokalem Server ohne Key oder gleicher Provider) ist das unproblematisch. Ein
+  `[llm.critic] api_key` ist bewusst noch nicht vorgesehen.
+- Eine Sektion `[llm.summarizer]` gibt es bewusst **nicht**: Der Summarizer ist der Normalfall
+  und nutzt `[llm]` direkt; nur der Kritiker ist per `[llm.critic]` überschreibbar. Die
+  gegenteilige Erwähnung in PLAN.md WP4 ist stale — ARCHITECTURE ist hier maßgeblich, und
+  `extra="forbid"` würde `[llm.summarizer]` als Config-Fehler zurückweisen.
+- `base_url` wird nicht auf `https` eingeschränkt, weil lokale Server (Ollama/vLLM) über
+  `http://localhost` angesprochen werden. Für Cloud-Provider ist `https` Sache der
+  Konfiguration; `connect-llm` (WP9) sollte darauf hinweisen.
+
 ## 6. Fehler- & Retry-Politik (Detail in WP8)
 
 - IMAP-Fehler: Reconnect mit Exponential Backoff (max. 10 min), Loop läuft weiter.
-- LLM-Fehler (Timeout/429/5xx): 3 Versuche mit Backoff, dann `FailureNotice`.
+- LLM-Fehler: 429 und 5xx werden **innerhalb** der LLM-Schicht bis zu 3-mal mit Backoff
+  (1 s/2 s, `Retry-After` schlägt vor) wiederholt; Timeouts nicht (sonst blockiert eine Mail
+  bis zu 3 Minuten). Bleibt der Fehler, wirft die Schicht
+  `LLMRateLimited`/`LLMTransportError`/`LLMTimeout`, und die Stufen-Retry-Politik von WP8
+  entscheidet über weitere Versuche, am Ende `FailureNotice` (ADR-023).
 - Schema-Invalidität: 1 Reparatur-Retry (in `llm/schema.py`), dann `FailureNotice`.
 - Messenger-Fehler: 5 Versuche über max. 1 h (Nachricht ist fertig sanitisiert und darf
   aus der DB-Queue erneut versendet werden), dann `failed` + Log.
