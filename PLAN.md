@@ -104,7 +104,19 @@ emailzusammenfassung/
 
 ## 5. Arbeitsweise der Agenten
 
-Jedes Arbeitspaket wird von **einem** Agenten (Opus, medium effort) bearbeitet. Regeln:
+Jedes Arbeitspaket wird von **einem** Agenten (Opus, medium effort) bearbeitet.
+
+**Start-Mechanik (verbindlich ab WP1):** Die WP-Agenten werden vom Orchestrator über die
+**Workflow-Orchestrierung** gestartet — ein `agent()`-Aufruf pro Arbeitspaket mit explizit
+gesetztem `model: 'opus'` und `effort: 'medium'`. Hintergrund: Nur der Workflow-Mechanismus
+erlaubt es, den Reasoning-Effort pro Agent festzulegen; das einfache Agent-Tool hat keinen
+Effort-Parameter und erbt stillschweigend die Session-Einstellung (so wurde WP0 gestartet).
+Parallelisierbare WPs (WP4 ∥ WP2/WP3; WP7 ∥ WP5/WP6) dürfen im selben Workflow-Lauf
+parallel gestartet werden; ansonsten gilt: ein WP pro Lauf, Ergebnis prüfen, dann das
+nächste starten. Der Cold-Test-Agent (WP11) wird ebenfalls so gestartet, aber mit dem
+eingeschränkten Kontext aus docs/TESTING.md §3.
+
+Regeln:
 
 1. **Vor dem Coden lesen:** PLAN.md (Abschnitte 1–3), docs/REQUIREMENTS.md, docs/SECURITY.md
    und die im WP genannten Dokumente. Bei Widerspruch gilt: SECURITY.md > REQUIREMENTS.md > PLAN.md.
