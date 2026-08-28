@@ -24,9 +24,38 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
 ## 2. Komponenten
 
 ### Ingest (`ingest/imap_client.py`)
-- IMAPS-Verbindung, Polling (Default 120 s), Abruf ungesehener Mails.
-- Markiert verarbeitete Mails als gelesen; optional Verschieben nach `Processed`. Löscht nie.
-- Dedupe gegen `state/db.py` (Message-ID, Fallback-Hash).
+
+**Stand WP2 (ADR-016 bis ADR-020):**
+
+- **Transport:** ausschließlich IMAPS über `imap_tools.MailBox` mit
+  `ssl.create_default_context()` (Zertifikats- und Hostname-Prüfung aktiv). Kein Codepfad zu
+  `MailBoxUnencrypted`/`MailBoxStartTls`, kein Schalter zum Abschalten der Prüfung. Port aus
+  `[imap] port`; Port 143 wird mit einer verständlichen Fehlermeldung abgelehnt.
+- **Abruf:** `fetch(AND(seen=False), mark_seen=False)` im Ordner `[imap] folder`. Das
+  `mark_seen=False` ist sicherheitsrelevant: Das Gelesen-Flag ist die letzte, nicht die erste
+  Aktion (s. u.).
+- **Reihenfolge je Mail (F-ING-2, ADR-019):**
+  1. `RawMail` bauen, 2. `StateDB.claim(dedupe_key)` (`INSERT OR IGNORE`, committet **vor**
+  der Verarbeitung), 3. Pipeline-Callback, 4. Endstatus schreiben, 5. `\Seen` setzen und ggf.
+  `move()` nach `[imap] move_processed_to`. Ein bereits bekannter Key wird übersprungen, aber
+  trotzdem als gelesen markiert/verschoben, damit er die Unseen-Menge verlässt.
+- **Löschen: nie** (F-ING-1). `delete()`/`expunge()` kommen im Modul nicht vor.
+- **Dedupe-Key:** `Message-ID`, sonst `sha256:` + Hash über From + Date + Subject +
+  Body-Präfix (512 Zeichen), Felder `\x00`-getrennt. Das Präfix macht Fallback-Keys von
+  echten Message-IDs unterscheidbar.
+- **Polling-Loop (`IngestService`):** `run_once()` für `run --once`; `run_forever()` mit
+  `[imap] poll_interval_seconds` (Default 120 s) und Shutdown über ein `threading.Event`
+  (`stop()`). Verbindungsfehler ⇒ Reconnect mit Exponential Backoff 5 s, 10 s, 20 s …
+  gedeckelt bei 600 s (§6); nach einem erfolgreichen Poll wird der Backoff zurückgesetzt.
+- **Fehler einer einzelnen Mail (I6):** Wirft der Verarbeitungs-Callback, bekommt die Mail
+  Status `failed` mit `error_class = "ingest_error"`, wird als gelesen markiert und der Loop
+  läuft weiter. Die Metadaten-Notiz erzeugt die Pipeline selbst (`FailedNotice`).
+- **IMAP IDLE:** bewusst nicht implementiert (ADR-007, in ADR-016 bestätigt).
+- **Logging (NF-5/I5):** nur gekürzter Dedupe-Hash, Absender-Domain, Status,
+  Exception-Klassenname, Backoff-Dauer.
+- **Offen (WP8):** `limits.max_mail_bytes` hat im Ingest keinen Durchsetzungspunkt — die
+  Größenpolitik liegt laut SECURITY §4 beim Sanitizer (WP3); der Ingest befüllt lediglich
+  `RawMail.size_bytes` korrekt aus `RFC822.SIZE`.
 
 ### Sanitizer (`sanitize/`)
 - Reiner Code, kein LLM, keine Netzwerkzugriffe.
@@ -63,6 +92,19 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   - `meta(key, value)` — z. B. Schema-Version, letzter Digest-Zeitpunkt.
 - Statuswerte: `pending → sanitized → summarized → checked → delivered | failed | skipped_low`.
 - Kein Mail-Volltext in der DB (SECURITY.md §6).
+
+**Stand WP2 (ADR-018):** Angelegt sind `seen_mails` und `meta`; `low_digest_queue` entsteht
+erst in WP8. `message_id_hash` ist `sha256(dedupe_key)` als Hex — der Dedupe-Key selbst wird
+nie gespeichert und nie ungekürzt geloggt (NF-5). `error_class` wird beim Schreiben auf
+`[a-z0-9_]`, max. 64 Zeichen normalisiert (strukturelle I5-Schranke; sie vereinheitlicht
+Zeichenvorrat und Länge und ersetzt nicht die Pflicht der Aufrufstellen, konstante Labels zu
+übergeben). Die Schema-Version steht in `meta.schema_version` und wird beim Öffnen geprüft
+(NF-3, keine Migrationstools); die DB-Datei wird mit Modus `0600` angelegt.
+Idempotenz-Primitiv ist `StateDB.claim()` (`INSERT OR IGNORE` auf den Primärschlüssel),
+nicht `was_seen()`. Der Pfad der DB-Datei ist bislang ein Konstruktor-Argument — ein
+Config-Feld dafür fehlt (ADR-005 sagt „eine Datei neben der Config"); Vorschlag für WP8/WP9:
+`[general] state_db = ""` (leer = `state.db` neben der `config.toml`), mit eigenem ADR, weil
+es das Config-Schema erweitert.
 
 ### CLI (`cli.py`)
 - Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`,
@@ -163,6 +205,15 @@ class FailureNotice(BaseModel, frozen=True):
   natürlichem Leerwert (Listen, Dicts, `bool`, optionale Header) haben Defaults, damit
   Ingest/Sanitizer keine Pflicht-Boilerplate erzeugen; identifizierende Felder
   (`dedupe_key`, `from_domain`, `body_text`, `mime_bytes`, …) bleiben Pflichtfelder.
+- **`RawMail`-Konventionen für Unbekanntes (WP2, ADR-020):** `from_domain` ist der
+  Leerstring, wenn im `From`-Header keine `lokalteil@domain`-Adresse steht;
+  `return_path_domain` ist in diesem Fall `None` (damit der Domain-Vergleich in WP6 nicht
+  zwei Unbekannte als Treffer wertet). `date` ist `None` bei fehlendem oder unparsbarem
+  `Date`-Header. `subject_raw` ist der RFC-2047-dekodierte, aber unsanitisierte Betreff mit
+  aufgelöster Header-Faltung. `auth_results_header` enthält **alle**
+  `Authentication-Results`-Vorkommen, mit `\n` verbunden. `build_raw_mail` wirft
+  grundsätzlich nicht — eine dort scheiternde Mail käme nie in den Fail-closed-Pfad und
+  ginge still verloren (I6/F-OPS-3).
 
 ## 4. Pipeline-Vertrag (`pipeline.py`)
 

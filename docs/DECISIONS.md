@@ -233,3 +233,133 @@
 - Konsequenzen: Die Fehlerübersetzung deckt die relevanten pydantic-Fehlertypen ab; für
   unbekannte Typen wird die Original-`msg` durchgereicht (englisch, aber secret-frei).
   Neue Secrets brauchen einen Eintrag in `_ENV_OVERRIDES`.
+
+## ADR-016: Kein IMAP IDLE in v0.1 — Polling bleibt der einzige Abruf-Pfad
+- Status: accepted
+- WP / Datum: WP2, 2026-08-28
+- Kontext: ADR-007 hat Polling festgelegt und IDLE unter den Vorbehalt gestellt, dass
+  `imap-tools` es „trivial hergibt". WP2 hat die Bibliothek geprüft: `imap_tools` 1.15.0
+  bietet einen `IdleManager` mit `start()`/`poll(timeout)`/`wait(timeout)`/`stop()`.
+- Entscheidung: IDLE wird nicht implementiert. Der Ingest pollt ausschließlich mit dem
+  konfigurierten Intervall (`[imap] poll_interval_seconds`, Default 120 s).
+- Alternativen: IDLE nutzen. Verworfen, weil „trivial" nicht zutrifft: Ein korrekter
+  IDLE-Betrieb braucht (a) einen erzwungenen Neustart des IDLE-Kommandos vor dem
+  RFC-2177-Limit von 29 Minuten, (b) ein zweites, paralleles Fehler- und Reconnect-Regime
+  neben dem Poll-Pfad (halb offene Sockets fallen bei IDLE erst nach Minuten auf), (c) einen
+  Fallback-Poll für Server, die IDLE nicht ankündigen oder stillschweigend nicht liefern,
+  und (d) eine eigene Behandlung für unterbrechbaren Shutdown. Das ist ungefähr die doppelte
+  Menge an sicherheitsrelevantem Loop-Code für einen Latenzgewinn, der bei einem
+  Mail-Zusammenfassungs-Digest keinen Nutzwert hat.
+- Konsequenzen: Bis zu ~2 Minuten Verzögerung (wie in ADR-007 akzeptiert). Der Loop hat
+  genau einen Fehlerpfad (Reconnect mit Exponential Backoff), was Tests und Review
+  vereinfacht. IDLE kann später additiv per neuem ADR nachgerüstet werden, ohne dass sich
+  die Ingest-Schnittstelle ändert.
+
+## ADR-017: Ingest-Tests mocken auf imap-tools-Ebene statt gegen einen echten IMAP-Server
+- Status: accepted
+- WP / Datum: WP2, 2026-08-28
+- Kontext: PLAN WP2 nennt als Akzeptanzkriterium einen Integrationstest gegen einen lokalen
+  Test-IMAP-Server (greenmail via Docker o. ä.) und erlaubt ausdrücklich den Mock auf
+  `imap-tools`-Ebene, sofern das als ADR dokumentiert wird.
+- Entscheidung: Es wird gemockt, und zwar an zwei präzise gewählten Schnittstellen:
+  (a) `MailMessage` wird aus echten `.eml`-Rohbytes gebaut — die Nachrichten-Parselogik ist
+  also **nicht** gemockt, sondern läuft im Test genau so wie im Betrieb; (b) nur die
+  `MailBox`-Verbindung wird über die injizierte `mailbox_factory` durch einen `FakeMailBox`
+  ersetzt, der `login/logout/fetch/flag/move` protokolliert und bei `delete`/`expunge`
+  sofort mit einem `AssertionError` auffliegt.
+- Alternativen: greenmail via Docker — verletzt „kein Docker-Zwang" (Leitprinzip 1), macht
+  die Testsuite netzwerk- und imageabhängig und testet im Wesentlichen fremden Code
+  (imaplib/imap-tools), nicht die MailDigest-Logik. Dovecot lokal — noch schwerer
+  reproduzierbar. Ein In-Process-IMAP-Fake auf Protokollebene — hoher Eigenbau-Aufwand für
+  denselben Erkenntnisgewinn.
+- Konsequenzen: Die Testsuite läuft offline in Millisekunden und deckt genau die
+  MailDigest-Logik ab (RawMail-Aufbau, Dedupe, Statusführung, Backoff, Seen/Move). Nicht
+  abgedeckt bleiben serverspezifische Eigenheiten (UID-Formate, MOVE-Capability,
+  Folder-Encoding) und der TLS-Handshake selbst — die werden über den Cold-Test (WP11) und
+  `maildigest connect-mail` (WP9) gegen ein echtes Postfach abgedeckt. Diese Lücke ist
+  bewusst und hier festgehalten.
+
+## ADR-018: Dedupe-State speichert nur den Hash; `claim()` ist das Idempotenz-Primitiv
+- Status: accepted
+- WP / Datum: WP2, 2026-08-28
+- Kontext: F-ING-2 verlangt „genau einmal verarbeiten". ARCHITECTURE §2 gibt die Spalte
+  `message_id_hash` vor, SECURITY §6/NF-5 verbieten Mail-Inhalte und PII in der DB. Offen
+  war, welcher Wert dort steht und wie Idempotenz konkret erzwungen wird.
+- Entscheidung: (a) Gespeichert wird `sha256(dedupe_key)` als Hex — nie die Message-ID oder
+  der Fallback-Key im Klartext; die Message-ID ist ein Identifikator der Mail und in
+  manchen Fällen sprechend (Absender-Domain, Ticketnummern). Derselbe Hash, auf 12 Zeichen
+  gekürzt, ist die einzige Mail-ID, die in Logs erscheinen darf (NF-5). (b) Idempotenz läuft
+  über `StateDB.claim()` = `INSERT OR IGNORE` auf den Primärschlüssel: Genau der erste
+  Aufruf bekommt `True`, jeder weitere `False`. Kein Read-then-Write, also auch bei
+  parallelen Aufrufen kein Race. (c) `error_class` wird beim Schreiben hart auf
+  `[a-z0-9_]`, 64 Zeichen normalisiert — eine strukturelle Schranke gegen versehentlich
+  durchgereichte Exception-Texte (I5), ergänzend zu ADR-012, das dasselbe auf der
+  Pipeline-Seite regelt. (d) Die DB-Datei wird mit Modus `0600` angelegt.
+- Alternativen: Message-ID im Klartext speichern (bequemer beim Debuggen, aber PII in der
+  DB und in Logs); `was_seen()` + separates `INSERT` (Race-Fenster); Fehlertexte speichern
+  (I5-Verstoß).
+- Konsequenzen: Aus der DB lässt sich nicht mehr ablesen, *welche* Mail ein Eintrag ist —
+  Debugging geht nur über den Hash, den auch das Log ausgibt. Das ist der gewollte
+  Trade-off. `was_seen()` bleibt als reine Abfrage erhalten, ist aber für den
+  Verarbeitungspfad nicht die maßgebliche Prüfung. Die Normalisierung von `error_class`
+  vereinheitlicht Zeichenvorrat und Länge; sie ist keine inhaltliche Filterung — es bleibt
+  Pflicht der Aufrufstellen, ausschließlich konstante Klassenlabels zu übergeben.
+
+## ADR-019: Reihenfolge im Ingest — erst reservieren, dann verarbeiten, zuletzt Seen/Move
+- Status: accepted
+- WP / Datum: WP2, 2026-08-28
+- Kontext: Zwischen „Mail geholt", „Mail verarbeitet" und „Mail im Postfach als gelesen
+  markiert" kann der Prozess jederzeit abstürzen. ADR-008 legt die Semantik
+  „at-least-once, nie stiller Verlust" fest; WP2 muss sie im Postfach-Umgang konkret
+  umsetzen.
+- Entscheidung: Je Mail gilt strikt: (1) `RawMail` bauen, (2) `db.claim()` — dieser Commit
+  passiert **vor** jeder Verarbeitung, (3) Pipeline-Callback, (4) Endstatus schreiben,
+  (5) `\Seen` setzen und ggf. `move()`. Der Abruf läuft deshalb mit `mark_seen=False`.
+  Ein bereits bekannter Dedupe-Key wird übersprungen, aber trotzdem als gelesen markiert
+  bzw. verschoben, damit er die Unseen-Menge verlässt und nicht bei jedem Poll erneut
+  auftaucht. Eine Mail, deren Verarbeitung mit einer Exception endet, bekommt Status
+  `failed` und wird ebenfalls als gelesen markiert — sie wird im Poll-Loop nicht endlos
+  wiederholt (Retries sind laut ARCHITECTURE §6 Sache von WP8 und laufen über den
+  DB-Status, nicht über das IMAP-Flag).
+- Alternativen: `mark_seen=True` beim Fetch (ein Absturz direkt nach dem Fetch würde die
+  Mail stillschweigend verlieren — Verstoß gegen F-OPS-3); Seen-Flag als Dedupe-Speicher
+  statt der DB (das Postfach ist kein verlässlicher State: Der Nutzer kann Mails im
+  Mirror-Postfach selbst als ungelesen markieren, und ein Ordner-Move würde den Zustand
+  verlieren).
+- Konsequenzen: Ein Absturz zwischen Schritt 2 und 5 führt beim Wiederanlauf zu einer als
+  Duplikat erkannten, nicht erneut verarbeiteten Mail — konsistent mit ADR-008.
+  `move_processed_to` ist rein kosmetisch und darf nie die einzige Dedupe-Quelle sein.
+  Löschen findet nirgends statt (F-ING-1): `delete()`/`expunge()` kommen im Ingest-Modul
+  nicht vor, und die Test-Fakes brechen ab, falls das je jemand einführt.
+
+## ADR-020: IMAPS wird erzwungen; Header-Auswertung mit expliziten Unbekannt-Werten
+- Status: accepted
+- WP / Datum: WP2, 2026-08-28
+- Kontext: SECURITY §6 verlangt „IMAP nur über TLS (IMAPS 993), Zertifikatsprüfung an, kein
+  `verify=False` irgendwo". Die Config erlaubt aber jeden Port 1–65535. Zusätzlich lässt
+  ARCHITECTURE §3 offen, was in `from_domain`/`date`/`subject_raw` steht, wenn die Header
+  fehlen oder kaputt sind — und genau das ist der Normalfall bei Angriffsmails.
+- Entscheidung: (a) Es wird ausschließlich `imap_tools.MailBox` (implizites TLS) mit einem
+  frisch erzeugten `ssl.create_default_context()` verwendet — `CERT_REQUIRED` und
+  `check_hostname=True`. Es gibt keinen Konfigurationsschalter und keinen Codepfad, der das
+  abschaltet, und keinen Import von `MailBoxUnencrypted`/`MailBoxStartTls`. Port 143
+  (Klartext-IMAP) wird beim Anlegen des Clients mit einer verständlichen Meldung abgelehnt,
+  statt in einen unklaren Handshake-Fehler zu laufen. Andere Ports bleiben erlaubt (manche
+  Anbieter nutzen abweichende IMAPS-Ports). (b) `from_domain` ist der Leerstring, wenn keine
+  `lokalteil@domain`-Adresse erkennbar ist; `return_path_domain` ist in diesem Fall `None`,
+  damit der Domain-Vergleich in WP6 nicht zwei Unbekannte als Übereinstimmung wertet.
+  (c) `date` ist `None` bei fehlendem oder unparsbarem Header — bewusst nicht der
+  imap-tools-Sentinel 1900-01-01. (d) `subject_raw` ist der RFC-2047-dekodierte, aber
+  ansonsten unsanitisierte Betreff mit aufgelöster Header-Faltung; die eigentliche
+  Sanitisierung bleibt WP3, der Not-Sanitizer für Notizen bleibt `pipeline._notice_subject`.
+  (e) `build_raw_mail` wirft grundsätzlich nicht: Jeder Header-Zugriff ist abgesichert, weil
+  eine hier scheiternde Mail den Fail-closed-Pfad nie erreichen und damit still verloren
+  gehen würde (I6/F-OPS-3).
+- Alternativen: Port 143 zulassen und auf STARTTLS umschalten (zweiter Transportpfad, den
+  ein MITM herabstufen kann — widerspricht SECURITY §6); die Header-Rohwerte ungeprüft
+  durchreichen (verlagert das Problem in WP3/WP6 und macht `RawMail` unzuverlässig); bei
+  kaputten Headern eine Exception werfen (stiller Mailverlust).
+- Konsequenzen: Eine Fehlkonfiguration auf Klartext-IMAP scheitert früh und verständlich.
+  Die „Unbekannt"-Konventionen sind ab jetzt Teil des `RawMail`-Vertrags und gehören nach
+  ARCHITECTURE §3; nachfolgende WPs müssen leeres `from_domain` als „Domain unbekannt"
+  behandeln, nicht als Domain.

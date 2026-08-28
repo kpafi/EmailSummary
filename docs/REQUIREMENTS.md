@@ -10,8 +10,8 @@
 
 | ID | Anforderung | Quelle | Status |
 |----|-------------|--------|--------|
-| F-ING-1 | Das Tool liest E-Mails aus einem dedizierten Mirror-Postfach per IMAPS. Es schreibt/löscht dort nichts außer Gelesen-Flag und optionalem Verschieben in einen `Processed`-Ordner. | Nutzer | open |
-| F-ING-2 | Jede Mail wird genau einmal verarbeitet (Dedupe über Message-ID, persistenter State). | abgeleitet | open |
+| F-ING-1 | Das Tool liest E-Mails aus einem dedizierten Mirror-Postfach per IMAPS. Es schreibt/löscht dort nichts außer Gelesen-Flag und optionalem Verschieben in einen `Processed`-Ordner. | Nutzer | done (WP2) |
+| F-ING-2 | Jede Mail wird genau einmal verarbeitet (Dedupe über Message-ID, persistenter State). | abgeleitet | done (WP2) |
 | F-ING-3 | Einrichtung des Mirror-Postfachs erfolgt über ein CLI-Kommando (`connect-mail`) mit Verbindungstest und Anleitung zur Weiterleitungs-Einrichtung. | Nutzer | open |
 | F-SUM-1 | Eine LLM-Instanz („Summarizer") erzeugt pro Mail eine strukturierte Zusammenfassung (Headline, Text, Kategorie) in konfigurierbarer Sprache und Länge. | Nutzer | open |
 | F-SUM-2 | Der Summarizer klassifiziert jede Mail als `high`/`normal`/`low` wichtig, mit Begründung. | Nutzer | open |
@@ -25,7 +25,7 @@
 | F-MSG-2 | Einrichtung des Messengers über CLI (`connect-messenger`) inkl. Testnachricht. | Nutzer | open |
 | F-LLM-1 | LLM-Provider ist austauschbar: mindestens Anthropic-API und OpenAI-kompatible Endpoints (deckt lokale Modelle ab). Auswahl + Modellname per Config. | Nutzer | open |
 | F-LLM-2 | Einrichtung des Providers über CLI (`connect-llm`) inkl. Testaufruf. | Nutzer | open |
-| F-OPS-1 | `maildigest run` läuft als Dauer-Prozess (Polling); `--once` verarbeitet einmalig und beendet sich (Cron-tauglich). | abgeleitet | open |
+| F-OPS-1 | `maildigest run` läuft als Dauer-Prozess (Polling); `--once` verarbeitet einmalig und beendet sich (Cron-tauglich). | abgeleitet | in-progress (WP2) |
 | F-OPS-2 | `maildigest test` führt einen Ende-zu-Ende-Selbsttest mit einer Beispielmail aus. | abgeleitet | open |
 | F-OPS-3 | Nicht verarbeitbare Mails/Anhänge erzeugen eine Metadaten-Notiz an den Messenger (fail-closed), gehen also nie stumm verloren. | abgeleitet | in-progress (WP1) |
 
@@ -52,7 +52,7 @@
 | NF-2 | Neue Laufzeit-Dependency nur mit ADR. | open |
 | NF-3 | Konfiguration vollständig über eine `config.toml` + Env-Vars; keine Datenbank-Migrationstools. | in-progress (WP1) |
 | NF-4 | Verarbeitungslatenz pro Mail < 60 s unter Normalbedingungen (exkl. LLM-Ausreißer). | open |
-| NF-5 | Logs strukturiert, ohne Mail-Inhalte und ohne PII über Absender-Domain + gehashte Message-ID hinaus. | open |
+| NF-5 | Logs strukturiert, ohne Mail-Inhalte und ohne PII über Absender-Domain + gehashte Message-ID hinaus. | in-progress (WP2) |
 | NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | open |
 | NF-7 | Doku-Pflicht: REQUIREMENTS/ARCHITECTURE/SECURITY/DECISIONS werden in jedem WP mitgepflegt; SPEC-CLI.md ist vollständiger CLI-Vertrag. | open |
 | NF-8 | Zwei unabhängige Testdurchläufe: Hot (Whitebox) und Cold (Blackbox durch Agent ohne Code-Zugriff) gemäß TESTING.md. | open |
