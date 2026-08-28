@@ -108,7 +108,10 @@ Jedes Arbeitspaket wird von **einem** Agenten (Opus, medium effort) bearbeitet.
 
 **Start-Mechanik (verbindlich ab WP1):** Die WP-Agenten werden vom Orchestrator über die
 **Workflow-Orchestrierung** gestartet — ein `agent()`-Aufruf pro Arbeitspaket mit explizit
-gesetztem `model: 'opus'` und `effort: 'medium'`. Hintergrund: Nur der Workflow-Mechanismus
+gesetztem `model: 'claude-opus-5'` (volle Modell-ID; der Alias `opus` löst in dieser
+Umgebung noch auf Opus 4.8 auf — Verfügbarkeit von `claude-opus-5` wurde am 2026-08-28
+per Testlauf verifiziert; Fallback bei Nichtverfügbarkeit: `opus`) und `effort: 'medium'`.
+Hintergrund: Nur der Workflow-Mechanismus
 erlaubt es, den Reasoning-Effort pro Agent festzulegen; das einfache Agent-Tool hat keinen
 Effort-Parameter und erbt stillschweigend die Session-Einstellung (so wurde WP0 gestartet).
 Parallelisierbare WPs (WP4 ∥ WP2/WP3; WP7 ∥ WP5/WP6) dürfen im selben Workflow-Lauf
