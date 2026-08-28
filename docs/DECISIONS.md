@@ -133,3 +133,103 @@
   Dependencies, widerspricht Lightweight.
 - Konsequenzen: Konsistenter Stil und früh greifende Typprüfung; Regelsatz ist bewusst
   erweiterbar, wenn spätere WPs es rechtfertigen.
+
+## ADR-011: `MailRef` statt Weitergabe von `RawMail` (strukturelle I1-Absicherung)
+- Status: accepted
+- WP / Datum: WP1, 2026-08-28
+- Kontext: I1 verlangt, dass nach der Sanitize-Stufe niemand mehr `mime_bytes` sieht. Der
+  Fehlerpfad braucht aber weiterhin Absender-Domain, Dedupe-Key und Betreff, um eine
+  `FailureNotice` bauen zu können — genau die Felder stecken im `RawMail`.
+- Entscheidung: `process_mail` zieht vor dem Sanitizer einen frozen Metadaten-Abzug
+  `MailRef(dedupe_key, from_domain, subject_sanitized)`; die `RawMail`-Referenz wird direkt
+  nach dem Sanitize-Aufruf im `finally` per `del` freigegeben. Die Stufen 3–6 und der
+  Fehlerpfad arbeiten ausschließlich mit `SanitizedMail` + `MailRef`. Der Betreff im
+  `MailRef` läuft durch einen abhängigkeitsfreien „Not-Sanitizer" (nur druckbare
+  ASCII-Zeichen, Whitespace normalisiert, hart auf 120 Zeichen gekürzt), weil er auch dann
+  korrekt sein muss, wenn genau der reguläre Sanitizer gerade versagt hat (T2/T12).
+- Alternativen: `RawMail` einfach weiterreichen und sich auf Disziplin verlassen (I1 wäre
+  nur eine Konvention, in späteren WPs leicht zu verletzen). Ein zweites Modell ohne
+  `mime_bytes` erzeugen (mehr Duplikation, gleicher Effekt).
+- Konsequenzen: Ein zusätzliches Modell; dafür kann keine spätere Stufe versehentlich auf
+  Rohbytes zugreifen. `del raw` ist ein bewusst sichtbarer Marker, kein Performance-Trick.
+
+## ADR-012: Fehlerklassifikation über Exception-Klassennamen, ohne Fehlertext
+- Status: accepted
+- WP / Datum: WP1, 2026-08-28
+- Kontext: `FailureNotice.reason_class` landet beim Nutzer und im State. Exception-Texte
+  können Mail-Inhalte oder Secrets enthalten (I5). Gleichzeitig soll `pipeline.py` nicht von
+  Modulen späterer WPs (`llm/`, `sanitize/`, `messenger/`) importieren.
+- Entscheidung: `classify_failure(stage, exc)` bildet den Exception-**Klassennamen** über
+  eine Tabelle (`SanitizeError`, `LLMTimeout`, `LLMRateLimited`, `LLMInvalidResponse`,
+  `ValidationError`, `MessengerError`, intern `_InaccurateSummaryError`) auf eine stabile,
+  grobe Klasse ab; Fallback ist `"<stage>_error"`. Der Exception-Text wird nie übernommen.
+  Der Kritiker-Einspruch `summary_accurate = false` wird intern als Exception
+  (`_InaccurateSummaryError`) modelliert, damit er exakt denselben Fail-closed-Pfad nimmt
+  wie ein Stufenfehler.
+- Alternativen: `isinstance`-Prüfungen mit echten Imports (Zirkel-/Kopplungsproblem, WP1
+  könnte gar nicht importieren, was noch nicht existiert); Fehlertext mitgeben (I5-Verstoß).
+- Konsequenzen: Namensgleiche Fremd-Exceptions könnten falsch klassifiziert werden — der
+  Effekt ist auf ein ungenaues Label begrenzt, das Verhalten bleibt fail-closed. Spätere WPs
+  müssen ihre Fehlerklassen so benennen wie in der Tabelle.
+
+## ADR-013: Ergebnis-Typen als frozen dataclasses mit Endstatus; Notiz-Versand ohne Retry
+- Status: accepted
+- WP / Datum: WP1, 2026-08-28
+- Kontext: `process_mail` muss WP8 sagen, welcher `mail_status` zu schreiben ist, und darf
+  laut I6 keine Stufen-Exception nach außen lassen.
+- Entscheidung: `PipelineResult = Delivered | QueuedLow | FailedNotice` als frozen
+  dataclasses (nicht pydantic — reine Prozess-Rückgaben, keine externen Daten, keine
+  Validierung nötig), jeweils mit einem `status`-Feld aus
+  `MailStatus = "delivered" | "skipped_low" | "failed"`. `FailedNotice` trägt zusätzlich
+  `notice_delivered: bool`: Die Pipeline versucht **genau einmal**, die Metadaten-Notiz
+  zuzustellen; scheitert auch das (kaputter Composer/Messenger), wird das gemeldet statt
+  eskaliert. Retry-/Backoff-Politik ist ausdrücklich WP8 (ARCHITECTURE §6).
+- Alternativen: Exceptions als Kontrollfluss nach außen (widerspricht I6, jede Aufrufstelle
+  müsste es erneut richtig machen); ein einzelner Result-Typ mit Optional-Feldern (kein
+  Typ-Nutzen bei der Auswertung).
+- Konsequenzen: WP8 kann per `match` erschöpfend auswerten; ein doppelter Notiz-Versand
+  kann in WP1 nicht entstehen.
+
+## ADR-014: Modell-Härtung `extra="forbid"`, Typ-Aliase, gezielte Veränderlichkeit
+- Status: accepted
+- WP / Datum: WP1, 2026-08-28
+- Kontext: `models.py` setzt ARCHITECTURE §3 um. Zwei Punkte sind dort nicht ausbuchstabiert:
+  Umgang mit unbekannten Feldern und welche Modelle veränderlich sein dürfen.
+- Entscheidung: (a) Alle Modelle mit `extra="forbid"` — unbekannte Schlüssel aus LLM-JSON
+  werden abgelehnt statt still übernommen (Teil der Schema-Härtung, I4). (b) `Summary` und
+  `CriticVerdict` bleiben veränderlich, weil die deterministische Nachkontrolle in WP5/WP6
+  Felder säubern muss; alle übrigen Modelle sind frozen. (c) Die wiederkehrenden
+  `Literal`-Aufzählungen werden als Aliase `Importance`, `PhishingRisk`, `AttachmentKind`
+  exportiert und von `config.py`/`pipeline.py` mitbenutzt — eine Definitionsstelle statt
+  vier Kopien. (d) Größen-/Zählfelder bekommen `ge=0`, `headline` `max_length=100`; Felder
+  mit natürlichem Leerwert bekommen Defaults, identifizierende Felder bleiben Pflicht.
+  ARCHITECTURE §3 wurde um diese Umsetzungshinweise ergänzt.
+- Alternativen: pydantic-Default `extra="ignore"` (unbekannte LLM-Felder verschwinden
+  stumm — schlechte Diagnose, schwächere Härtung); alles frozen und in WP5/WP6 mit
+  `model_copy` arbeiten (mehr Zeremonie ohne Sicherheitsgewinn, da beide Objekte ohnehin
+  untrusted sind und erst der Output-Sanitizer verbindlich ist).
+- Konsequenzen: Ein Provider, der Zusatzfelder liefert, erzeugt einen Validierungsfehler ⇒
+  fail-closed (gewollt). Änderungen an den Aufzählungen erfolgen an genau einer Stelle.
+
+## ADR-015: Config — SecretStr, Env-Overrides vor der Validierung, deutsche Fehlermeldungen
+- Status: accepted
+- WP / Datum: WP1, 2026-08-28
+- Kontext: Secrets dürfen weder in Logs noch in Fehlermeldungen auftauchen (I5), sollen
+  bevorzugt aus der Umgebung kommen (SECURITY §6) — und ein nur in der Umgebung gesetztes
+  Secret darf kein „Pflichtfeld fehlt" auslösen.
+- Entscheidung: Secret-Felder sind `pydantic.SecretStr`. Die drei `MAILDIGEST_*`-Variablen
+  werden **vor** der pydantic-Validierung in das (tiefenkopierte) Roh-Dict gespiegelt; Env
+  schlägt Datei, leere Werte werden ignoriert, fehlende Zwischen-Sektionen werden angelegt.
+  Ist eine Zwischen-Sektion vorhanden, aber keine TOML-Tabelle, wird der Override
+  übersprungen, damit der echte Typfehler unverfälscht gemeldet wird. `ValidationError`
+  wird in eine `ConfigError` mit deutscher, mehrzeiliger, feldbezogener Meldung
+  (`[sektion] feld: <Grund>`) plus Hinweis auf die Env-Variablen übersetzt. Alle Sektionen
+  sind `extra="forbid"` (Tippfehler-Schutz). ARCHITECTURE §5 wurde um die konkreten
+  `[limits]`-Feldnamen und diese Umsetzungshinweise ergänzt.
+- Alternativen: `pydantic-settings` als Env-Quelle (neue Laufzeit-Dependency, NF-2/ADR
+  nötig, und die Env-Abbildung ist hier auf drei Felder beschränkt); Overrides nach der
+  Validierung setzen (dann schlägt die Validierung fehl, bevor das Secret ankommt);
+  englische pydantic-Rohmeldungen durchreichen (unbrauchbar für die Setup-UX in WP9).
+- Konsequenzen: Die Fehlerübersetzung deckt die relevanten pydantic-Fehlertypen ab; für
+  unbekannte Typen wird die Original-`msg` durchgereicht (englisch, aber secret-frei).
+  Neue Secrets brauchen einen Eintrag in `_ENV_OVERRIDES`.

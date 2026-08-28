@@ -1,6 +1,367 @@
-"""Laden und Validieren der config.toml (pydantic), inkl. Secret-Override via Umgebungsvariablen
-(MAILDIGEST_*).
+"""Laden und Validieren der `config.toml` (pydantic), inkl. Secret-Override via
+Umgebungsvariablen (`MAILDIGEST_*`).
 
-Schema: docs/ARCHITECTURE.md §5. Umsetzung in WP1.
-Platzhalter (WP0): noch keine Logik.
+Schema: docs/ARCHITECTURE.md §5, Limit-Defaults: docs/SECURITY.md §4 (umgesetzt in WP1).
+
+Ablauf von :func:`load_config`:
+1. TOML-Datei mit `tomllib` (stdlib) lesen,
+2. Secrets aus den Umgebungsvariablen in das Roh-Dict einspiegeln (Env schlägt Datei, I5),
+3. gegen das pydantic-Schema validieren,
+4. Fehler in eine :class:`ConfigError` mit deutscher, feldbezogener Meldung übersetzen.
+
+Secrets werden nie geloggt und nie in `__repr__`/`__str__` ausgegeben (I5): Die betroffenen
+Felder sind `pydantic.SecretStr`.
 """
+
+from __future__ import annotations
+
+import copy
+import os
+import tomllib
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+
+from maildigest.models import Importance
+
+__all__ = [
+    "ENV_IMAP_PASSWORD",
+    "ENV_LLM_API_KEY",
+    "ENV_TELEGRAM_TOKEN",
+    "Config",
+    "ConfigError",
+    "CriticLLMConfig",
+    "DiscordConfig",
+    "GeneralConfig",
+    "ImapConfig",
+    "LimitsConfig",
+    "LinksConfig",
+    "LlmConfig",
+    "MessengerConfig",
+    "SignalConfig",
+    "SummarizerConfig",
+    "TelegramConfig",
+    "load_config",
+]
+
+#: Umgebungsvariablen, die Secrets aus der Config-Datei überschreiben (docs/SECURITY.md §6).
+ENV_IMAP_PASSWORD = "MAILDIGEST_IMAP_PASSWORD"
+ENV_LLM_API_KEY = "MAILDIGEST_LLM_API_KEY"
+ENV_TELEGRAM_TOKEN = "MAILDIGEST_TELEGRAM_TOKEN"
+
+
+class ConfigError(Exception):
+    """Konfiguration fehlt, ist kein gültiges TOML oder verletzt das Schema.
+
+    Die Meldung ist bewusst für Endnutzer formuliert (deutsch, feldbezogen) und enthält
+    niemals Secret-Werte.
+    """
+
+
+class _Section(BaseModel):
+    """Basis aller Config-Sektionen: unbekannte Schlüssel sind ein Fehler (Tippfehler-Schutz)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GeneralConfig(_Section):
+    """`[general]` — Sprache, Länge, Wichtigkeits-Schwelle, Zeitpunkt des Sammel-Digests."""
+
+    language: str = "de"
+    summary_length: Literal["short", "medium", "long"] = "medium"
+    deliver_min_importance: Importance = "normal"
+    low_digest_time: str = Field(default="18:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class ImapConfig(_Section):
+    """`[imap]` — Zugang zum Mirror-Postfach (nur IMAPS, F-ING-1)."""
+
+    host: str = Field(min_length=1)
+    port: int = Field(default=993, ge=1, le=65535)
+    username: str = Field(min_length=1)
+    password: SecretStr | None = None
+    folder: str = "INBOX"
+    poll_interval_seconds: int = Field(default=120, ge=5)
+    move_processed_to: str = ""
+
+
+class CriticLLMConfig(_Section):
+    """`[llm.critic]` — optionaler Override für den Kritiker; leere Felder erben von `[llm]`."""
+
+    provider: Literal["anthropic", "openai_compatible"] | None = None
+    model: str | None = None
+    base_url: str | None = None
+    max_tokens: int | None = Field(default=None, ge=1)
+
+
+class LlmConfig(_Section):
+    """`[llm]` — Provider-Auswahl und Modellparameter (F-LLM-1).
+
+    `model` hat bewusst keinen Default: Modell-IDs veralten, ein hartkodierter Default würde
+    stillschweigend ein falsches Modell verwenden (docs/ARCHITECTURE.md §5).
+    """
+
+    provider: Literal["anthropic", "openai_compatible"] = "anthropic"
+    model: str = Field(min_length=1)
+    api_key: SecretStr | None = None
+    base_url: str = ""
+    max_tokens: int = Field(default=1024, ge=1)
+    critic: CriticLLMConfig = Field(default_factory=CriticLLMConfig)
+
+
+class SummarizerConfig(_Section):
+    """`[summarizer]` — Custom-Instructions des Nutzers (semi-trusted, I8)."""
+
+    instructions: str = ""
+
+
+class LinksConfig(_Section):
+    """`[links]` — Steuerung der defangten Link-Fußnote (Default aus, I3)."""
+
+    footnote: bool = False
+
+
+class TelegramConfig(_Section):
+    """`[messenger.telegram]` — Bot-Token (bevorzugt via Env) und Chat-ID."""
+
+    token: SecretStr | None = None
+    chat_id: str = ""
+
+
+class DiscordConfig(_Section):
+    """`[messenger.discord]` — Webhook-URL; enthält ein Secret, daher `SecretStr`."""
+
+    webhook_url: SecretStr | None = None
+
+
+class SignalConfig(_Section):
+    """`[messenger.signal]` — optionaler signal-cli-Adapter hinter Feature-Flag."""
+
+    enabled: bool = False
+    signal_cli_socket: str = ""
+
+
+class MessengerConfig(_Section):
+    """`[messenger]` — aktiver Adapter plus dessen Unter-Sektionen (F-MSG-1)."""
+
+    active: Literal["telegram", "discord", "signal"] = "telegram"
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    discord: DiscordConfig = Field(default_factory=DiscordConfig)
+    signal: SignalConfig = Field(default_factory=SignalConfig)
+
+
+class LimitsConfig(_Section):
+    """`[limits]` — Ressourcen- und Größenlimits; Defaults aus docs/SECURITY.md §4."""
+
+    max_mail_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
+    max_text_chars: int = Field(default=30_000, ge=1)
+    pdf_max_input_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
+    pdf_max_output_chars: int = Field(default=50_000, ge=1)
+    pdf_timeout_seconds: int = Field(default=20, ge=1)
+    max_mime_depth: int = Field(default=10, ge=1)
+    max_attachments_processed: int = Field(default=20, ge=0)
+
+
+class Config(_Section):
+    """Gesamt-Konfiguration von MailDigest (docs/ARCHITECTURE.md §5)."""
+
+    general: GeneralConfig = Field(default_factory=GeneralConfig)
+    imap: ImapConfig
+    llm: LlmConfig
+    summarizer: SummarizerConfig = Field(default_factory=SummarizerConfig)
+    links: LinksConfig = Field(default_factory=LinksConfig)
+    messenger: MessengerConfig = Field(default_factory=MessengerConfig)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
+
+    def critic_model(self) -> str:
+        """Modell des Kritikers: Override aus `[llm.critic]`, sonst das Modell aus `[llm]`."""
+        return self.llm.critic.model or self.llm.model
+
+    def critic_provider(self) -> str:
+        """Provider des Kritikers: Override aus `[llm.critic]`, sonst der aus `[llm]`."""
+        return self.llm.critic.provider or self.llm.provider
+
+    def critic_base_url(self) -> str:
+        """Base-URL des Kritikers: Override aus `[llm.critic]`, sonst die aus `[llm]`."""
+        base_url = self.llm.critic.base_url
+        return base_url if base_url is not None else self.llm.base_url
+
+    def critic_max_tokens(self) -> int:
+        """Token-Limit des Kritikers: Override aus `[llm.critic]`, sonst das aus `[llm]`."""
+        return self.llm.critic.max_tokens or self.llm.max_tokens
+
+
+# --- Env-Overrides -----------------------------------------------------------------------
+
+#: (Env-Variable, Pfad in der Config-Struktur) — Env schlägt immer die Datei.
+_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (ENV_IMAP_PASSWORD, ("imap", "password")),
+    (ENV_LLM_API_KEY, ("llm", "api_key")),
+    (ENV_TELEGRAM_TOKEN, ("messenger", "telegram", "token")),
+)
+
+
+def _apply_env_overrides(
+    data: dict[str, Any], env: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Spiegelt gesetzte `MAILDIGEST_*`-Secrets in das Roh-Dict (vor der Validierung).
+
+    Vor der Validierung, damit Fehlermeldungen die echten Feldnamen nennen und ein Secret,
+    das nur in der Umgebung steht, kein „Pflichtfeld fehlt" auslöst. Leere Env-Werte werden
+    ignoriert (ein leerer Export soll nichts kaputt machen).
+
+    Fehlende Zwischen-Sektionen werden angelegt. Ist eine Zwischen-Sektion in der Datei
+    vorhanden, aber keine TOML-Tabelle (z. B. ``imap = "x"``), wird der Override
+    übersprungen: Der Typfehler soll unverfälscht in der Validierung gemeldet werden statt
+    von einem stillen Überschreiben verdeckt zu werden.
+    """
+    environment = os.environ if env is None else env
+    for env_name, path in _ENV_OVERRIDES:
+        value = environment.get(env_name)
+        if not value:
+            continue
+        section = _ensure_section(data, path[:-1])
+        if section is None:
+            continue
+        section[path[-1]] = value
+    return data
+
+
+def _ensure_section(
+    data: dict[str, Any], path: tuple[str, ...]
+) -> dict[str, Any] | None:
+    """Navigiert zu `path` und legt fehlende Zwischen-Tabellen an.
+
+    Gibt `None` zurück, wenn ein Zwischenknoten existiert, aber keine TOML-Tabelle ist —
+    dann bleibt der Wert unangetastet, damit die Validierung den Typfehler meldet.
+    """
+    cursor = data
+    for key in path:
+        child = cursor.get(key)
+        if child is None:
+            child = {}
+            cursor[key] = child
+        elif not isinstance(child, dict):
+            return None
+        cursor = child
+    return cursor
+
+
+# --- Fehlerübersetzung -------------------------------------------------------------------
+
+
+def _format_location(location: tuple[int | str, ...]) -> str:
+    """Baut aus einem pydantic-`loc` eine TOML-nahe Pfadangabe wie `[imap] host`."""
+    parts = [str(item) for item in location]
+    if not parts:
+        return "(Wurzel)"
+    if len(parts) == 1:
+        return parts[0]
+    return f"[{'.'.join(parts[:-1])}] {parts[-1]}"
+
+
+def _translate_error(error: dict[str, Any]) -> str:
+    """Übersetzt genau einen pydantic-Fehler in eine deutsche, nutzbare Zeile."""
+    error_type = str(error.get("type", ""))
+    context = error.get("ctx") or {}
+    if error_type == "missing":
+        return "Pflichtfeld fehlt."
+    if error_type == "extra_forbidden":
+        return "Unbekanntes Feld — Tippfehler? (Feld entfernen oder Schreibweise prüfen)"
+    if error_type == "literal_error":
+        return f"Ungültiger Wert; erlaubt ist {context.get('expected', 'ein anderer Wert')}."
+    if error_type == "string_pattern_mismatch":
+        return f"Ungültiges Format (erwartet: Muster {context.get('pattern', '')})."
+    if error_type in {"string_too_short", "string_type"}:
+        return "Wert muss ein nicht-leerer Text sein."
+    if error_type in {"int_parsing", "int_type"}:
+        return "Wert muss eine ganze Zahl sein."
+    if error_type in {"bool_parsing", "bool_type"}:
+        return "Wert muss true oder false sein."
+    if error_type in {"greater_than_equal", "greater_than"}:
+        return f"Wert ist zu klein (Minimum: {context.get('ge', context.get('gt', '?'))})."
+    if error_type in {"less_than_equal", "less_than"}:
+        return f"Wert ist zu groß (Maximum: {context.get('le', context.get('lt', '?'))})."
+    if error_type in {"dict_type", "model_type"}:
+        return "Erwartet wird hier eine TOML-Sektion (Tabelle)."
+    if error_type == "list_type":
+        return "Erwartet wird hier eine Liste."
+    return str(error.get("msg", "Ungültiger Wert."))
+
+
+def _validation_error_message(exc: ValidationError, source: str) -> str:
+    """Baut die vollständige, mehrzeilige deutsche Fehlermeldung für alle Einzelfehler."""
+    lines = [f"Konfiguration ungültig ({source}):"]
+    lines += [
+        f"  - {_format_location(tuple(error['loc']))}: {_translate_error(dict(error))}"
+        for error in exc.errors()
+    ]
+    lines.append(
+        "Referenz aller Felder: docs/ARCHITECTURE.md §5. "
+        "Secrets können alternativ über die Umgebungsvariablen "
+        f"{ENV_IMAP_PASSWORD}, {ENV_LLM_API_KEY}, {ENV_TELEGRAM_TOKEN} gesetzt werden."
+    )
+    return "\n".join(lines)
+
+
+# --- Öffentliche API ---------------------------------------------------------------------
+
+
+def load_config(path: str | Path, *, env: dict[str, str] | None = None) -> Config:
+    """Lädt und validiert die Konfigurationsdatei.
+
+    Args:
+        path: Pfad zur `config.toml`.
+        env: Umgebung für die Secret-Overrides; Default ist `os.environ` (Tests reichen
+            hier ein eigenes Dict herein).
+
+    Returns:
+        Die validierte :class:`Config`.
+
+    Raises:
+        ConfigError: Datei fehlt, ist kein lesbares/gültiges TOML oder verletzt das Schema.
+            Die Meldung ist deutsch, feldbezogen und secret-frei.
+    """
+    config_path = Path(path)
+    try:
+        raw_bytes = config_path.read_bytes()
+    except FileNotFoundError as exc:
+        raise ConfigError(
+            f"Konfigurationsdatei nicht gefunden: {config_path}. "
+            "Mit `maildigest init` anlegen oder Pfad korrigieren."
+        ) from exc
+    except OSError as exc:
+        raise ConfigError(
+            f"Konfigurationsdatei {config_path} kann nicht gelesen werden: {exc.strerror}."
+        ) from exc
+
+    try:
+        data = tomllib.loads(raw_bytes.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ConfigError(
+            f"Konfigurationsdatei {config_path} ist nicht UTF-8-kodiert."
+        ) from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(
+            f"Konfigurationsdatei {config_path} ist kein gültiges TOML: {exc}"
+        ) from exc
+
+    return load_config_from_dict(data, env=env, source=str(config_path))
+
+
+def load_config_from_dict(
+    data: dict[str, Any],
+    *,
+    env: dict[str, str] | None = None,
+    source: str = "Konfiguration",
+) -> Config:
+    """Validiert ein bereits geparstes Config-Dict (inkl. Env-Overrides).
+
+    Getrennt von :func:`load_config`, damit CLI (WP9) und Tests ohne Datei validieren können.
+    """
+    merged = _apply_env_overrides(copy.deepcopy(dict(data)), env=env)
+    try:
+        return Config.model_validate(merged)
+    except ValidationError as exc:
+        raise ConfigError(_validation_error_message(exc, source)) from exc

@@ -147,6 +147,23 @@ class FailureNotice(BaseModel, frozen=True):
     reason_class: str               # Fehlerklasse, keine Details/Inhalte
 ```
 
+**Umsetzungshinweise (WP1, `models.py` — Begründung in ADR-014):**
+
+- Die wiederkehrenden `Literal`-Aufzählungen sind als benannte Typ-Aliase exportiert und
+  werden von `config.py`/`pipeline.py` mitbenutzt (semantisch identisch zur Tabelle oben):
+  `Importance = Literal["high","normal","low"]`,
+  `PhishingRisk = Literal["none","low","high"]`,
+  `AttachmentKind = Literal["pdf","text","html","unknown","mismatch"]`.
+- Alle Modelle laufen mit `extra="forbid"`; unbekannte Felder (z. B. aus LLM-JSON) sind ein
+  Validierungsfehler statt stiller Übernahme (I4).
+- `Summary` und `CriticVerdict` sind bewusst **nicht** frozen: Die deterministische
+  Nachkontrolle in WP5/WP6 säubert Felder der untrusted LLM-Ausgabe. Alle übrigen Modelle
+  sind frozen.
+- Zählfelder/Größen haben `ge=0`, `Summary.headline` erzwingt `max_length=100`. Felder mit
+  natürlichem Leerwert (Listen, Dicts, `bool`, optionale Header) haben Defaults, damit
+  Ingest/Sanitizer keine Pflicht-Boilerplate erzeugen; identifizierende Felder
+  (`dedupe_key`, `from_domain`, `body_text`, `mime_bytes`, …) bleiben Pflichtfelder.
+
 ## 4. Pipeline-Vertrag (`pipeline.py`)
 
 ```python
@@ -160,6 +177,55 @@ def process_mail(raw: RawMail, deps: PipelineDeps) -> PipelineResult: ...
   weitergereicht) — strukturelle Absicherung von I1.
 - Jede Exception einer Stufe wird gefangen, klassifiziert, gezählt (Retry-Politik WP8)
   und endet schlimmstenfalls als `FailureNotice`.
+
+**Stand WP1 (`pipeline.py`) — Details in ADR-011 bis ADR-013:**
+
+```python
+Stage      = Literal["sanitize", "summarize", "critic", "compose", "deliver"]
+MailStatus = Literal["delivered", "skipped_low", "failed"]
+
+class MailRef(BaseModel, frozen=True):   # Metadaten-Abzug, der den Sanitizer überlebt (I1)
+    dedupe_key: str
+    from_domain: str
+    subject_sanitized: str               # Not-Sanitizer, s. FailureNotice in §3
+
+@dataclass(frozen=True)
+class PipelineDeps:
+    sanitizer: Sanitizer;  summarizer: Summarizer;  critic: Critic
+    composer: OutputComposer;  messenger: Messenger
+    deliver_min_importance: Importance = "normal"
+
+@dataclass(frozen=True)
+class Delivered:    dedupe_key: str; message: DigestMessage; status = "delivered"
+@dataclass(frozen=True)
+class QueuedLow:    dedupe_key: str; from_domain: str; summary: Summary; status = "skipped_low"
+@dataclass(frozen=True)
+class FailedNotice: notice: FailureNotice; notice_delivered: bool; status = "failed"
+```
+
+Stufen-Protokolle: `Sanitizer.sanitize(raw) -> SanitizedMail`,
+`Summarizer.summarize(mail) -> Summary`, `Critic.review(mail, summary) -> CriticVerdict`,
+`OutputComposer.compose(mail, summary, verdict) -> DigestMessage` **und**
+`OutputComposer.compose_failure(notice) -> DigestMessage`, `Messenger.send(message) -> None`.
+Das Pipeline-`Messenger`-Protokoll ist bewusst schmaler als `messenger/base.py` (kein
+`healthcheck()`): Die Pipeline verlangt nur, was sie aufruft.
+
+Ablauf und Entscheidungspunkte:
+
+1. Vor dem Sanitizer wird `MailRef` gezogen; nach dem Sanitize-Aufruf wird die
+   `RawMail`-Referenz per `del` freigegeben. Die Stufen 3–6 sehen `SanitizedMail` und
+   `MailRef` — nie `RawMail`/`mime_bytes` (I1).
+2. `verdict.summary_accurate == False` ⇒ fail-closed mit `stage="critic"`,
+   `reason_class="summary_inaccurate"` (T8) — noch vor jedem Schwellwertvergleich.
+3. `phishing_risk == "high"` erzwingt Einzelzustellung und hebt `importance` mindestens auf
+   `normal` (F-CRIT-2); sonst entscheidet `deliver_min_importance` über
+   Zustellung vs. `QueuedLow`.
+4. Fehler in einer Stufe ⇒ `FailureNotice` + **ein** Zustellversuch der Notiz über
+   `compose_failure`/`send`. Scheitert auch der, ist `notice_delivered=False`; Retries sind
+   Sache von WP8. `process_mail` wirft nie eine Stufen-Exception nach außen.
+5. `reason_class` wird aus dem Exception-**Klassennamen** abgeleitet (Tabelle in
+   `pipeline._ERROR_CLASSES`), Fallback `"<stage>_error"`. Der Exception-Text wird nie
+   übernommen (I5).
 
 ## 5. Konfiguration (`config.toml`, Schema in `config.py`)
 
@@ -210,7 +276,32 @@ enabled = false
 signal_cli_socket = ""
 
 [limits]                     # Defaults siehe SECURITY.md §4
+max_mail_bytes = 26214400          # 25 MB
+max_text_chars = 30000
+pdf_max_input_bytes = 10485760     # 10 MB
+pdf_max_output_chars = 50000
+pdf_timeout_seconds = 20
+max_mime_depth = 10
+max_attachments_processed = 20
 ```
+
+**Umsetzungshinweise (WP1, `config.py` — Begründung in ADR-015):**
+
+- Secret-Felder sind `pydantic.SecretStr` (`imap.password`, `llm.api_key`,
+  `messenger.telegram.token`, `messenger.discord.webhook_url`) und erscheinen damit weder in
+  `repr()`/Logs noch in Fehlermeldungen (I5).
+- Env-Overrides (`MAILDIGEST_IMAP_PASSWORD`, `MAILDIGEST_LLM_API_KEY`,
+  `MAILDIGEST_TELEGRAM_TOKEN`) werden **vor** der Validierung in das Roh-Dict gespiegelt;
+  Env schlägt Datei, leere Werte werden ignoriert.
+- Alle Sektionen sind `extra="forbid"` — ein Tippfehler ist ein Fehler, keine stille
+  Ignoranz. Fehler werden zu einer `ConfigError` mit deutscher, feldbezogener,
+  mehrzeiliger Meldung (`[sektion] feld: <Grund>`) übersetzt.
+- `[llm.critic]` ist ein Override mit Vererbung: `Config.critic_model()`,
+  `critic_provider()`, `critic_base_url()`, `critic_max_tokens()` liefern den Override oder
+  den Wert aus `[llm]`.
+- `[llm] model` hat bewusst keinen Default (Pflichtfeld); die übrigen Werte oben sind die
+  tatsächlichen Code-Defaults.
+- Neben `load_config(path)` gibt es `load_config_from_dict(data)` für CLI (WP9) und Tests.
 
 ## 6. Fehler- & Retry-Politik (Detail in WP8)
 

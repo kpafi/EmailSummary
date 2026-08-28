@@ -27,7 +27,7 @@
 | F-LLM-2 | Einrichtung des Providers über CLI (`connect-llm`) inkl. Testaufruf. | Nutzer | open |
 | F-OPS-1 | `maildigest run` läuft als Dauer-Prozess (Polling); `--once` verarbeitet einmalig und beendet sich (Cron-tauglich). | abgeleitet | open |
 | F-OPS-2 | `maildigest test` führt einen Ende-zu-Ende-Selbsttest mit einer Beispielmail aus. | abgeleitet | open |
-| F-OPS-3 | Nicht verarbeitbare Mails/Anhänge erzeugen eine Metadaten-Notiz an den Messenger (fail-closed), gehen also nie stumm verloren. | abgeleitet | open |
+| F-OPS-3 | Nicht verarbeitbare Mails/Anhänge erzeugen eine Metadaten-Notiz an den Messenger (fail-closed), gehen also nie stumm verloren. | abgeleitet | in-progress (WP1) |
 
 ## 2. Sicherheitsanforderungen (testbar, Grundlage für Cold-Testing)
 
@@ -39,7 +39,7 @@
 | F-SEC-4 | Anhänge werden per Allowlist behandelt: nur `text/plain`, `text/html`, `application/pdf` werden inhaltlich verarbeitet; alles andere wird nur als Metadatum gemeldet. MIME-Typ wird per Magic-Bytes verifiziert. | open |
 | F-SEC-5 | Instruktionen im Mail-Inhalt („ignore previous instructions", versteckter Text, etc.) dürfen das Verhalten nicht ändern; Verdacht wird geflaggt und dem Nutzer angezeigt. | open |
 | F-SEC-6 | LLM-Ausgaben werden schema-validiert und durchlaufen vor Versand einen deterministischen Output-Sanitizer (I4). | open |
-| F-SEC-7 | Fehler in Sanitizer/LLM/Kritiker führen zu fail-closed-Verhalten: Metadaten-Notiz statt ungeprüftem Inhalt (I6). | open |
+| F-SEC-7 | Fehler in Sanitizer/LLM/Kritiker führen zu fail-closed-Verhalten: Metadaten-Notiz statt ungeprüftem Inhalt (I6). | in-progress (WP1) |
 | F-SEC-8 | Secrets erscheinen nie in Prompts, Logs oder der Datenbank; Config-Datei wird mit Mode 0600 angelegt (I5). | open |
 | F-SEC-9 | Anhangs-Text-Extraktion läuft in einem ressourcenbegrenzten Subprozess (Timeout, Speicher, Input-/Output-Größe) (I7). | open |
 | F-SEC-10 | Zero-Width-/Bidi-Steuerzeichen werden entfernt; Punycode-/Homoglyphen-Domains werden gekennzeichnet. | open |
@@ -50,7 +50,7 @@
 |----|-------------|--------|
 | NF-1 | Lightweight: Python ≥ 3.11, Laufzeit-Dependencies ≤ 8 Pakete, SQLite als einziger Store, lauffähig auf einem kleinen VPS/Raspberry Pi. | open |
 | NF-2 | Neue Laufzeit-Dependency nur mit ADR. | open |
-| NF-3 | Konfiguration vollständig über eine `config.toml` + Env-Vars; keine Datenbank-Migrationstools. | open |
+| NF-3 | Konfiguration vollständig über eine `config.toml` + Env-Vars; keine Datenbank-Migrationstools. | in-progress (WP1) |
 | NF-4 | Verarbeitungslatenz pro Mail < 60 s unter Normalbedingungen (exkl. LLM-Ausreißer). | open |
 | NF-5 | Logs strukturiert, ohne Mail-Inhalte und ohne PII über Absender-Domain + gehashte Message-ID hinaus. | open |
 | NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | open |
