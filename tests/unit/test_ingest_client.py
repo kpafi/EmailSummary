@@ -37,6 +37,26 @@ def make_message(raw: bytes = MAIL, *, uid: str | None = "42") -> MailMessage:
     return MailMessage([(f"1 (UID {uid} FLAGS ())".encode(), raw), b")"])
 
 
+class FakeFolderInfo:
+    """Ein Eintrag der Ordnerliste, wie `imap_tools` ihn liefert."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class FakeFolderManager:
+    """Ersatz für `MailBox.folder` — nur `list()` wird von MailDigest benutzt."""
+
+    def __init__(self, folders: list[str], error: Exception | None) -> None:
+        self._folders = folders
+        self._error = error
+
+    def list(self) -> list[FakeFolderInfo]:
+        if self._error is not None:
+            raise self._error
+        return [FakeFolderInfo(name) for name in self._folders]
+
+
 class FakeMailBox:
     """Minimaler Ersatz für `imap_tools.MailBox` — protokolliert alle Kommandos."""
 
@@ -47,8 +67,12 @@ class FakeMailBox:
         login_error: Exception | None = None,
         fetch_error: Exception | None = None,
         flag_error: Exception | None = None,
+        folders: list[str] | None = None,
+        folder_error: Exception | None = None,
     ) -> None:
         self.messages = messages if messages is not None else []
+        self.folders = folders if folders is not None else ["INBOX", "Archiv"]
+        self.folder_error = folder_error
         self.login_error = login_error
         self.fetch_error = fetch_error
         self.flag_error = flag_error
@@ -79,6 +103,10 @@ class FakeMailBox:
 
     def move(self, uid_list: str, destination_folder: str) -> None:
         self.moved.append((uid_list, destination_folder))
+
+    @property
+    def folder(self) -> Any:
+        return FakeFolderManager(self.folders, self.folder_error)
 
     # Die folgenden Kommandos darf MailDigest niemals aufrufen (F-ING-1).
     def delete(self, *args: Any, **kwargs: Any) -> None:
@@ -244,3 +272,43 @@ def test_flag_error_becomes_connection_error() -> None:
     client.connect()
     with pytest.raises(ImapConnectionError):
         client.mark_processed(make_message(uid="7"))
+
+
+# --- Ordnerliste (WP9, `maildigest connect-mail`) ---------------------------------------------
+
+
+def test_list_folders_liefert_die_namen() -> None:
+    box = FakeMailBox(folders=["INBOX", "Archiv", "Processed"])
+    client = make_client(box)
+    client.connect()
+    assert client.list_folders() == ["INBOX", "Archiv", "Processed"]
+
+
+def test_list_folders_ueberspringt_namenlose_eintraege() -> None:
+    box = FakeMailBox(folders=["INBOX", "", "Archiv"])
+    client = make_client(box)
+    client.connect()
+    assert client.list_folders() == ["INBOX", "Archiv"]
+
+
+def test_list_folders_ohne_verbindung_ist_ein_verbindungsfehler() -> None:
+    client = make_client(FakeMailBox())
+    with pytest.raises(ImapConnectionError):
+        client.list_folders()
+
+
+def test_list_folders_uebersetzt_imap_fehler() -> None:
+    box = FakeMailBox(folder_error=MailboxFetchError(("NO", [b"LIST failed"]), "OK"))
+    client = make_client(box)
+    client.connect()
+    with pytest.raises(ImapConnectionError, match="Ordnerliste"):
+        client.list_folders()
+
+
+def test_list_folders_loescht_nichts() -> None:
+    """Die Ordnerliste ist rein lesend (F-ING-1)."""
+    box = FakeMailBox()
+    client = make_client(box)
+    client.connect()
+    client.list_folders()
+    assert box.moved == [] and box.flagged == []

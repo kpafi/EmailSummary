@@ -22,7 +22,11 @@ from maildigest.models import (
     SanitizedMail,
     Summary,
 )
-from maildigest.output.composer import DigestComposer, part_limit_for
+from maildigest.output.composer import (
+    SELFTEST_DEDUPE_KEY,
+    DigestComposer,
+    part_limit_for,
+)
 from maildigest.output.sanitizer import (
     DISCORD_MAX_PART_CHARS,
     SIGNAL_MAX_PART_CHARS,
@@ -348,3 +352,29 @@ def test_sender_without_display_name_uses_domain() -> None:
         DigestComposer(), make_mail(from_display=""), make_summary(), make_verdict()
     )
     assert "Von: stadtwerke-x[.]de ·" in text
+
+
+# --- Betriebsnachricht (WP9, ADR-054) ---------------------------------------------------
+
+
+def test_compose_plain_geht_durch_denselben_nachbrenner() -> None:
+    """Auch eine im Code formulierte Nachricht durchläuft `_finalize()` (SECURITY §5)."""
+    message = DigestComposer().compose_plain("Test https://boese.example/pfad <b>fett</b>")
+    text = "\n".join(message.parts)
+    assert_safe(text)
+    assert "://" not in text
+    assert "<b>" not in text
+
+
+def test_compose_plain_setzt_feste_metadaten() -> None:
+    message = DigestComposer().compose_plain("Hallo")
+    assert message.importance == "normal"
+    assert message.is_warning is False
+    assert message.dedupe_key == SELFTEST_DEDUPE_KEY
+
+
+def test_compose_plain_splittet_wie_jede_andere_nachricht() -> None:
+    composer = DigestComposer(part_limit=20)
+    message = composer.compose_plain("\n".join(f"Zeile {index}" for index in range(20)))
+    assert len(message.parts) > 1
+    assert all(len(part) <= 20 for part in message.parts)

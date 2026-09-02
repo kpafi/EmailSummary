@@ -115,6 +115,10 @@
 - Konsequenzen: Reine PEP-621-Metadaten, minimale Konfiguration, keine `setup.py`/
   `setup.cfg`. Kein `readme`-Feld in `[project]`, da `README.md` erst in WP9/WP12
   entsteht (ein fehlendes Readme-File würde den Build brechen).
+- Nachtrag (WP9, 2026-09-02): `README.md` existiert jetzt; `readme = "README.md"` ist in
+  `[project]` ergänzt. Dazu kam `[project.scripts] maildigest = "maildigest.cli:run_cli"`
+  (ADR-052). Die mitgelieferte Beispielmail liegt unter `src/maildigest/data/selftest.eml`
+  und ist damit Teil des Wheels — hatchling nimmt alle Dateien des Paketverzeichnisses auf.
 
 ## ADR-010: Tooling-Regelsatz (ruff-Auswahl, mypy strict)
 - Status: accepted
@@ -1136,3 +1140,133 @@
   unkritisch, und ein Reconnect je Zyklus ist robuster als eine über Stunden gehaltene
   Verbindung). Ein Zustellversuch findet mindestens einmal je Zyklus statt — die
   Backoff-Zeiten der Outbox (60 s aufwärts) sind darauf abgestimmt.
+
+## ADR-052: CLI mit `argparse` statt `click`, Einstiegspunkt `maildigest`
+- Status: accepted
+- WP / Datum: WP9, 2026-09-02
+- Kontext: PLAN.md WP9 erlaubt `click` nur mit ADR. Die CLI braucht sechs Kommandos,
+  gemeinsame Optionen, klare Exit-Codes und muss zu 100 % testbar sein (Prompts über
+  injizierbare Ströme, keine echten Netzverbindungen).
+- Entscheidung: `argparse` aus der Standardbibliothek. Gemeinsame Optionen (`--config`,
+  `--non-interactive`) liegen in einem `parents=`-Parser, der sowohl am Hauptparser als
+  auch an jedem Unterkommando hängt — damit funktionieren `maildigest --config x init`
+  und `maildigest init --config x` gleichermaßen. `ArgumentParser.error` ist überschrieben
+  und wirft eine `CliError` mit Exit-Code 2 statt `SystemExit`, sodass `main()` in Tests
+  einen Rückgabewert liefert. `main(argv, stdin, stdout, stderr, hooks)` bekommt alle
+  Außenkontakte (Runner, Messenger-Fabrik, Provider-Fabrik, IMAP-Client, `getUpdates`,
+  `configure_logging`, `sleep`) über ein `Hooks`-Objekt injiziert. Installiert wird die CLI
+  über `[project.scripts] maildigest = "maildigest.cli:run_cli"`, zusätzlich gibt es
+  `python -m maildigest`.
+- Alternativen: `click` (schöner für verschachtelte Gruppen, aber eine Laufzeit-Dependency
+  mehr für ein Werkzeug, das laut NF-1 mit ≤ 8 Paketen auskommen soll — und `click.testing`
+  hätte die Ströme ohnehin nur anders injiziert); `typer` (zieht `click` mit).
+- Konsequenzen: Etwas mehr Handarbeit bei Prompts und Validierung; dafür null neue
+  Abhängigkeiten und ein `main()`, das sich wie eine normale Funktion testen lässt.
+  `--help` beendet weiterhin über `SystemExit(0)` — das ist argparse-Verhalten und in
+  SPEC-CLI.md so dokumentiert.
+
+## ADR-053: Eigener TOML-Renderer statt `tomli-w`; Sektionsweise Validierung
+- Status: accepted
+- WP / Datum: WP9, 2026-09-02
+- Kontext: `tomllib` kann nur lesen. Die Einrichtungs-Kommandos müssen die
+  `config.toml` schreiben — kommentiert, in stabiler Reihenfolge und ohne die Angaben
+  anderer Kommandos zu verlieren. Gleichzeitig ist die Konfiguration während der
+  Einrichtung **unvollständig**: Nach `init` fehlen `[imap] host`, `[imap] username` und
+  `[llm] model`, sodass `load_config` zwangsläufig scheitert.
+- Entscheidung: (a) Ein winziger Renderer in `cli.py` (rund 40 Zeilen) serialisiert das
+  Roh-Dict; Strings gehen durch `json.dumps` (TOML-Basic-Strings benutzen dieselben
+  Escapes). Reihenfolge, Sektions- und Feldkommentare sowie auskommentierte Platzhalter für
+  Pflichtfelder und Secrets stehen in Tabellen im Modul; unbekannte Schlüssel bleiben
+  erhalten und wandern ans Ende ihrer Sektion. Vor dem Schreiben wird das Ergebnis selbst
+  geparst. (b) `config.validate_section(model, data, source=…)` validiert **eine** Sektion
+  mit derselben deutschen Fehlerübersetzung wie `load_config`; die `connect-*`-Kommandos
+  benutzen das, `test` und `run` verlangen weiterhin die vollständige Config.
+- Alternativen: `tomli-w` als Laufzeit-Dependency (NF-2 verlangt dafür einen ADR — der
+  Nutzen wäre eine Funktion, die wir in 40 Zeilen bekommen, und Kommentare kann `tomli-w`
+  ohnehin nicht schreiben); Datei mit Textersetzung patchen (bricht bei jeder
+  Handänderung); vollständige Validierung nach jedem `connect-*` (jeder Lauf würde an einer
+  themenfremden fehlenden Angabe scheitern).
+- Konsequenzen: Der Renderer kennt nur die Typen, die im Schema vorkommen (Text, Zahl,
+  Wahrheitswert, Liste); ein handgeschriebener Datums- oder Tabellen-Array-Wert würde beim
+  Speichern eine Fehlermeldung erzeugen statt still verloren zu gehen. Handgeschriebene
+  Kommentare des Nutzers gehen beim Speichern verloren — die Datei wird neu gerendert.
+
+## ADR-054: Betriebsnachrichten der CLI laufen über `DigestComposer.compose_plain`
+- Status: accepted
+- WP / Datum: WP9, 2026-09-02
+- Kontext: `connect-messenger` schickt eine Testnachricht. Deren Text stammt aus dem
+  Programm, ist also nicht untrusted — trotzdem sagt docs/SECURITY.md §5, dass
+  `DigestMessage.parts` ausschließlich über `DigestComposer._finalize()` entsteht.
+- Entscheidung: Neue Methode `compose_plain(text)` im Composer, die durch `_finalize()`
+  geht (Nachbrenner + Split) und `importance="normal"`, `is_warning=False`,
+  `dedupe_key="cli-selftest"` setzt. Die CLI baut keine `DigestMessage` selbst. Der Text
+  der Testnachricht enthält bewusst keine Punkte, Domains oder Markup-Zeichen, damit der
+  Nachbrenner nichts zu entschärfen hat und die Nachricht so ankommt, wie sie dasteht.
+- Alternativen: `DigestMessage` in der CLI direkt konstruieren (zweiter Weg zu `parts` —
+  genau das, was die Invariante ausschließt); `compose_failure` zweckentfremden
+  (semantisch falsch, der Nutzer läse „Mail konnte nicht verarbeitet werden").
+- Konsequenzen: Eine öffentliche Methode mehr im Composer, die nur die CLI benutzt. Dafür
+  bleibt die Aussage „es gibt genau einen Weg zum Messenger" wörtlich wahr.
+
+## ADR-055: Fremddaten der Einrichtung erreichen das Terminal nur gefiltert
+- Status: accepted
+- WP / Datum: WP9, 2026-09-02
+- Kontext: Drei Einrichtungs-Kommandos zeigen Daten an, die von außen kommen:
+  IMAP-Ordnernamen (Server), Telegram-Chats aus `getUpdates` (jeder, der den Bot
+  anschreibt) und die Antwort des Sprachmodells auf den Testaufruf. Ein Terminal
+  interpretiert ANSI-Sequenzen; ein Chat-Titel oder Ordnername ist ein Einfallstor für
+  Steuerzeichen, und die Modellantwort ist laut I4 grundsätzlich untrusted.
+- Entscheidung: (a) Ordnernamen werden vor der Anzeige auf eine Zeichen-Allowlist
+  (alphanumerisch, deutsche Umlaute, Leerzeichen, `_ . / -`) reduziert und auf 80 Zeichen
+  gekürzt; gewählt wird über die **Nummer**, gespeichert wird der Originalname.
+  (b) `messenger/telegram.discover_chat_ids` liefert nur die numerische Chat-ID und den
+  Chat-Typ aus einer festen Werteliste — Anzeigenamen und Gruppentitel werden gar nicht
+  erst gelesen. (c) Die Antwort des Testaufrufs wird nie ausgegeben, gemeldet werden nur
+  Länge und ob das erwartete Wort vorkommt.
+- Alternativen: Namen und Titel roh anzeigen (bequemer, aber ein Terminal-Injection-Weg
+  und bei Telegram eine vom Angreifer wählbare Zeichenkette); Ausgabe erst im
+  Output-Sanitizer entschärfen (der arbeitet auf Nachrichten, nicht auf Terminalausgaben).
+- Konsequenzen: Ein exotisch benannter Ordner erscheint mit `·` an den gefilterten
+  Stellen; die Zuordnung bleibt über die Nummer eindeutig. Bei mehreren Telegram-Chats muss
+  der Nutzer die Chat-ID anhand der Nummer erkennen — akzeptabel, weil der Normalfall genau
+  ein Chat ist.
+
+## ADR-056: Secrets haben keine Kommandozeilen-Optionen
+- Status: accepted
+- WP / Datum: WP9, 2026-09-02
+- Kontext: Für `--non-interactive` braucht jedes Feld einen Weg ohne Rückfrage. Für
+  IMAP-Passwort, API-Key und Bot-Token wäre die naheliegende Lösung je eine Option.
+- Entscheidung: Es gibt **keine** Optionen `--password`, `--api-key`, `--token`. Diese drei
+  Werte kommen aus der Abfrage (ohne Echo, über `getpass`, sobald ein Terminal vorhanden
+  ist) oder aus `MAILDIGEST_IMAP_PASSWORD` / `MAILDIGEST_LLM_API_KEY` /
+  `MAILDIGEST_TELEGRAM_TOKEN`. Die Discord-Webhook-URL ist die Ausnahme: Sie ist zwar
+  ebenfalls ein Secret, hat aber keine Umgebungsvariable im Schema (ADR-015) — hier gibt es
+  `--webhook-url`, und die Abfrage läuft trotzdem ohne Echo.
+- Alternativen: Optionen für alle Secrets (landen in der Shell-History und in der
+  Prozessliste jedes Nutzers auf dem Rechner — genau der Weg, den I5 vermeiden soll);
+  Secrets nur über Dateien (unnötig umständlich für eine Einrichtung von Hand).
+- Konsequenzen: Eine vollautomatische Einrichtung braucht die Umgebungsvariablen; das ist
+  auch die Form, die docs/BETRIEB.md für den Dienstbetrieb empfiehlt. Für Discord bleibt
+  eine Secret-Option bestehen — dokumentiert in SPEC-CLI.md, mitsamt dem Hinweis, dass die
+  URL selbst das Secret ist.
+
+## ADR-057: `maildigest test` läuft auf einer eigenen State-DB und ohne Zustellschwelle
+- Status: accepted
+- WP / Datum: WP9, 2026-09-02
+- Kontext: Der Selbsttest (F-OPS-2) soll beliebig oft dieselbe `.eml` einspeisen können —
+  auch der Cold-Tester (WP11) baut darauf seine Angriffsmails. Die Dedupe-Logik (F-ING-2)
+  würde den zweiten Lauf überspringen, und eine als `low` eingestufte Testmail landete
+  lautlos im Sammel-Digest statt im Messenger.
+- Entscheidung: `cmd_test` öffnet eine State-Datenbank in einem temporären Verzeichnis, das
+  nach dem Lauf verschwindet, und setzt für den Lauf `deliver_min_importance = "low"`
+  (Kopie der Config, die Datei bleibt unberührt). Alles andere ist die echte Verdrahtung:
+  `build_runner`, dieselbe Pipeline, dieselbe Zustell-Warteschlange, derselbe Messenger.
+  Die Stufen werden für die Schrittausgabe in dünne Mitschnitt-Wrapper gepackt, die nur
+  Zahlen und Aufzählungswerte anzeigen — nie Mail- oder Modelltext.
+- Alternativen: Die Betriebs-DB benutzen (jeder zweite Testlauf wäre ein „Duplikat", und
+  ein Testlauf hinterließe Spuren im Zustell-Zustand); die Testmail über IMAP einspeisen
+  (verlangt Schreibrechte im Postfach und einen Server, der `APPEND` erlaubt — die
+  `.eml`-Datei ist der einfachere und für den Cold-Tester besser reproduzierbare Weg).
+- Konsequenzen: `maildigest test` sagt nichts über die IMAP-Verbindung aus — dafür ist
+  `connect-mail` zuständig. Ein Zustellfehler im Selbsttest bleibt in der temporären
+  Warteschlange liegen und wird nicht wiederholt; die CLI meldet das als Exit-Code 1.

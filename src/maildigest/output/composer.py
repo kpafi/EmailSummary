@@ -39,6 +39,7 @@ from maildigest.sanitize.links import LinkCollector
 
 __all__ = [
     "LOW_DIGEST_DEDUPE_KEY",
+    "SELFTEST_DEDUPE_KEY",
     "DigestComposer",
     "LowDigestItem",
     "part_limit_for",
@@ -47,6 +48,10 @@ __all__ = [
 #: `DigestMessage.dedupe_key` des täglichen Sammel-Digests — er gehört zu keiner
 #: einzelnen Mail; die Zustell-Warteschlange erkennt ihn daran (WP8).
 LOW_DIGEST_DEDUPE_KEY = "low-digest"
+
+#: `DigestMessage.dedupe_key` der Betriebsnachrichten der CLI (Testnachricht aus
+#: `connect-messenger`, WP9). Gehört ebenfalls zu keiner Mail.
+SELFTEST_DEDUPE_KEY = "cli-selftest"
 
 #: Zeichenlimit je Messenger (docs/ARCHITECTURE.md §5, `[messenger] active`).
 _PART_LIMITS: dict[str, int] = {
@@ -270,6 +275,23 @@ class DigestComposer:
             importance="low",
             is_warning=False,
             dedupe_key=LOW_DIGEST_DEDUPE_KEY,
+        )
+
+    def compose_plain(self, text: str) -> DigestMessage:
+        """Baut eine **im Code formulierte** Betriebsnachricht (WP9, ADR-054).
+
+        Einziger Aufrufer ist die CLI: `connect-messenger` schickt damit die
+        Testnachricht. Der Text stammt nicht aus einer Mail und nicht aus einem Modell —
+        er läuft trotzdem durch :meth:`_finalize`, damit `DigestMessage.parts` weiterhin
+        auf genau einem Weg entsteht (docs/SECURITY.md §5, I3/I4). Es gibt bewusst keinen
+        Parameter für Wichtigkeit oder Warn-Flag: Betriebsnachrichten sind immer
+        `normal`/keine Warnung.
+        """
+        return DigestMessage(
+            parts=self._finalize(text),
+            importance="normal",
+            is_warning=False,
+            dedupe_key=SELFTEST_DEDUPE_KEY,
         )
 
     # --- Bausteine ----------------------------------------------------------------

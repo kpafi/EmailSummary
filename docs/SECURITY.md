@@ -183,6 +183,18 @@ ausschließlich über `DigestComposer._finalize()` — es gibt keinen zweiten We
 
 - Config `0600`; Secrets bevorzugt via Env (`MAILDIGEST_IMAP_PASSWORD`,
   `MAILDIGEST_LLM_API_KEY`, `MAILDIGEST_TELEGRAM_TOKEN`).
+- **Umsetzung in der CLI (WP9, ADR-052 bis ADR-057):** `maildigest init` und jedes
+  `connect-*` schreiben die Datei über `os.open(..., 0o600)` und setzen die Rechte bei
+  **jedem** Schreiben neu — auch auf einer bereits vorhandenen, zu offenen Datei. Für
+  IMAP-Passwort, API-Key und Bot-Token gibt es bewusst **keine** Kommandozeilen-Optionen
+  (Prozessliste, Shell-History): Sie kommen aus einer Abfrage ohne Bildschirmecho
+  (`getpass`, sobald ein Terminal vorhanden ist) oder aus der jeweiligen Umgebungsvariablen;
+  liegt eine Variable vor, wird der Wert gar nicht erst in die Datei geschrieben (ADR-056).
+  Die einzige Secret-Option ist `--webhook-url` (Discord hat keine Env-Variable im Schema).
+  Fremddaten, die bei der Einrichtung anfallen — IMAP-Ordnernamen, Telegram-Chats aus
+  `getUpdates`, die Antwort des Testaufrufs — erreichen das Terminal nur gefiltert
+  (Zeichen-Allowlist), nur als numerische ID plus Chat-Typ aus fester Werteliste bzw. gar
+  nicht (ADR-055); ein Terminal interpretiert sonst Steuersequenzen aus fremder Hand.
 - IMAP nur über TLS (IMAPS 993); Zertifikatsprüfung an (kein `verify=False` irgendwo —
   Lint-Check in WP12).
 - Logs ohne Inhalte (NF-5): strukturierte JSON-Zeilen auf stdout, ausschließlich

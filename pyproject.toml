@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "maildigest"
 version = "0.1.0"
 description = "Lightweight tool that summarizes, importance-filters and phishing-checks e-mails from a mirror mailbox and delivers text-only digests to a messenger."
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "imap-tools",
@@ -15,6 +16,10 @@ dependencies = [
     "lxml",
     "pdfminer.six",
 ]
+
+# Konsolen-Einstiegspunkt der CLI (WP9, ADR-052); gleichwertig: `python -m maildigest`.
+[project.scripts]
+maildigest = "maildigest.cli:run_cli"
 
 [project.optional-dependencies]
 dev = [

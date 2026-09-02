@@ -17,13 +17,14 @@ from collections.abc import Callable
 from typing import Literal
 
 import httpx
+from pydantic import SecretStr
 
 from maildigest.config import Config, ConfigError
 from maildigest.llm.anthropic import AnthropicProvider
 from maildigest.llm.base import DEFAULT_TIMEOUT_SECONDS, MAX_ATTEMPTS, LLMProvider
 from maildigest.llm.openai import OpenAICompatibleProvider
 
-__all__ = ["LLMRole", "build_provider", "max_tokens_for"]
+__all__ = ["LLMRole", "build_provider", "build_provider_from_settings", "max_tokens_for"]
 
 #: Für welche Pipeline-Stufe der Provider gebaut wird.
 LLMRole = Literal["summarizer", "critic"]
@@ -70,9 +71,40 @@ def build_provider(
         model = config.llm.model
         base_url = config.llm.base_url
 
-    api_key = config.llm.api_key
+    return build_provider_from_settings(
+        provider=provider_name,
+        model=model,
+        base_url=base_url,
+        api_key=config.llm.api_key,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        client=client,
+        sleep=sleep,
+    )
 
-    if provider_name == "anthropic":
+
+def build_provider_from_settings(
+    *,
+    provider: str,
+    model: str,
+    base_url: str = "",
+    api_key: SecretStr | None = None,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    max_attempts: int = MAX_ATTEMPTS,
+    client: httpx.Client | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> LLMProvider:
+    """Baut einen Provider aus Einzelwerten statt aus einer vollständigen :class:`Config`.
+
+    Existiert für `maildigest connect-llm` (WP9): Beim Einrichten ist die Gesamt-Config
+    typischerweise noch unvollständig (kein IMAP-Host), ein Testaufruf muss aber schon
+    möglich sein. :func:`build_provider` ist ein dünner Aufsatz darauf, damit es nur eine
+    Stelle gibt, an der Provider-Namen auf Klassen abgebildet werden.
+
+    Raises:
+        ConfigError: Anthropic ohne API-Key.
+    """
+    if provider == "anthropic":
         if api_key is None:
             raise ConfigError(
                 "[llm] api_key fehlt: Der Anthropic-Provider braucht einen API-Key. "

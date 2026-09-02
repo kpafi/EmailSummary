@@ -19,7 +19,7 @@ import copy
 import os
 import tomllib
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
@@ -43,7 +43,9 @@ __all__ = [
     "SummarizerConfig",
     "TelegramConfig",
     "load_config",
+    "load_config_from_dict",
     "resolve_state_db_path",
+    "validate_section",
 ]
 
 #: Dateiname der State-Datenbank, wenn `[general] state_db` leer ist (ADR-005/ADR-045).
@@ -375,6 +377,38 @@ def load_config_from_dict(
     merged = _apply_env_overrides(copy.deepcopy(dict(data)), env=env)
     try:
         return Config.model_validate(merged)
+    except ValidationError as exc:
+        raise ConfigError(_validation_error_message(exc, source)) from exc
+
+
+#: Typvariable für :func:`validate_section` — jede Config-Sektion erbt von `_Section`.
+_SectionT = TypeVar("_SectionT", bound=_Section)
+
+
+def validate_section(model: type[_SectionT], data: Any, *, source: str) -> _SectionT:
+    """Validiert **eine** Config-Sektion für sich (WP9, ADR-052).
+
+    Die Einrichtungs-Kommandos der CLI (`connect-mail`, `connect-llm`,
+    `connect-messenger`) arbeiten auf einer noch unvollständigen Konfiguration: Solange
+    `[llm] model` fehlt, würde eine Gesamtvalidierung jeden `connect-mail`-Lauf mit einem
+    themenfremden Fehler abbrechen. Diese Funktion prüft deshalb nur die gerade
+    bearbeitete Sektion — mit derselben deutschen, feldbezogenen Fehlermeldung wie
+    :func:`load_config`.
+
+    Args:
+        model: Sektions-Modell, z. B. :class:`ImapConfig`.
+        data: Roh-Dict der Sektion (aus `tomllib`).
+        source: Quellenangabe für die Fehlermeldung, z. B. ``"[imap] in config.toml"``.
+
+    Returns:
+        Die validierte Sektion.
+
+    Raises:
+        ConfigError: Die Sektion verletzt das Schema. Die Meldung ist deutsch und
+            secret-frei (I5).
+    """
+    try:
+        return model.model_validate(data)
     except ValidationError as exc:
         raise ConfigError(_validation_error_message(exc, source)) from exc
 

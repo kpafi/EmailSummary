@@ -323,8 +323,36 @@ fertigen Nachrichtenteile), nie Mail-Rohtext, und werden nach Zustellung geleert
 - Betriebsdoku (systemd-Unit, Cron-Variante, Wartung): docs/BETRIEB.md.
 
 ### CLI (`cli.py`)
+
+**Stand WP9 (ADR-052 bis ADR-057).** Vollständiger, verbindlicher Vertrag:
+[SPEC-CLI.md](SPEC-CLI.md) — dieser Abschnitt beschreibt nur den inneren Aufbau.
+
 - Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`,
-  `run [--once]`. Vollständiger Vertrag: SPEC-CLI.md (entsteht in WP9).
+  `run [--once]`; Exit-Codes 0/1/2. Einstiegspunkte: `[project.scripts] maildigest` und
+  `python -m maildigest`.
+- `argparse` mit einem `parents=`-Parser für `--config`/`--non-interactive`, sodass beide
+  Optionen vor und nach dem Kommandonamen stehen dürfen (ADR-052). `main(argv, stdin,
+  stdout, stderr, hooks)` gibt den Exit-Code **zurück**; nur `run_cli()` ruft `sys.exit`.
+- `Hooks` bündelt alle Außenkontakte (`build_runner`, `build_messenger_from_section`,
+  `build_provider_from_settings`, `build_summarizer`/`build_critic`, `ImapClient`,
+  `discover_chat_ids`, `configure_logging`, `sleep`) — Tests ersetzen sie einzeln.
+- `Console` kapselt jede Ein-/Ausgabe: `ask`/`ask_int`/`ask_secret`/`confirm`/`choose`,
+  Defaults, Wertelisten, drei Fehlversuche, EOF = Abbruch. `--non-interactive` schaltet
+  auf „nur Defaults und Optionen" um; eine fehlende Pflichtangabe nennt dann die zuständige
+  Option und endet mit Exit-Code 2.
+- `ConfigFile` hält die Datei als Roh-Dict, `render_toml` schreibt sie kommentiert zurück,
+  `save()` legt sie über `os.open(..., 0o600)` an und setzt die Rechte bei jedem Schreiben
+  neu (ADR-053, F-SEC-8). Validiert wird sektionsweise über `config.validate_section`,
+  weil die Konfiguration während der Einrichtung unvollständig ist.
+- Erweiterungen an bestehenden Modulen für die CLI (jeweils additiv):
+  `config.validate_section`, `llm.factory.build_provider_from_settings`,
+  `messenger.factory.build_messenger_from_section`, `messenger.telegram.discover_chat_ids`,
+  `ImapClient.list_folders`, `DigestComposer.compose_plain` (ADR-054).
+- `maildigest test` speist eine `.eml`-Datei in die echte Verdrahtung ein — temporäre
+  State-DB, Zustellschwelle für den Lauf auf `low` (ADR-057). Mitgeliefert:
+  `src/maildigest/data/selftest.eml`.
+- Fremddaten (Ordnernamen, Telegram-Chats, Modellantwort) erreichen das Terminal nur
+  gefiltert bzw. gar nicht (ADR-055).
 
 ## 3. Datenmodell (verbindlich für WP1)
 
@@ -580,7 +608,7 @@ max_attachments_processed = 20
   tatsächlichen Code-Defaults.
 - Neben `load_config(path)` gibt es `load_config_from_dict(data)` für CLI (WP9) und Tests.
 
-**Offen für WP9 (aus WP7):** `[messenger.signal]` hat kein Empfängerfeld; der Adapter stellt
+**Weiterhin offen (aus WP7; in WP9 bewusst nicht angefasst):** `[messenger.signal]` hat kein Empfängerfeld; der Adapter stellt
 deshalb an „Note to Self" zu (ADR-039). Für die Zustellung an eine andere Nummer wäre
 `[messenger.signal] recipient = ""` nötig — eigener ADR, weil es das Config-Schema
 erweitert.
@@ -597,7 +625,8 @@ erweitert.
   `extra="forbid"` würde `[llm.summarizer]` als Config-Fehler zurückweisen.
 - `base_url` wird nicht auf `https` eingeschränkt, weil lokale Server (Ollama/vLLM) über
   `http://localhost` angesprochen werden. Für Cloud-Provider ist `https` Sache der
-  Konfiguration; `connect-llm` (WP9) sollte darauf hinweisen.
+  Konfiguration; `connect-llm` warnt seit WP9 auf stderr, wenn die Basis-URL weder
+  `https` noch lokal ist.
 
 ## 6. Fehler- & Retry-Politik (umgesetzt in WP8)
 

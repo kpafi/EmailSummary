@@ -1,0 +1,39 @@
+From: Hausverwaltung Meier <verwaltung@hausverwaltung-meier.example>
+To: mirror@example.org
+Subject: Ablesung der Heizkoerper am Donnerstag
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <maildigest-selftest-0001@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="selftestboundary"
+
+Diese Nachricht wird von "maildigest test" verarbeitet. Sie ist harmlos.
+
+--selftestboundary
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+Guten Tag,
+
+am Donnerstag, dem 19. Maerz, liest unser Dienstleister zwischen 9 und 13 Uhr
+die Heizkoerper in allen Wohnungen ab. Bitte sorgen Sie dafuer, dass alle
+Raeume zugaenglich sind, oder hinterlegen Sie einen Schluessel bei einem
+Nachbarn.
+
+Falls Ihnen der Termin nicht passt, melden Sie sich bitte bis Dienstag unter
+https://www.hausverwaltung-meier.example/termine oder telefonisch.
+
+Mit freundlichen Gruessen
+Hausverwaltung Meier
+
+--selftestboundary
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+<html><body>
+<p>Guten Tag,</p>
+<p>am Donnerstag, dem 19.&nbsp;Maerz, liest unser Dienstleister zwischen 9 und
+13 Uhr die Heizkoerper in allen Wohnungen ab.</p>
+<p><a href="https://www.hausverwaltung-meier.example/termine">Termin verschieben</a></p>
+</body></html>
+
+--selftestboundary--

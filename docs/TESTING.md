@@ -40,10 +40,13 @@ weiß, dass sie fragil sind.
 - Arbeitsverzeichnis für den Cold-Agenten vorbereiten, das NUR enthält:
   `README.md`, `docs/REQUIREMENTS.md`, `docs/SPEC-CLI.md` sowie ein installierbares
   Paket (wheel/sdist) bzw. ein venv mit installiertem `maildigest`.
-- Test-Infrastruktur bereitstellen: lokaler Test-IMAP-Account (oder das in SPEC-CLI.md
-  beschriebene `.eml`-Einspeise-Verfahren von `maildigest test`), Mock-Messenger-Endpoint
-  (z. B. lokaler HTTP-Sink, dessen URL als Discord-Webhook konfiguriert wird), Mock- oder
-  echter LLM-Key.
+- Test-Infrastruktur bereitstellen: lokaler Test-IMAP-Account (oder das in SPEC-CLI.md §4
+  beschriebene `.eml`-Einspeise-Verfahren `maildigest test --eml <datei>` — es benutzt eine
+  temporäre State-Datenbank, ist also beliebig oft wiederholbar und verändert den Betrieb
+  nicht, ADR-057), Mock-Messenger-Endpoint (z. B. lokaler HTTP-Sink, dessen URL als
+  Discord-Webhook konfiguriert wird), Mock- oder echter LLM-Key. Für Testläufe ohne
+  Messenger gibt es `maildigest test --dry-run`, das die fertige Nachricht auf stdout
+  schreibt.
 - Prompt an den Cold-Agenten: Auftrag + die drei Dokumente + explizites Verbot, `src/`
   oder `tests/` (außer eigenem `tests/cold/`) zu lesen.
 

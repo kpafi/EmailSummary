@@ -450,6 +450,23 @@ class ImapClient:
                 f"Abruf ungesehener Mails fehlgeschlagen: {type(exc).__name__}"
             ) from exc
 
+    def list_folders(self) -> list[str]:
+        """Namen aller Ordner des Postfachs — nur lesend (WP9, `connect-mail`).
+
+        Returns:
+            Die Ordnernamen in Server-Reihenfolge. Nicht dekodierbare Einträge werden
+            übersprungen statt zu raten.
+
+        Raises:
+            ImapConnectionError: Verbindung weg oder LIST fehlgeschlagen.
+        """
+        try:
+            return [folder.name for folder in self.mailbox.folder.list() if folder.name]
+        except (ImapToolsError, OSError, UnicodeError) as exc:
+            raise ImapConnectionError(
+                f"Ordnerliste konnte nicht abgerufen werden: {type(exc).__name__}"
+            ) from exc
+
     def mark_processed(self, msg: MailMessage) -> None:
         """Markiert eine verarbeitete Mail als gelesen und verschiebt sie ggf. (F-ING-1).
 

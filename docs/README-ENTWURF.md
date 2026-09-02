@@ -1,8 +1,10 @@
 # README-Entwurf — Abschnitt „Mirror-Postfach einrichten" (WP2)
 
-> Entwurfstext für die spätere `README.md`. Die README selbst entsteht in WP9/WP12
-> (ADR-009); dieser Abschnitt wird dort übernommen und ggf. an die endgültige
-> CLI-Spezifikation (docs/SPEC-CLI.md) angepasst. Quelle: WP2, 2026-08-28.
+> **Status seit WP9: übernommen.** Die Kernaussagen dieses Entwurfs stehen jetzt in
+> `README.md` (Nutzersicht) und in der Ausgabe von `maildigest connect-mail`, die die
+> Weiterleitungs-Anleitung selbst druckt. Das Dokument bleibt als ausführliche Fassung der
+> Anbieter-Anleitungen bestehen; verbindlich ist docs/SPEC-CLI.md.
+> Quelle: WP2, 2026-08-28.
 
 ## Mirror-Postfach einrichten
 
@@ -84,9 +86,9 @@ erneut (5 s, 10 s, 20 s … maximal 10 Minuten) und läuft danach normal weiter.
 
 ---
 
-## Vormerkung für WP9 (LLM-Setup, aus WP4)
+## Erledigt in WP9 (LLM-Setup, Vormerkung aus WP4)
 
-Für den Abschnitt zu `connect-llm`: „Der Modellname ist Pflichtangabe, es gibt bewusst
-keinen Default; den API-Key gibst du bevorzugt über `MAILDIGEST_LLM_API_KEY` an. Für lokale
-Server (Ollama/vLLM/LM Studio) wählst du `provider = "openai_compatible"` und setzt
-`base_url`; ein API-Key ist dort optional."
+Der Hinweis „Modellname ist Pflichtangabe, kein Default; API-Key bevorzugt über
+`MAILDIGEST_LLM_API_KEY`; für lokale Server `provider = "openai_compatible"` plus
+`base_url`, Key dort optional" steht jetzt in den Abfragetexten von
+`maildigest connect-llm` und in docs/SPEC-CLI.md §4.

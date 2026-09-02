@@ -73,16 +73,16 @@ Python ≥ 3.11, `imap-tools` (IMAP), `httpx` (API-Calls), `pydantic` (Config + 
 ```
 emailzusammenfassung/
 ├── PLAN.md                    # dieses Dokument
-├── README.md                  # Nutzer-Doku (entsteht in WP9/WP12)
+├── README.md                  # Nutzer-Doku (WP9; Feinschliff in WP12)
 ├── pyproject.toml
 ├── docs/
 │   ├── REQUIREMENTS.md        # Anforderungen (F-/NF-IDs) — Pflichtlektüre
 │   ├── ARCHITECTURE.md        # Komponenten, Datenmodell, Pipeline-Verträge
 │   ├── SECURITY.md            # Threat-Model + Invarianten
 │   ├── TESTING.md             # Hot-/Cold-Tester-Protokoll
-│   ├── BETRIEB.md             # systemd-/Cron-Betrieb (entsteht in WP8)
+│   ├── BETRIEB.md             # systemd-/Cron-Betrieb (WP8, in WP9 abgeglichen)
 │   ├── DECISIONS.md           # ADR-Log (Design Choices)
-│   └── SPEC-CLI.md            # CLI-/Config-Spezifikation (entsteht in WP9, Basis für Cold-Tester)
+│   └── SPEC-CLI.md            # CLI-/Config-Spezifikation (WP9, Vertrag für den Cold-Tester)
 ├── src/maildigest/
 │   ├── __init__.py
 │   ├── models.py              # Datenklassen: RawMail, SanitizedMail, Summary, Verdict, DigestMessage

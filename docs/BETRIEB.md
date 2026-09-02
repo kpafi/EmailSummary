@@ -1,8 +1,10 @@
-# MailDigest — Betrieb (Entwurf, WP8)
+# MailDigest — Betrieb
 
-> Wie MailDigest dauerhaft läuft: als systemd-Dienst (empfohlen) oder per Cron. Der
-> CLI-Vertrag entsteht in WP9 (docs/SPEC-CLI.md); dieser Entwurf beschreibt den Betrieb des
-> in WP8 fertiggestellten Runners und wird in WP9/WP12 gegen die endgültige CLI abgeglichen.
+> Wie MailDigest dauerhaft läuft: als systemd-Dienst (empfohlen) oder per Cron.
+> Stand WP9: Die hier benutzten Kommandos (`maildigest run`, `maildigest run --once`,
+> `--config`) existieren und sind in [SPEC-CLI.md](SPEC-CLI.md) verbindlich beschrieben —
+> bei Abweichungen zwischen den beiden Dokumenten gilt SPEC-CLI.md. Die Umgebungsvariablen
+> für Secrets sind dort in §5 gelistet.
 
 ## 1. Grundannahmen
 

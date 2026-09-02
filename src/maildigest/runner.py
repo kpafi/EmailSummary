@@ -64,6 +64,7 @@ from maildigest.pipeline import (
     PipelineResult,
     ProgressState,
     QueuedLow,
+    Sanitizer,
     Summarizer,
     process_mail,
 )
@@ -447,7 +448,7 @@ def build_runner(
     *,
     config_path: str | Path | None = None,
     db: StateDB | None = None,
-    sanitizer: MailSanitizer | None = None,
+    sanitizer: Sanitizer | None = None,
     summarizer: Summarizer | None = None,
     critic: Critic | None = None,
     composer: DigestComposer | None = None,

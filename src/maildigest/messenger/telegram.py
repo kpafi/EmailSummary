@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -28,10 +29,121 @@ from maildigest.messenger.base import (
 )
 from maildigest.models import DigestMessage
 
-__all__ = ["TELEGRAM_DEFAULT_BASE_URL", "TelegramMessenger"]
+__all__ = [
+    "TELEGRAM_DEFAULT_BASE_URL",
+    "ChatCandidate",
+    "TelegramMessenger",
+    "discover_chat_ids",
+]
 
 #: Standard-Host der Bot-API (überschreibbar für Proxys/Tests).
 TELEGRAM_DEFAULT_BASE_URL = "https://api.telegram.org"
+
+#: Höchstzahl der je `getUpdates`-Abfrage betrachteten Updates.
+_GET_UPDATES_LIMIT = 20
+
+#: Chat-Typen, die Telegram kennt — alles andere wird als „unbekannt" angezeigt, damit
+#: kein vom Absender gewählter Text auf dem Terminal des Nutzers landet (WP9, ADR-055).
+_KNOWN_CHAT_TYPES = frozenset({"private", "group", "supergroup", "channel"})
+
+
+@dataclass(frozen=True)
+class ChatCandidate:
+    """Ein von `getUpdates` gemeldeter Chat (WP9, `maildigest connect-messenger`).
+
+    Enthält bewusst **nur** die numerische Chat-ID und den Chat-Typ aus einer festen
+    Werteliste — kein Anzeigename, kein Gruppentitel: Wer den Bot anschreibt, bestimmt
+    diese Texte, und sie würden ungeprüft auf dem Terminal des Nutzers landen (ADR-055).
+    """
+
+    chat_id: str
+    chat_type: str
+
+
+def discover_chat_ids(
+    *,
+    token: SecretStr,
+    base_url: str = "",
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    client: httpx.Client | None = None,
+) -> list[ChatCandidate]:
+    """Fragt `getUpdates` ab und liefert die darin vorkommenden Chats (F-MSG-2).
+
+    Der Nutzer schreibt seinem Bot eine Nachricht, MailDigest liest die Chat-ID aus dem
+    Update — damit entfällt die fehlerträchtige Handeingabe. Ein falsches Token führt zu
+    einem HTTP-Fehler und damit zu :class:`MessengerError`; der Aufruf ist also zugleich
+    der Token-Test.
+
+    Args:
+        token: Bot-Token.
+        base_url: Abweichender API-Host; leer = :data:`TELEGRAM_DEFAULT_BASE_URL`.
+        timeout: Zeitlimit des Requests in Sekunden.
+        client: Vorhandener httpx-Client (Tests: `MockTransport`); sonst wird einer
+            angelegt und wieder geschlossen.
+
+    Returns:
+        Die gefundenen Chats in Reihenfolge des ersten Auftretens, ohne Duplikate.
+        Leere Liste heißt: Es liegt (noch) keine Nachricht vor.
+
+    Raises:
+        MessengerError: Telegram nicht erreichbar oder Token abgelehnt.
+    """
+    host = (base_url or TELEGRAM_DEFAULT_BASE_URL).rstrip("/")
+    url = f"{host}/bot{token.get_secret_value()}/getUpdates"
+    http = client if client is not None else httpx.Client(timeout=timeout)
+    try:
+        data = request_json(
+            http,
+            "POST",
+            url,
+            payload={"limit": _GET_UPDATES_LIMIT, "timeout": 0},
+            adapter="telegram",
+            timeout=timeout,
+            max_attempts=1,
+            sleep=lambda _seconds: None,
+        )
+    finally:
+        if client is None:
+            http.close()
+
+    if data.get("ok") is False:
+        raise MessengerError(
+            f"telegram: API meldet Fehler (error_code={data.get('error_code')!r})."
+        )
+
+    updates = data.get("result")
+    if not isinstance(updates, list):
+        return []
+
+    found: list[ChatCandidate] = []
+    seen: set[str] = set()
+    for update in updates:
+        candidate = _chat_of(update)
+        if candidate is None or candidate.chat_id in seen:
+            continue
+        seen.add(candidate.chat_id)
+        found.append(candidate)
+    return found
+
+
+def _chat_of(update: object) -> ChatCandidate | None:
+    """Zieht Chat-ID und -Typ aus einem Update; `None`, wenn nichts Brauchbares drinsteht."""
+    if not isinstance(update, dict):
+        return None
+    for key in ("message", "edited_message", "channel_post", "my_chat_member"):
+        payload = update.get(key)
+        if not isinstance(payload, dict):
+            continue
+        chat = payload.get("chat")
+        if not isinstance(chat, dict):
+            continue
+        chat_id = chat.get("id")
+        if not isinstance(chat_id, int) or isinstance(chat_id, bool):
+            continue
+        chat_type = chat.get("type")
+        kind = chat_type if chat_type in _KNOWN_CHAT_TYPES else "unbekannt"
+        return ChatCandidate(chat_id=str(chat_id), chat_type=str(kind))
+    return None
 
 
 class TelegramMessenger:

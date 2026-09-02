@@ -13,13 +13,13 @@ from collections.abc import Callable
 
 import httpx
 
-from maildigest.config import ENV_TELEGRAM_TOKEN, Config, ConfigError
+from maildigest.config import ENV_TELEGRAM_TOKEN, Config, ConfigError, MessengerConfig
 from maildigest.messenger.base import DEFAULT_TIMEOUT_SECONDS, MAX_ATTEMPTS, Messenger
 from maildigest.messenger.discord import DiscordMessenger
 from maildigest.messenger.signal import SignalMessenger
 from maildigest.messenger.telegram import TelegramMessenger
 
-__all__ = ["build_messenger"]
+__all__ = ["build_messenger", "build_messenger_from_section"]
 
 
 def build_messenger(
@@ -46,10 +46,38 @@ def build_messenger(
         ConfigError: Zugangsdaten des aktiven Adapters fehlen oder Signal ist nicht
             freigeschaltet.
     """
-    active = config.messenger.active
+    return build_messenger_from_section(
+        config.messenger,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        client=client,
+        sleep=sleep,
+    )
+
+
+def build_messenger_from_section(
+    messenger: MessengerConfig,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    max_attempts: int = MAX_ATTEMPTS,
+    client: httpx.Client | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Messenger:
+    """Baut den Adapter aus der `[messenger]`-Sektion allein.
+
+    Existiert für `maildigest connect-messenger` (WP9): Beim Einrichten ist die
+    Gesamt-Config typischerweise noch unvollständig, die Testnachricht muss trotzdem
+    schon verschickt werden können. :func:`build_messenger` ist ein dünner Aufsatz
+    darauf, damit die Abbildung Name → Adapter nur einmal existiert.
+
+    Raises:
+        ConfigError: Zugangsdaten des aktiven Adapters fehlen oder Signal ist nicht
+            freigeschaltet.
+    """
+    active = messenger.active
 
     if active == "telegram":
-        telegram = config.messenger.telegram
+        telegram = messenger.telegram
         token = telegram.token
         if token is None or not token.get_secret_value():
             raise ConfigError(
@@ -71,7 +99,7 @@ def build_messenger(
         )
 
     if active == "discord":
-        webhook_url = config.messenger.discord.webhook_url
+        webhook_url = messenger.discord.webhook_url
         if webhook_url is None or not webhook_url.get_secret_value().strip():
             raise ConfigError(
                 "[messenger.discord] webhook_url fehlt: Lege im Kanal einen Webhook an "
@@ -88,7 +116,7 @@ def build_messenger(
         except ValueError as exc:
             raise ConfigError(f"[messenger.discord] webhook_url: {exc}") from exc
 
-    signal_config = config.messenger.signal
+    signal_config = messenger.signal
     if not signal_config.enabled:
         raise ConfigError(
             "[messenger.signal] enabled = false: Der Signal-Adapter ist optional und muss "
