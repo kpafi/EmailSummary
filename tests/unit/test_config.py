@@ -390,3 +390,78 @@ def test_default_env_is_os_environ(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     assert config.llm.api_key is not None
     assert config.llm.api_key.get_secret_value() == "aus-os-environ"
+
+
+# --- WP8: Betriebsfelder in [general] ------------------------------------------------------
+
+
+def test_state_db_defaults_next_to_the_config_file(tmp_path: Path) -> None:
+    """Leeres `[general] state_db` ⇒ `state.db` neben der Konfigurationsdatei (ADR-045)."""
+    from maildigest.config import resolve_state_db_path
+
+    path = _write(tmp_path, MINIMAL_TOML)
+    config = load_config(path, env={})
+
+    assert resolve_state_db_path(config, path) == tmp_path / "state.db"
+
+
+def test_state_db_relative_path_is_relative_to_the_config_file(tmp_path: Path) -> None:
+    """Ein relativer Pfad gilt relativ zum Verzeichnis der Config-Datei."""
+    from maildigest.config import resolve_state_db_path
+
+    path = _write(tmp_path, MINIMAL_TOML + '\n[general]\nstate_db = "daten/mail.db"\n')
+    config = load_config(path, env={})
+
+    assert resolve_state_db_path(config, path) == tmp_path / "daten" / "mail.db"
+
+
+def test_state_db_absolute_path_wins() -> None:
+    """Ein absoluter Pfad wird unverändert übernommen."""
+    from maildigest.config import resolve_state_db_path
+
+    config = load_config_from_dict(
+        {
+            "general": {"state_db": "/var/lib/maildigest/state.db"},
+            "imap": {"host": "h", "username": "u"},
+            "llm": {"model": "m"},
+        },
+        env={},
+    )
+
+    assert resolve_state_db_path(config, "/etc/maildigest/config.toml") == Path(
+        "/var/lib/maildigest/state.db"
+    )
+
+
+def test_state_db_without_config_path_falls_back_to_cwd() -> None:
+    """Ohne bekannten Config-Pfad (Tests, Einbettung) bleibt es beim Arbeitsverzeichnis."""
+    from maildigest.config import resolve_state_db_path
+
+    config = load_config_from_dict(
+        {"imap": {"host": "h", "username": "u"}, "llm": {"model": "m"}}, env={}
+    )
+
+    assert resolve_state_db_path(config) == Path("state.db")
+
+
+def test_log_level_is_validated() -> None:
+    """`log_level` akzeptiert nur die vier bekannten Stufen (ADR-046)."""
+    config = load_config_from_dict(
+        {
+            "general": {"log_level": "DEBUG"},
+            "imap": {"host": "h", "username": "u"},
+            "llm": {"model": "m"},
+        },
+        env={},
+    )
+    assert config.general.log_level == "DEBUG"
+
+    with pytest.raises(ConfigError, match="log_level"):
+        load_config_from_dict(
+            {
+                "general": {"log_level": "verbose"},
+                "imap": {"host": "h", "username": "u"},
+                "llm": {"model": "m"},
+            },
+            env={},
+        )

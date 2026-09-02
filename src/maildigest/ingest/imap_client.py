@@ -43,6 +43,7 @@ from typing import Final, Protocol
 from imap_tools import AND, BaseMailBox, ImapToolsError, MailBox, MailMessage, MailMessageFlags
 
 from maildigest.config import ImapConfig
+from maildigest.logging_setup import traceback_enabled
 from maildigest.models import RawMail
 from maildigest.pipeline import PipelineResult
 from maildigest.state.db import MailState, StateDB, dedupe_hash
@@ -477,7 +478,13 @@ class ImapClient:
 # --- Poll-Durchlauf und Loop ------------------------------------------------------------------
 
 
-def poll_once(client: ImapClient, db: StateDB, process: MailProcessor) -> IngestStats:
+def poll_once(
+    client: ImapClient,
+    db: StateDB,
+    process: MailProcessor,
+    *,
+    write_result_status: bool = True,
+) -> IngestStats:
     """Holt alle ungesehenen Mails einmal ab und verarbeitet sie.
 
     Ablauf je Mail: `RawMail` bauen → in der State-DB reservieren (`claim`) → bei Erfolg
@@ -493,6 +500,12 @@ def poll_once(client: ImapClient, db: StateDB, process: MailProcessor) -> Ingest
         client: Verbundener :class:`ImapClient`.
         db: State-Datenbank für Dedupe und Status.
         process: Verarbeitungs-Callback (Pipeline).
+        write_result_status: Wenn ``True`` (Default), schreibt dieser Durchlauf den
+            Endstatus aus dem Pipeline-Ergebnis. Der Runner aus WP8 setzt ``False``: Er
+            führt den Status selbst (inkl. Zwischenständen und Zustell-Warteschlange,
+            ADR-050) und würde hier sonst überschrieben. Der Fehlerpfad schreibt
+            ``failed`` unabhängig davon — eine abgestürzte Verarbeitung darf nie ohne
+            Status bleiben (F-OPS-3).
 
     Returns:
         Zählwerk des Durchlaufs.
@@ -514,13 +527,20 @@ def poll_once(client: ImapClient, db: StateDB, process: MailProcessor) -> Ingest
 
         try:
             result = process(raw)
-        except Exception:  # I6: eine kaputte Mail darf den Loop nie stoppen
+        except Exception as exc:  # I6: eine kaputte Mail darf den Loop nie stoppen
             stats.failed += 1
             db.mark_status(raw.dedupe_key, MailState.FAILED, error_class="ingest_error")
-            logger.exception("mail_processing_crashed", extra={"mail": key_short})
+            # ADR-047: nur der Exception-Klassenname; der Traceback (der Mail-Inhalt aus
+            # Fehlertexten transportieren kann) erscheint ausschließlich bei log_level=DEBUG.
+            logger.error(
+                "mail_processing_crashed",
+                extra={"mail": key_short, "error": type(exc).__name__},
+                exc_info=traceback_enabled(logger),
+            )
         else:
             stats.processed += 1
-            db.mark_status(raw.dedupe_key, MailState(result.status))
+            if write_result_status:
+                db.mark_status(raw.dedupe_key, MailState(result.status))
             logger.info(
                 "mail_processed",
                 extra={
@@ -549,6 +569,8 @@ class IngestService:
         client_factory: Erzeugt den Client; Default ist ein echter :class:`ImapClient`.
         sleep: Warte-Funktion; Default ist eine unterbrechbare Wartefunktion auf dem
             Stop-Event. Tests reichen hier eine protokollierende Funktion herein.
+        write_result_status: An `poll_once` durchgereicht (siehe dort); der Runner aus WP8
+            setzt ``False``, weil er den Status selbst führt.
     """
 
     cfg: ImapConfig
@@ -556,6 +578,7 @@ class IngestService:
     process: MailProcessor
     client_factory: Callable[[], ImapClient] | None = None
     sleep: Callable[[float], None] | None = None
+    write_result_status: bool = True
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
 
     def stop(self) -> None:
@@ -591,7 +614,9 @@ class IngestService:
         client = self._new_client()
         client.connect()
         try:
-            return poll_once(client, self.db, self.process)
+            return poll_once(
+                client, self.db, self.process, write_result_status=self.write_result_status
+            )
         finally:
             client.disconnect()
 
@@ -609,7 +634,10 @@ class IngestService:
                 if client is None:
                     client = self._new_client()
                     client.connect()
-                total = total + poll_once(client, self.db, self.process)
+                total = total + poll_once(
+                    client, self.db, self.process,
+                    write_result_status=self.write_result_status,
+                )
             except IngestError as exc:
                 failures += 1
                 delay = backoff_delay(failures)

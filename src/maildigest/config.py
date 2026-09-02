@@ -43,7 +43,11 @@ __all__ = [
     "SummarizerConfig",
     "TelegramConfig",
     "load_config",
+    "resolve_state_db_path",
 ]
+
+#: Dateiname der State-Datenbank, wenn `[general] state_db` leer ist (ADR-005/ADR-045).
+DEFAULT_STATE_DB_NAME = "state.db"
 
 #: Umgebungsvariablen, die Secrets aus der Config-Datei überschreiben (docs/SECURITY.md §6).
 ENV_IMAP_PASSWORD = "MAILDIGEST_IMAP_PASSWORD"
@@ -66,12 +70,20 @@ class _Section(BaseModel):
 
 
 class GeneralConfig(_Section):
-    """`[general]` — Sprache, Länge, Wichtigkeits-Schwelle, Zeitpunkt des Sammel-Digests."""
+    """`[general]` — Sprache, Länge, Wichtigkeits-Schwelle, Sammel-Digest, Betrieb.
+
+    `state_db` und `log_level` sind Betriebsfelder aus WP8 (ADR-045/ADR-046):
+    `state_db = ""` bedeutet „`state.db` neben der Konfigurationsdatei" (aufgelöst von
+    :func:`resolve_state_db_path`), `log_level` steuert den Schwellwert des strukturierten
+    Loggings auf stdout.
+    """
 
     language: str = "de"
     summary_length: Literal["short", "medium", "long"] = "medium"
     deliver_min_importance: Importance = "normal"
     low_digest_time: str = Field(default="18:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    state_db: str = ""
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
 
 class ImapConfig(_Section):
@@ -365,3 +377,25 @@ def load_config_from_dict(
         return Config.model_validate(merged)
     except ValidationError as exc:
         raise ConfigError(_validation_error_message(exc, source)) from exc
+
+
+def resolve_state_db_path(config: Config, config_path: str | Path | None = None) -> Path:
+    """Bestimmt den Pfad der State-Datenbank (ADR-045).
+
+    Reihenfolge: `[general] state_db` (mit `~`-Auflösung; relative Pfade gelten relativ zum
+    Verzeichnis der Konfigurationsdatei) → sonst ``state.db`` neben der Konfigurationsdatei
+    → sonst ``state.db`` im aktuellen Verzeichnis (kein Config-Pfad bekannt, z. B. in Tests).
+
+    Args:
+        config: Validierte Gesamt-Config.
+        config_path: Pfad der Konfigurationsdatei, falls bekannt.
+
+    Returns:
+        Absoluter oder relativer Dateipfad der SQLite-Datei (wird nicht angelegt).
+    """
+    base = Path(config_path).expanduser().parent if config_path is not None else Path()
+    configured = config.general.state_db.strip()
+    if not configured:
+        return base / DEFAULT_STATE_DB_NAME
+    path = Path(configured).expanduser()
+    return path if path.is_absolute() else base / path

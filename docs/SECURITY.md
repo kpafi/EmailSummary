@@ -185,9 +185,19 @@ ausschließlich über `DigestComposer._finalize()` — es gibt keinen zweiten We
   `MAILDIGEST_LLM_API_KEY`, `MAILDIGEST_TELEGRAM_TOKEN`).
 - IMAP nur über TLS (IMAPS 993); Zertifikatsprüfung an (kein `verify=False` irgendwo —
   Lint-Check in WP12).
-- Logs ohne Inhalte (NF-5). Die SQLite-DB speichert Status + Metadaten, nicht den Mail-Text
-  (Klartext wird nur im Speicher gehalten; Ausnahme: Low-Digest-Queue speichert die
-  bereits sanitisierte + kritiker-geprüfte Kurz-Summary, sonst nichts).
+- Logs ohne Inhalte (NF-5): strukturierte JSON-Zeilen auf stdout, ausschließlich
+  Metadaten (gekürzter Dedupe-Hash, Absender-Domain, Status, Zähler, Exception-
+  **Klassenname**). Tracebacks — die Mail-Inhalte aus Fehlertexten transportieren können —
+  erscheinen ausschließlich bei `log_level = "DEBUG"`; solche Logs sind entsprechend
+  vertraulich zu behandeln (ADR-046/ADR-047, docs/BETRIEB.md).
+- Die SQLite-DB speichert Status + Metadaten, nicht den Mail-Text (Klartext wird nur im
+  Speicher gehalten). Genau **zwei** benannte Ausnahmen, beide mit bereits für den Nutzer
+  freigegebenem, output-sanitisiertem Text und beide nach Zustellung geleert (ADR-048/049):
+  (a) `low_digest_queue` — kritiker-geprüfte Kopfzeile, Kategorie und Absender-Domain der
+  `low`-Mails; (b) `outbox` — die fertigen Nachrichtenteile einer noch nicht bestätigten
+  Zustellung. Beides enthält nie Mail-Rohtext, nie Links, nie Anhänge; ohne diese
+  Persistenz wären der tägliche Sammel-Digest (F-SUM-5) und die „nie stiller Verlust"-
+  Zusage (F-OPS-3, ADR-008) über einen Prozessneustart hinweg nicht haltbar.
 - Empfehlung in README: Mirror-Postfach bei separatem Anbieter mit eigenem, einmaligem
   Passwort; App-Passwort statt Hauptpasswort.
 

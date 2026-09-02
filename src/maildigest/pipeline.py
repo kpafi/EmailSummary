@@ -48,6 +48,8 @@ __all__ = [
     "OutputComposer",
     "PipelineDeps",
     "PipelineResult",
+    "ProgressSink",
+    "ProgressState",
     "QueuedLow",
     "Sanitizer",
     "Stage",
@@ -61,6 +63,10 @@ Stage = Literal["sanitize", "summarize", "critic", "compose", "deliver"]
 
 #: Endstatus einer Mail für `state/db.py` (docs/ARCHITECTURE.md §2, Statuswerte).
 MailStatus = Literal["delivered", "skipped_low", "failed"]
+
+#: Zwischenstände, die die Pipeline während des Durchlaufs meldet (WP8, ADR-050).
+#: `checked` wird bewusst **vor** dem Versand gemeldet und vom Sink committet (ADR-008).
+ProgressState = Literal["sanitized", "summarized", "checked"]
 
 #: Rangfolge der Wichtigkeitsstufen für den Schwellwertvergleich.
 _IMPORTANCE_RANK: dict[str, int] = {"low": 0, "normal": 1, "high": 2}
@@ -84,6 +90,7 @@ _ERROR_CLASSES: dict[str, str] = {
     "LLMTransportError": "llm_transport_error",
     "ValidationError": "schema_invalid",
     "MessengerError": "delivery_error",
+    "StateError": "state_error",
 }
 
 
@@ -148,6 +155,18 @@ class Messenger(Protocol):
     def send(self, message: DigestMessage) -> None: ...
 
 
+@runtime_checkable
+class ProgressSink(Protocol):
+    """Meldeweg für die Zwischenstände einer Mail (WP8: `state/db.py`).
+
+    Der Sink muss den Stand **committen**, bevor er zurückkehrt: `checked` ist laut ADR-008
+    die Zusage „ab hier darf höchstens doppelt zugestellt werden, nie verloren gehen".
+    Wirft der Sink, behandelt die Pipeline das wie einen Stufenfehler (fail-closed, I6).
+    """
+
+    def record(self, dedupe_key: str, state: ProgressState) -> None: ...
+
+
 @dataclass(frozen=True)
 class PipelineDeps:
     """Injizierte Stufen + die Policy-Parameter, die die Pipeline selbst auswertet."""
@@ -158,6 +177,7 @@ class PipelineDeps:
     composer: OutputComposer
     messenger: Messenger
     deliver_min_importance: Importance = "normal"
+    progress: ProgressSink | None = None
 
 
 # --- Ergebnis-Typen ------------------------------------------------------------------------
@@ -264,6 +284,12 @@ def _fail_closed(
     return FailedNotice(notice=notice, notice_delivered=True)
 
 
+def _record(deps: PipelineDeps, ref: MailRef, state: ProgressState) -> None:
+    """Meldet einen Zwischenstand an den Sink (falls einer injiziert wurde)."""
+    if deps.progress is not None:
+        deps.progress.record(ref.dedupe_key, state)
+
+
 def _meets_threshold(importance: Importance, threshold: Importance) -> bool:
     """True, wenn `importance` mindestens die konfigurierte Zustellschwelle erreicht."""
     return _IMPORTANCE_RANK[importance] >= _IMPORTANCE_RANK[threshold]
@@ -287,6 +313,7 @@ def process_mail(raw: RawMail, deps: PipelineDeps) -> PipelineResult:
     ref = _mail_ref(raw)
     try:
         mail = deps.sanitizer.sanitize(raw)
+        _record(deps, ref, "sanitized")
     except Exception as exc:  # I6: jede Stufen-Exception ist fail-closed.
         return _fail_closed(ref, "sanitize", exc, deps)
     finally:
@@ -300,6 +327,7 @@ def _process_sanitized(mail: SanitizedMail, ref: MailRef, deps: PipelineDeps) ->
     """Stufen 3-6 auf der bereits sanitisierten Mail (kein Zugriff mehr auf `RawMail`)."""
     try:
         summary = deps.summarizer.summarize(mail)
+        _record(deps, ref, "summarized")
     except Exception as exc:  # I6: fail-closed
         return _fail_closed(ref, "summarize", exc, deps)
 
@@ -311,6 +339,12 @@ def _process_sanitized(mail: SanitizedMail, ref: MailRef, deps: PipelineDeps) ->
     if not verdict.summary_accurate:
         # T8: Der Kritiker hält die Zusammenfassung für falsch ⇒ kein Inhalt, nur Notiz.
         return _fail_closed(ref, "critic", _InaccurateSummaryError(), deps)
+
+    try:
+        # ADR-008: Der Stand `checked` ist committet, bevor irgendetwas versendet wird.
+        _record(deps, ref, "checked")
+    except Exception as exc:  # I6: fail-closed (State-DB nicht schreibbar)
+        return _fail_closed(ref, "critic", exc, deps)
 
     high_risk = verdict.phishing_risk == "high"
     if high_risk and not _meets_threshold(summary.importance, "normal"):

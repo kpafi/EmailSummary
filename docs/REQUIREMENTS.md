@@ -17,17 +17,17 @@
 | F-SUM-2 | Der Summarizer klassifiziert jede Mail als `high`/`normal`/`low` wichtig, mit Begründung. | Nutzer | done (WP5) — `importance` + `importance_reason` kommen aus dem Summarizer; die Zustell-Schwelle wertet `pipeline.process_mail` aus |
 | F-SUM-3 | Der Nutzer kann das Verhalten per Custom-Instructions anpassen (was zusammenfassen, wie ausführlich, was ist wichtig). | Nutzer | done (WP5) — `[summarizer] instructions` als gelabelter semi-trusted Block (I8, ADR-031) |
 | F-SUM-4 | Inhalte verarbeitbarer Anhänge (v0.1: nur PDF-Text) werden mitzusammengefasst; die Datei selbst wird nie zugestellt. | Nutzer | done (WP5) — Anhangs-Texte stehen im Datenblock, `attachment_summaries` ist auf tatsächlich extrahierte Anhänge beschränkt |
-| F-SUM-5 | Mails unterhalb der konfigurierten Wichtigkeits-Schwelle werden nicht einzeln zugestellt, sondern in einem täglichen Sammel-Digest zusammengefasst. | abgeleitet | open |
+| F-SUM-5 | Mails unterhalb der konfigurierten Wichtigkeits-Schwelle werden nicht einzeln zugestellt, sondern in einem täglichen Sammel-Digest zusammengefasst. | abgeleitet | done (WP8) — `low_digest_queue` + `DigestComposer.compose_low_digest`, Zustellung ab `[general] low_digest_time` (ADR-049); Kritiker-`high` bleibt davon ausgenommen (F-CRIT-2) |
 | F-CRIT-1 | Eine zweite, unabhängige LLM-Instanz („Kritiker") bewertet Mail + Zusammenfassung auf Phishing/Scam-Risiko (`none`/`low`/`high`) und auf inhaltliche Korrektheit der Zusammenfassung. | Nutzer | done (WP6) — `agents.critic.CriticAgent` mit eigenem System-Prompt, eigenem Provider (`[llm.critic]`) und ohne Custom-Instructions (ADR-042) |
 | F-CRIT-2 | Bei `high`-Risiko wird die Zustellung mit deutlichem Warn-Banner versehen und nie in den Low-Digest verschoben. | abgeleitet | done (WP6 + WP7) — Verdict aus WP6, Anhebung auf `importance = normal` in `pipeline.process_mail`, Banner in `output/composer.py`; Kettentest Sanitizer → Kritiker → Composer in `tests/unit/test_critic_corpus.py` |
 | F-CRIT-3 | Deterministische Signale (Reply-To≠From, Domain-Diskrepanzen, Punycode, Auth-Results, geblockte Anhänge) werden per Code berechnet und dem Kritiker als Fakten mitgegeben. | abgeleitet | done (WP3 + WP6) — `agents.critic.collect_signals` aus dem `sanitization_report`, LLM-frei getestet; harte Signale heben die Risikostufe auch ohne Modell an (ADR-043) |
-| F-MSG-1 | Zustellung an mindestens Telegram und Discord; Signal optional über signal-cli. Adapter-Architektur für weitere Messenger. | Nutzer | in-progress (WP7: Telegram-, Discord- und Signal-Adapter hinter gemeinsamem Protokoll fertig; Verdrahtung in den Daemon folgt in WP8, Einrichtung per CLI in WP9) |
+| F-MSG-1 | Zustellung an mindestens Telegram und Discord; Signal optional über signal-cli. Adapter-Architektur für weitere Messenger. | Nutzer | in-progress (WP7 + WP8: Adapter fertig und über `messenger.factory` im Daemon verdrahtet, Zustellung läuft über die Warteschlange aus ADR-048; offen bleibt die Einrichtung per CLI in WP9) |
 | F-MSG-2 | Einrichtung des Messengers über CLI (`connect-messenger`) inkl. Testnachricht. | Nutzer | open |
 | F-LLM-1 | LLM-Provider ist austauschbar: mindestens Anthropic-API und OpenAI-kompatible Endpoints (deckt lokale Modelle ab). Auswahl + Modellname per Config. | Nutzer | done (WP4) |
 | F-LLM-2 | Einrichtung des Providers über CLI (`connect-llm`) inkl. Testaufruf. | Nutzer | open |
-| F-OPS-1 | `maildigest run` läuft als Dauer-Prozess (Polling); `--once` verarbeitet einmalig und beendet sich (Cron-tauglich). | abgeleitet | in-progress (WP2) |
+| F-OPS-1 | `maildigest run` läuft als Dauer-Prozess (Polling); `--once` verarbeitet einmalig und beendet sich (Cron-tauglich). | abgeleitet | in-progress (WP8: `Runner.run_forever`/`run_once` inkl. SIGINT/SIGTERM-Shutdown fertig; das CLI-Kommando selbst entsteht in WP9) |
 | F-OPS-2 | `maildigest test` führt einen Ende-zu-Ende-Selbsttest mit einer Beispielmail aus. | abgeleitet | open |
-| F-OPS-3 | Nicht verarbeitbare Mails/Anhänge erzeugen eine Metadaten-Notiz an den Messenger (fail-closed), gehen also nie stumm verloren. | abgeleitet | in-progress (WP1; Notiz-Format seit WP7 in `output/composer.compose_failure`, ARCHITECTURE §7) |
+| F-OPS-3 | Nicht verarbeitbare Mails/Anhänge erzeugen eine Metadaten-Notiz an den Messenger (fail-closed), gehen also nie stumm verloren. | abgeleitet | done (WP1 + WP7 + WP8) — Notiz in `output/composer.compose_failure`, Zustellung (auch der Notiz) über die persistente Warteschlange mit 5 Versuchen; Absturztest in `tests/integration/test_runner_e2e.py` |
 
 ## 2. Sicherheitsanforderungen (testbar, Grundlage für Cold-Testing)
 
@@ -39,7 +39,7 @@
 | F-SEC-4 | Anhänge werden per Allowlist behandelt: nur `text/plain`, `text/html`, `application/pdf` werden inhaltlich verarbeitet; alles andere wird nur als Metadatum gemeldet. MIME-Typ wird per Magic-Bytes verifiziert. | done (WP3) |
 | F-SEC-5 | Instruktionen im Mail-Inhalt („ignore previous instructions", versteckter Text, etc.) dürfen das Verhalten nicht ändern; Verdacht wird geflaggt und dem Nutzer angezeigt. | done (WP5 + WP7) — Prompt-Härtung und deterministische Nachkontrolle setzen `injection_suspected`, die Hinweiszeile der Nachricht zeigt es an; Cold-Nachweis in WP11 |
 | F-SEC-6 | LLM-Ausgaben werden schema-validiert und durchlaufen vor Versand einen deterministischen Output-Sanitizer (I4). | done (WP5 + WP6 + WP7) — `Summary` und `CriticVerdict` werden schema-erzwungen, agentenseitig nachkontrolliert und im Composer erneut gescrubbt |
-| F-SEC-7 | Fehler in Sanitizer/LLM/Kritiker führen zu fail-closed-Verhalten: Metadaten-Notiz statt ungeprüftem Inhalt (I6). | in-progress (WP1) |
+| F-SEC-7 | Fehler in Sanitizer/LLM/Kritiker führen zu fail-closed-Verhalten: Metadaten-Notiz statt ungeprüftem Inhalt (I6). | done (WP1 + WP8) — inkl. Stufen-Retries (3 LLM-Versuche, ADR-050) und State-Fehlern (`state_error`); Ende-zu-Ende belegt in `tests/integration/test_runner_e2e.py` |
 | F-SEC-8 | Secrets erscheinen nie in Prompts, Logs oder der Datenbank; Config-Datei wird mit Mode 0600 angelegt (I5). | open |
 | F-SEC-9 | Anhangs-Text-Extraktion läuft in einem ressourcenbegrenzten Subprozess (Timeout, Speicher, Input-/Output-Größe) (I7). | done (WP3) |
 | F-SEC-10 | Zero-Width-/Bidi-Steuerzeichen werden entfernt; Punycode-/Homoglyphen-Domains werden gekennzeichnet. | done (WP3) |
@@ -52,7 +52,7 @@
 | NF-2 | Neue Laufzeit-Dependency nur mit ADR. | open |
 | NF-3 | Konfiguration vollständig über eine `config.toml` + Env-Vars; keine Datenbank-Migrationstools. | in-progress (WP1) |
 | NF-4 | Verarbeitungslatenz pro Mail < 60 s unter Normalbedingungen (exkl. LLM-Ausreißer). | open |
-| NF-5 | Logs strukturiert, ohne Mail-Inhalte und ohne PII über Absender-Domain + gehashte Message-ID hinaus. | in-progress (WP2) |
+| NF-5 | Logs strukturiert, ohne Mail-Inhalte und ohne PII über Absender-Domain + gehashte Message-ID hinaus. | done (WP2 + WP8) — JSON-Zeilen auf stdout, Level aus `[general] log_level`, nicht serialisierbare `extra`-Werte werden auf ihren Typnamen reduziert; Tracebacks nur bei DEBUG (ADR-046/047) |
 | NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | in-progress (`output/` liegt seit WP7 bei rund 98 % Zeilenabdeckung) |
 | NF-7 | Doku-Pflicht: REQUIREMENTS/ARCHITECTURE/SECURITY/DECISIONS werden in jedem WP mitgepflegt; SPEC-CLI.md ist vollständiger CLI-Vertrag. | open |
 | NF-8 | Zwei unabhängige Testdurchläufe: Hot (Whitebox) und Cold (Blackbox durch Agent ohne Code-Zugriff) gemäß TESTING.md. | open |

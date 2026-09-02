@@ -12,6 +12,8 @@ danach in messenger-taugliche Teile gesplittet (I3/I4).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
 from maildigest.config import Config
@@ -35,7 +37,16 @@ from maildigest.output.sanitizer import (
 )
 from maildigest.sanitize.links import LinkCollector
 
-__all__ = ["DigestComposer", "part_limit_for"]
+__all__ = [
+    "LOW_DIGEST_DEDUPE_KEY",
+    "DigestComposer",
+    "LowDigestItem",
+    "part_limit_for",
+]
+
+#: `DigestMessage.dedupe_key` des täglichen Sammel-Digests — er gehört zu keiner
+#: einzelnen Mail; die Zustell-Warteschlange erkennt ihn daran (WP8).
+LOW_DIGEST_DEDUPE_KEY = "low-digest"
 
 #: Zeichenlimit je Messenger (docs/ARCHITECTURE.md §5, `[messenger] active`).
 _PART_LIMITS: dict[str, int] = {
@@ -61,6 +72,25 @@ _MAX_LISTED_ATTACHMENTS = 10
 
 #: Auth-Ergebnisse, die kein Warnsignal sind.
 _AUTH_OK = frozenset({"pass", "none", "neutral", "policy"})
+
+#: Höchstzahl namentlich genannter Mails im Sammel-Digest (Rest als „und N weitere").
+_MAX_LOW_DIGEST_ITEMS = 60
+
+#: Zeichenlimit einer Kategorie-Überschrift im Sammel-Digest.
+_MAX_CATEGORY_CHARS = 40
+
+
+@dataclass(frozen=True)
+class LowDigestItem:
+    """Eine Zeile des täglichen Sammel-Digests (F-SUM-5).
+
+    Bewusst kein Bezug auf `state/db.py`: Der Composer kennt die Persistenz nicht, der
+    Runner (WP8) bildet die Warteschlangen-Einträge hierauf ab.
+    """
+
+    headline: str
+    category: str
+    from_domain: str
 
 
 def part_limit_for(messenger: str) -> int:
@@ -187,6 +217,59 @@ class DigestComposer:
             importance="normal",
             is_warning=False,
             dedupe_key=notice.dedupe_key,
+        )
+
+    def compose_low_digest(self, items: Sequence[LowDigestItem]) -> DigestMessage:
+        """Baut den täglichen Sammel-Digest der `low`-Mails (F-SUM-5, ARCHITECTURE §7).
+
+        Eine Nachricht, nach Kategorie gruppiert, je Mail eine Zeile
+        ``• <headline> (<domain>)``. Die Felder sind bereits beim Einreihen sanitisiert
+        worden; sie laufen hier trotzdem erneut durch `scrub_field`/`final_guard`
+        (Defense in Depth, I3/I4).
+
+        Raises:
+            ValueError: Aufruf ohne Einträge — ein leerer Digest wird nie zugestellt.
+        """
+        if not items:
+            raise ValueError("Sammel-Digest ohne Einträge wird nicht erzeugt.")
+        collector = LinkCollector()
+        grouped: dict[str, list[LowDigestItem]] = {}
+        for item in items[:_MAX_LOW_DIGEST_ITEMS]:
+            category = (
+                _one_line(scrub_plain(item.category, max_chars=_MAX_CATEGORY_CHARS))
+                or "sonstiges"
+            )
+            grouped.setdefault(category, []).append(item)
+
+        total = len(items)
+        overview = ", ".join(
+            f"{len(entries)} {category}"
+            for category, entries in sorted(
+                grouped.items(), key=lambda pair: (-len(pair[1]), pair[0])
+            )
+        )
+        lines = [f"🗂 {total} unwichtige Mails: {overview}"]
+        for category, entries in sorted(
+            grouped.items(), key=lambda pair: (-len(pair[1]), pair[0])
+        ):
+            lines.append(f"\n{category} ({len(entries)}):")
+            for item in entries:
+                headline = _one_line(
+                    scrub_field(
+                        item.headline, collector=collector, max_chars=_MAX_HEADLINE_CHARS
+                    )
+                )
+                domain = _one_line(scrub_plain(item.from_domain, max_chars=_MAX_DOMAIN_CHARS))
+                lines.append(f"• {headline or '(ohne Betreff)'} ({domain or 'unbekannt'})")
+        rest = total - min(total, _MAX_LOW_DIGEST_ITEMS)
+        if rest > 0:
+            lines.append(f"… und {rest} weitere")
+
+        return DigestMessage(
+            parts=self._finalize("\n".join(lines)),
+            importance="low",
+            is_warning=False,
+            dedupe_key=LOW_DIGEST_DEDUPE_KEY,
         )
 
     # --- Bausteine ----------------------------------------------------------------

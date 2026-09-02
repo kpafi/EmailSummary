@@ -958,3 +958,181 @@
   ADR-033 besteht für die `Summary` weiter und wird weiterhin von Schicht 6 (WP7) gedeckt.
   NFKC kann Zeichen ersetzen, die ein Modell bewusst gesetzt hat (z. B. `²` → `2`) — für
   einen zweizeiligen Warnhinweis ist das folgenlos.
+
+## ADR-045: `[general] state_db` — Ort der State-Datenbank
+- Status: accepted
+- WP / Datum: WP8, 2026-09-02
+- Kontext: Der Pfad der SQLite-Datei war bislang ein Konstruktor-Argument von `StateDB`;
+  ADR-005 sagt „eine Datei neben der Config", ein Config-Feld dafür fehlte (offener Befund
+  aus WP2). Der Daemon muss den Pfad aber aus der Config ableiten können, ohne ihn zu raten.
+- Entscheidung: Neues Feld `[general] state_db = ""` plus `config.resolve_state_db_path(
+  config, config_path)`. Auflösung: gesetzter Wert (mit `~`-Auflösung; relative Pfade
+  relativ zum Verzeichnis der Config-Datei) → sonst `state.db` neben der Config-Datei →
+  sonst `state.db` im Arbeitsverzeichnis (kein Config-Pfad bekannt, z. B. in Tests).
+  Das Feld ist bewusst ein Pfad und kein Verzeichnis: Ein Betreiber, der die DB auf ein
+  anderes Volume legen will, will genau die Datei benennen.
+- Alternativen: Pfad nur als CLI-Argument (dann muss jeder systemd-/Cron-Aufruf ihn
+  mitschleppen und der Daemon hätte zwei Wahrheiten); fester Pfad unter `~/.local/state`
+  (bricht die „alles steht in einer Datei"-Zusage aus NF-3 und überrascht bei
+  Mehrfach-Instanzen).
+- Konsequenzen: Das Config-Schema wächst um ein Feld; `extra="forbid"` bleibt unberührt.
+  Die Datei wird weiterhin mit Modus 0600 angelegt (WP2).
+
+## ADR-046: Strukturiertes JSON-Logging auf stdout, Level aus `[general] log_level`
+- Status: accepted
+- WP / Datum: WP8, 2026-09-02
+- Kontext: NF-5 verlangt strukturierte Logs ohne Mail-Inhalte und ohne PII über
+  Absender-Domain + gehashte Message-ID hinaus. Die Module loggen seit WP2 mit
+  `extra`-Feldern, es gab aber keinen Formatter und keinen konfigurierbaren Schwellwert.
+- Entscheidung: `logging_setup.configure_logging(level, stream)` richtet **nur** den Logger
+  `maildigest` ein (kein `basicConfig`, `propagate = False`): Fremdbibliotheken wie
+  `httpx`/`imap_tools` sollen nicht ungefragt in unser Format schreiben — deren Debug-Logs
+  können URLs mit Token enthalten. Ausgabe ist eine JSON-Zeile je Ereignis
+  (`ts`, `level`, `logger`, `event` + `extra`-Felder). Nicht JSON-fähige `extra`-Werte
+  werden durch ihren **Typnamen** ersetzt statt via `repr()` ausgegeben (ein `repr()` könnte
+  Mail-Text oder ein Secret-Objekt sichtbar machen). Neues Feld `[general] log_level`
+  (`DEBUG|INFO|WARNING|ERROR`, Default `INFO`); unbekannte Werte fallen auf `INFO` zurück,
+  schalten also nie versehentlich DEBUG frei.
+- Alternativen: `logging.basicConfig` mit Textformat (nicht maschinenlesbar, und der
+  Wurzel-Logger würde Fremdbibliotheken mitziehen); eine Logging-Bibliothek wie `structlog`
+  (neue Laufzeit-Dependency ohne Notwendigkeit, NF-1/NF-2).
+- Konsequenzen: `journalctl -o cat | jq` funktioniert direkt. Wer Fremd-Logs sehen will,
+  muss sie bewusst selbst konfigurieren — genau die Hürde, die wir wollen.
+
+## ADR-047: Tracebacks nur bei Log-Level DEBUG
+- Status: accepted
+- WP / Datum: WP8, 2026-09-02
+- Kontext: Offener Befund aus WP2: `ingest/imap_client.poll_once` loggte unerwartete
+  Abstürze mit `logger.exception`, also inklusive vollem Traceback. Exception-Texte
+  transportieren regelmäßig Eingabedaten (`ValueError: unerwartetes Zeichen in '<Mail-Zeile>'`,
+  Parser-Fehler mit Byte-Auszügen). Das verletzt NF-5/I5 im Regelbetrieb — gleichzeitig ist
+  ein Traceback für die Fehlersuche unverzichtbar.
+- Entscheidung: Regelbetrieb loggt ausschließlich den Exception-**Klassennamen**
+  (`extra={"error": type(exc).__name__}`); der Traceback erscheint nur, wenn der Betreiber
+  `log_level = "DEBUG"` bewusst einschaltet. Umgesetzt über
+  `logging_setup.traceback_enabled(logger)` als `exc_info=`-Argument — eine Stelle, an der
+  die Politik steht, statt einer Konvention pro Aufrufstelle. Betroffen sind
+  `poll_once`, `delivery.OutboxMessenger` und `Runner.run_forever`. docs/BETRIEB.md weist
+  darauf hin, dass DEBUG-Logs Mail-Inhalte enthalten können und entsprechend zu behandeln
+  sind.
+- Alternativen: Tracebacks generell (I5-Verstoß im Normalbetrieb); Tracebacks generell
+  weglassen (Fehlersuche bei einem Crash im Sanitizer wäre Raten); Traceback filtern/
+  redigieren (nicht verlässlich möglich — der Inhalt steckt in beliebigen Frames).
+- Konsequenzen: Ein Bug-Report enthält zunächst nur Klassennamen; der Betreiber muss für
+  Details DEBUG einschalten und weiß dann, dass das Log vertraulich ist.
+
+## ADR-048: Zustell-Warteschlange (`outbox`) in SQLite statt Retry im Speicher
+- Status: accepted
+- WP / Datum: WP8, 2026-09-02
+- Kontext: ARCHITECTURE §6 verlangt für Messenger-Fehler 5 Versuche über höchstens eine
+  Stunde und hält ausdrücklich fest, dass die Nachricht „fertig sanitisiert ist und aus der
+  DB-Queue erneut versendet werden darf". ADR-008 verlangt at-least-once: Status `checked`
+  committen, dann senden. Ohne Persistenz wäre beides nicht haltbar — ein Neustart während
+  der Stunde verlöre die Nachricht (Verstoß gegen F-OPS-3), und `checked` wäre eine Zusage
+  ohne Gegenstück.
+- Entscheidung: Neue Tabelle `outbox(id, message_id_hash, kind, payload, attempts,
+  first_queued_at, next_attempt_at, last_error)`. `payload` ist das JSON der **fertigen**
+  `DigestMessage`-Teile (`parts`, `importance`, `is_warning`) —
+  Kritiker-geprüft, output-sanitisiert, durch `final_guard` gelaufen. `OutboxMessenger.send`
+  committet vor dem ersten Versuch und wirft bei Zustellfehlern **nicht**: Die Zusage trägt
+  die Warteschlange. Backoff 60 s/300 s/900 s/2100 s (5 Versuche, Summe 55 min), harte
+  Schranke 1 h ab dem Einreihen; danach Zeile löschen, `failed`/`delivery_failed` buchen und
+  `ERROR` loggen. Erfolgreiche bzw. endgültig gescheiterte Zustellung darf ausschließlich
+  Datensätze im Status `checked` bewegen (`promote_checked_to_delivered`) — die
+  Warteschlange kann damit keinen Statusübergang erfinden. Schema-Version 1 → 2; da der
+  Schritt rein additiv ist (nur neue Tabellen), hebt `StateDB` eine Version-1-Datei beim
+  Öffnen still an, statt ein Migrationswerkzeug zu verlangen (NF-3).
+  **docs/SECURITY.md §6 wird entsprechend erweitert:** Neben der Low-Digest-Queue ist die
+  Outbox die zweite benannte Ausnahme von „kein Klartext in der DB"; sie enthält
+  ausschließlich Text, der bereits für den Nutzer freigegeben war, nie Mail-Rohtext, nie
+  Links, nie Anhänge, und wird nach Zustellung gelöscht.
+- Alternativen: Retry nur im Speicher (Neustart = Verlust, F-OPS-3 verletzt); Nachricht neu
+  aufbauen statt speichern (bräuchte den Mail-Klartext in der DB — ungleich schlimmer, und
+  ein zweiter LLM-Lauf könnte etwas anderes sagen); die Mail beim Wiederanlauf erneut durch
+  die ganze Pipeline schicken (LLM-Kosten, andere Zusammenfassung, und die Mail ist im
+  Postfach bereits als gelesen markiert).
+- Konsequenzen: Der Status einer Mail bleibt `checked`, solange ihre Nachricht in der
+  Warteschlange liegt — genau die von ADR-008 vorgesehene Lücke, in der eine Doppelzustellung
+  möglich ist. Betreiber sehen wartende Zustellungen in den Log-Feldern
+  `queued_deliveries`/`delivery_deferred`.
+
+## ADR-049: Inhalt der Low-Digest-Warteschlange und Planung des Sammel-Digests
+- Status: accepted
+- WP / Datum: WP8, 2026-09-02
+- Kontext: F-SUM-5 verlangt einen täglichen Sammel-Digest der `low`-Mails; ARCHITECTURE §2
+  skizziert die Tabelle mit den Spalten `headline`, `short_summary`, `category`, §7 gibt das
+  Format vor: eine Zeile `• <headline> (<from_domain>)`, gruppiert nach Kategorie.
+- Entscheidung: (a) Gespeichert werden `headline`, `category`, `from_domain`, `received_at`
+  und der Hash — die in §2 vorgesehene Spalte `short_summary` **entfällt** (Datenminimierung:
+  Das Format zeigt sie nicht, und jedes gespeicherte Zeichen Mail-Ableitung ist eines zu
+  viel); ARCHITECTURE §2 wird angeglichen. (b) Eingereiht wird ausschließlich Text, der
+  `output/sanitizer.scrub_field`/`scrub_plain` passiert hat — die Warteschlange ist keine
+  Hintertür an Schicht 6 vorbei. Das Brechen der Domain-Punkte macht wie gehabt erst
+  `final_guard` beim Bau der Nachricht. (c) Planung: `meta.last_low_digest_date` hält den
+  Tag der letzten Zustellung; gesendet wird beim ersten Zyklus ab `[general] low_digest_time`
+  (lokale Zeit). Ein verpasster Zeitpunkt (Prozess stand still) wird beim nächsten Lauf
+  desselben Tages nachgeholt, nicht übersprungen. Leere Warteschlange ⇒ keine Nachricht,
+  der Tag gilt trotzdem als erledigt. (d) Die Einträge werden gelöscht, sobald die Nachricht
+  in der Outbox liegt — dort trägt sie die Zustellgarantie weiter; sonst entstünde am
+  Folgetag ein Duplikat. (e) `compose_low_digest` gehört in `output/composer.py`, damit
+  `_finalize()` der einzige Weg zu `DigestMessage.parts` bleibt (SECURITY §5, WP7).
+- Alternativen: Volltext-Kurzfassung speichern (mehr Inhalt in der DB ohne Nutzen für das
+  Format); Digest aus `seen_mails` rekonstruieren (dort steht bewusst keine Headline);
+  Zustellung strikt zur Minute (ein Cron-Lauf um 18:05 würde den Digest nie sehen).
+- Konsequenzen: Der Digest zeigt Kopfzeile + Domain je Mail, keine Inhaltszeile — wer mehr
+  will, öffnet das Postfach. Bei mehr als 60 gesammelten Mails werden die restlichen nur
+  gezählt („… und N weitere"), damit eine Nacht voller Newsletter keine Nachrichtenflut wird.
+
+## ADR-050: Stufen-Retries, Zwischenstände und Statushoheit des Runners
+- Status: accepted
+- WP / Datum: WP8, 2026-09-02
+- Kontext: ARCHITECTURE §6 verlangt für LLM-Fehler „3 Versuche, dann fail-closed" oberhalb
+  der providerinternen Retries (429/5xx, ADR-023) und die Statusfolge
+  `pending → sanitized → summarized → checked → …` in SQLite. `pipeline.process_mail`
+  kannte bisher weder State noch Retries, `poll_once` schrieb den Endstatus selbst.
+- Entscheidung: (a) Die Retry-Politik sitzt in dünnen Dekoratoren
+  (`RetryingSummarizer`/`RetryingCritic`) statt in den Agenten oder der Pipeline — die
+  Stufen bleiben, wie WP5/WP6 sie gebaut haben, und die Politik ist an einer Stelle
+  nachlesbar. Wiederholt werden nur `LLMTimeout`, `LLMRateLimited`, `LLMTransportError`;
+  `LLMInvalidResponse` **nicht** (der Reparaturversuch ist laut ADR-024 bereits gelaufen —
+  ein weiterer Aufruf kostet nur Zeit und Tokens). Backoff 2 s/4 s. (b) `PipelineDeps`
+  bekommt einen optionalen `progress`-Sink (`ProgressSink.record(dedupe_key, state)`), den
+  die Pipeline nach Sanitize, Summarize und — entscheidend — **vor** dem Versand mit
+  `checked` aufruft (ADR-008). Wirft der Sink, ist das ein Stufenfehler und endet
+  fail-closed (I6); `pipeline._ERROR_CLASSES` kennt dafür `StateError → state_error`.
+  (c) Die Statushoheit liegt beim Runner: `poll_once` bekommt das Flag
+  `write_result_status` (Default `True`, damit WP2-Aufrufer unverändert funktionieren) und
+  schreibt bei `False` nur noch den `failed`-Fall des Absturzpfades — sonst würde es die
+  feinere Buchführung des Runners (Warteschlange, `checked`) überschreiben.
+- Alternativen: Retries in den Agenten (jeder Agent bekäme dieselbe Schleife, WP5/WP6-Code
+  müsste umgebaut werden); Retries in der Pipeline (die Pipeline würde Fehlerklassen der
+  LLM-Schicht kennen müssen und wäre nicht mehr provider-agnostisch); Status ausschließlich
+  in `poll_once` (kein Platz für Zwischenstände und keine Kenntnis der Zustell-Warteschlange).
+- Konsequenzen: Eine Mail kostet im schlechtesten Fall 3 Summarizer- **plus** 3
+  Kritiker-Versuche, bevor die Notiz kommt; mit den Provider-Retries aus ADR-023 sind das
+  bis zu 9 HTTP-Aufrufe je Stufe. Die Timeout-Politik (Timeouts werden providerintern nicht
+  wiederholt) hält die Wartezeit im Rahmen.
+
+## ADR-051: Runner-Loop ruft `IngestService.run_once` je Zyklus
+- Status: accepted
+- WP / Datum: WP8, 2026-09-02
+- Kontext: WP2 liefert mit `IngestService.run_forever` bereits einen Dauer-Loop inklusive
+  Reconnect-Backoff. WP8 braucht zwischen zwei Polls aber zwei weitere Arbeiten: die
+  Zustell-Warteschlange abarbeiten und den Sammel-Digest prüfen.
+- Entscheidung: `Runner.run_forever` hat den äußeren Loop und ruft je Zyklus
+  `IngestService.run_once` (also Verbindung auf, pollen, Verbindung zu), dazwischen
+  `outbox.flush()` und `maybe_send_low_digest()`. Der Backoff kommt aus derselben Funktion
+  wie in WP2 (`ingest.backoff_delay`), damit es nur eine Backoff-Politik gibt.
+  `IngestService.run_forever` bleibt bestehen (Tests, direkte Nutzung), wird vom Runner aber
+  nicht verwendet. Shutdown: SIGINT/SIGTERM setzen ein `threading.Event`; der laufende
+  Zyklus wird zu Ende geführt, danach beendet sich der Loop. Die vorherigen Signal-Handler
+  werden beim Verlassen wiederhergestellt, und außerhalb des Haupt-Threads wird gar nicht
+  erst installiert (Tests, spätere Einbettung).
+- Alternativen: `run_forever` aus WP2 mit Callback-Haken erweitern (Umbau an fremdem Code
+  für einen Fall, der sich außen sauber lösen lässt); zweiter Thread für Warteschlange und
+  Digest (Nebenläufigkeit auf einer SQLite-Verbindung, die laut WP2 genau einem Thread
+  gehört — unnötiges Risiko für ein Ein-Prozess-Werkzeug).
+- Konsequenzen: Je Poll-Intervall entsteht eine neue IMAP-Verbindung (bei Default 120 s
+  unkritisch, und ein Reconnect je Zyklus ist robuster als eine über Stunden gehaltene
+  Verbindung). Ein Zustellversuch findet mindestens einmal je Zyklus statt — die
+  Backoff-Zeiten der Outbox (60 s aufwärts) sind darauf abgestimmt.

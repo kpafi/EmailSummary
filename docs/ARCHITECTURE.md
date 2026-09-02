@@ -52,9 +52,16 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   läuft weiter. Die Metadaten-Notiz erzeugt die Pipeline selbst (`FailedNotice`).
 - **IMAP IDLE:** bewusst nicht implementiert (ADR-007, in ADR-016 bestätigt).
 - **Logging (NF-5/I5):** nur gekürzter Dedupe-Hash, Absender-Domain, Status,
-  Exception-Klassenname, Backoff-Dauer.
-- **Offen (WP8):** `limits.max_mail_bytes` hat im Ingest keinen Durchsetzungspunkt — die
-  Größenpolitik liegt laut SECURITY §4 beim Sanitizer (WP3); der Ingest befüllt lediglich
+  Exception-Klassenname, Backoff-Dauer. **Stand WP8 (ADR-047):** Der Absturzpfad loggt
+  `mail_processing_crashed` mit dem Exception-*Klassennamen*; der Traceback erscheint nur
+  bei `log_level = "DEBUG"` (`logging_setup.traceback_enabled`).
+- **Statushoheit (WP8, ADR-050):** `poll_once`/`IngestService` kennen das Flag
+  `write_result_status` (Default `True`). Der Runner setzt es auf `False` und führt den
+  Status selbst; der `failed`-Fall des Absturzpfades wird unabhängig davon immer
+  geschrieben.
+- **Größenlimit:** `limits.max_mail_bytes` hat im Ingest bewusst keinen Durchsetzungspunkt —
+  die Größenpolitik liegt laut SECURITY §4 beim Sanitizer (dort seit WP3 umgesetzt, geprüft
+  gegen `size_bytes` **und** `len(mime_bytes)`); der Ingest befüllt lediglich
   `RawMail.size_bytes` korrekt aus `RFC822.SIZE`.
 
 ### Sanitizer (`sanitize/`)
@@ -260,7 +267,9 @@ freigeschaltetem Signal.
 ### State (`state/db.py`)
 - SQLite, Tabellen:
   - `seen_mails(message_id_hash TEXT PK, first_seen_at, status, error_class, retry_count)`
-  - `low_digest_queue(id, message_id_hash, received_at, headline, short_summary, category)`
+  - `low_digest_queue(id, message_id_hash, received_at, headline, category, from_domain)`
+  - `outbox(id, message_id_hash, kind, payload, attempts, first_queued_at, next_attempt_at,
+    last_error)`
   - `meta(key, value)` — z. B. Schema-Version, letzter Digest-Zeitpunkt.
 - Statuswerte: `pending → sanitized → summarized → checked → delivered | failed | skipped_low`.
 - Kein Mail-Volltext in der DB (SECURITY.md §6).
@@ -273,10 +282,45 @@ Zeichenvorrat und Länge und ersetzt nicht die Pflicht der Aufrufstellen, konsta
 übergeben). Die Schema-Version steht in `meta.schema_version` und wird beim Öffnen geprüft
 (NF-3, keine Migrationstools); die DB-Datei wird mit Modus `0600` angelegt.
 Idempotenz-Primitiv ist `StateDB.claim()` (`INSERT OR IGNORE` auf den Primärschlüssel),
-nicht `was_seen()`. Der Pfad der DB-Datei ist bislang ein Konstruktor-Argument — ein
-Config-Feld dafür fehlt (ADR-005 sagt „eine Datei neben der Config"); Vorschlag für WP8/WP9:
-`[general] state_db = ""` (leer = `state.db` neben der `config.toml`), mit eigenem ADR, weil
-es das Config-Schema erweitert.
+nicht `was_seen()`.
+
+**Stand WP8 (ADR-045, ADR-048, ADR-049):** Schema-Version 2. Neu sind `low_digest_queue`
+(F-SUM-5) und `outbox` (Zustell-Warteschlange). Der Schritt 1 → 2 ist rein additiv und wird
+beim Öffnen einer WP2-Datei still vollzogen (nur neue Tabellen, keine Migrationstools,
+NF-3); jede andere Versionsabweichung bleibt ein `StateError`. Der Dateipfad kommt aus
+`[general] state_db` bzw. `config.resolve_state_db_path()` (ADR-045). Beide neuen Tabellen
+enthalten **nur bereits output-sanitisierten** Text (Kopfzeile/Kategorie/Domain bzw. die
+fertigen Nachrichtenteile), nie Mail-Rohtext, und werden nach Zustellung geleert
+(docs/SECURITY.md §6). Zustell-Ergebnisse dürfen ausschließlich Datensätze im Status
+`checked` bewegen (`promote_checked_to_delivered`).
+
+### Orchestrierung & Betrieb (`runner.py`, `delivery.py`, `logging_setup.py`)
+
+**Stand WP8 (ADR-045 bis ADR-051):**
+
+- `runner.build_runner(config, *, config_path, …)` verdrahtet alle Stufen:
+  `MailSanitizer.from_config` → `RetryingSummarizer(SummarizerAgent.from_config)` →
+  `RetryingCritic(CriticAgent.from_config)` → `DigestComposer.from_config` →
+  `OutboxMessenger(StateDB, messenger.factory.build_messenger)`, dazu
+  `StatusRecorder` als `ProgressSink` und `deliver_min_importance` aus `[general]`.
+  Jede Stufe ist per Argument ersetzbar (Tests, `maildigest test` in WP9).
+- `Runner.run_once()`: Warteschlange leeren → einen IMAP-Poll (`IngestService.run_once`) →
+  Warteschlange erneut leeren (auch im Fehlerfall, `finally`) → Sammel-Digest prüfen.
+  `Runner.run_forever()`: derselbe Zyklus in einer Schleife mit Poll-Intervall,
+  Reconnect-Backoff aus `ingest.backoff_delay` und Shutdown über SIGINT/SIGTERM (ADR-051).
+- Statusfolge: `pending` (Ingest-`claim`) → `sanitized` → `summarized` → `checked` →
+  `delivered` | `skipped_low` | `failed`. `checked` wird **vor** dem Versand committet
+  (ADR-008); solange die Nachricht in der `outbox` liegt, bleibt es dabei — erst die
+  bestätigte Zustellung schreibt `delivered`, die endgültig gescheiterte `failed` mit
+  `error_class = "delivery_failed"`.
+- `delivery.OutboxMessenger` erfüllt das schmale `pipeline.Messenger`-Protokoll: einreihen
+  (Commit) → sofort versuchen → Erfolg löscht die Zeile, Misserfolg verschiebt sie.
+  `send()` wirft bei Zustellfehlern nicht; `flush()` arbeitet fällige Einträge ab
+  (5 Versuche, Backoff 60/300/900/2100 s, harte Schranke 1 h).
+- `logging_setup.configure_logging(level, stream)` richtet ausschließlich den Logger
+  `maildigest` ein und schreibt eine JSON-Zeile je Ereignis auf stdout; `log_level` kommt
+  aus `[general]`, Tracebacks nur bei `DEBUG` (ADR-046/ADR-047).
+- Betriebsdoku (systemd-Unit, Cron-Variante, Wartung): docs/BETRIEB.md.
 
 ### CLI (`cli.py`)
 - Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`,
@@ -417,6 +461,7 @@ class PipelineDeps:
     sanitizer: Sanitizer;  summarizer: Summarizer;  critic: Critic
     composer: OutputComposer;  messenger: Messenger
     deliver_min_importance: Importance = "normal"
+    progress: ProgressSink | None = None          # WP8: Zwischenstände in die State-DB
 
 @dataclass(frozen=True)
 class Delivered:    dedupe_key: str; message: DigestMessage; status = "delivered"
@@ -446,7 +491,11 @@ Ablauf und Entscheidungspunkte:
 4. Fehler in einer Stufe ⇒ `FailureNotice` + **ein** Zustellversuch der Notiz über
    `compose_failure`/`send`. Scheitert auch der, ist `notice_delivered=False`; Retries sind
    Sache von WP8. `process_mail` wirft nie eine Stufen-Exception nach außen.
-5. `reason_class` wird aus dem Exception-**Klassennamen** abgeleitet (Tabelle in
+5. **Stand WP8 (ADR-050):** Nach Sanitize, nach Summarize und — entscheidend — **vor**
+   Compose/Versand meldet die Pipeline den Zwischenstand an `deps.progress`
+   (`sanitized`/`summarized`/`checked`). Der Sink committet; wirft er, gilt das als
+   Stufenfehler und endet fail-closed (`state_error`).
+6. `reason_class` wird aus dem Exception-**Klassennamen** abgeleitet (Tabelle in
    `pipeline._ERROR_CLASSES`), Fallback `"<stage>_error"`. Der Exception-Text wird nie
    übernommen (I5). Die Tabelle wurde bei der WP4-Integration um
    `"LLMTransportError": "llm_transport_error"` ergänzt — ohne den Eintrag wäre jeder
@@ -460,7 +509,9 @@ Ablauf und Entscheidungspunkte:
 language = "de"              # Sprache der Zusammenfassungen
 summary_length = "medium"    # short | medium | long
 deliver_min_importance = "normal"  # low | normal | high
-low_digest_time = "18:00"    # tägliche Sammelzustellung
+low_digest_time = "18:00"    # tägliche Sammelzustellung (lokale Zeit)
+state_db = ""                # leer = state.db neben der Konfigurationsdatei (ADR-045)
+log_level = "INFO"           # DEBUG | INFO | WARNING | ERROR (ADR-046)
 
 [imap]
 host = "imap.example.org"
@@ -548,7 +599,7 @@ erweitert.
   `http://localhost` angesprochen werden. Für Cloud-Provider ist `https` Sache der
   Konfiguration; `connect-llm` (WP9) sollte darauf hinweisen.
 
-## 6. Fehler- & Retry-Politik (Detail in WP8)
+## 6. Fehler- & Retry-Politik (umgesetzt in WP8)
 
 - IMAP-Fehler: Reconnect mit Exponential Backoff (max. 10 min), Loop läuft weiter.
 - LLM-Fehler: 429 und 5xx werden **innerhalb** der LLM-Schicht bis zu 3-mal mit Backoff
@@ -560,7 +611,18 @@ erweitert.
 - Messenger-Fehler: 5 Versuche über max. 1 h (Nachricht ist fertig sanitisiert und darf
   aus der DB-Queue erneut versendet werden), dann `failed` + Log.
 - Prozess-Crash: State in SQLite so, dass Wiederanlauf idempotent ist (Status vor Versand
-  committen ⇒ schlimmstenfalls eine Doppelzustellung, nie Verlust — als ADR festhalten).
+  committen ⇒ schlimmstenfalls eine Doppelzustellung, nie Verlust — ADR-008).
+
+**Konkretisierung WP8 (ADR-048, ADR-050):**
+
+| Fehlerort | Politik | Ort im Code |
+|-----------|---------|-------------|
+| IMAP | Reconnect, Backoff 5 s → 600 s, Loop läuft weiter | `ingest.backoff_delay`, `Runner.run_forever` |
+| LLM (Timeout/429/Transport) | providerintern max. 3 (429/5xx), darüber 3 Stufenversuche mit 2 s/4 s | `llm/_http.py`, `runner.RetryingSummarizer`/`RetryingCritic` |
+| LLM-Schema | 1 Reparaturversuch, **kein** Stufen-Retry | `llm/schema.py` |
+| Kritiker `summary_accurate = false` | sofort fail-closed, kein Retry | `pipeline.process_mail` |
+| Zustellung | 5 Versuche, 60/300/900/2100 s, harte Schranke 1 h, dann `failed`/`delivery_failed` | `delivery.OutboxMessenger` |
+| State-DB nicht schreibbar | Stufenfehler ⇒ Metadaten-Notiz (`state_error`) | `pipeline._record` |
 
 ## 7. Nachrichtenformat (final festgeschrieben in WP7, `output/composer.py`)
 
@@ -600,5 +662,20 @@ Verbindliche Zusatzregeln (WP7):
    `importance = normal`, `is_warning = false`; Stufe und Grund werden auf
    `[A-Za-z0-9_-]`-Labels normalisiert (I5).
 
-Sammel-Digest (täglich): eine Nachricht, gruppiert nach Kategorie, je Mail eine Zeile
-`• <headline> (<from_domain>)`.
+Sammel-Digest (täglich, `DigestComposer.compose_low_digest`, F-SUM-5): **eine** Nachricht,
+gruppiert nach Kategorie (größte Gruppe zuerst), je Mail eine Zeile
+`• <headline> (<from_domain>)`:
+
+```
+🗂 12 unwichtige Mails: 8 newsletter, 3 benachrichtigung, 1 sonstiges
+
+newsletter (8):
+• Wochenrückblick KW 36 (news[.]example[.]org)
+…
+… und N weitere                                  ← ab 60 gelisteten Mails
+```
+
+Die Nachricht entsteht wie jede andere über `_finalize()` (Nachbrenner + Split),
+`importance = low`, `is_warning = false`, `dedupe_key = "low-digest"`. Zugestellt wird beim
+ersten Zyklus ab `[general] low_digest_time`; ein verpasster Zeitpunkt wird am selben Tag
+nachgeholt, eine leere Warteschlange erzeugt keine Nachricht (ADR-049).

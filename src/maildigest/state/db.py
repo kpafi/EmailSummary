@@ -1,13 +1,20 @@
-"""SQLite-State: Tabellen ``seen_mails`` und ``meta``, Statuswerte und Dedupe-Abfragen.
+"""SQLite-State: Tabellen ``seen_mails``, ``low_digest_queue``, ``outbox`` und ``meta``.
 
-Datenmodell: docs/ARCHITECTURE.md §2 (State). Umsetzung des für WP2 Nötigen; die
-Low-Digest-Queue und die vollständige Retry-Buchführung folgen in WP8.
+Datenmodell: docs/ARCHITECTURE.md §2 (State). WP2 hat ``seen_mails`` und ``meta`` angelegt;
+WP8 ergänzt die Sammel-Digest-Warteschlange (F-SUM-5) und die Zustell-Warteschlange
+(``outbox``, at-least-once nach ADR-008/ADR-048).
 
 Sicherheits-Design dieses Moduls:
 
-* **Kein Mail-Volltext, keine PII** (docs/SECURITY.md §6, NF-5): Gespeichert wird
+* **Kein Mail-Volltext, keine PII** (docs/SECURITY.md §6, NF-5): In ``seen_mails`` steht
   ausschließlich der SHA-256-Hash des Dedupe-Keys, ein Zeitstempel, der Status, eine grobe
   Fehlerklasse und ein Retry-Zähler. Weder Betreff noch Absender noch Message-ID im Klartext.
+* **Zwei bewusste, in docs/SECURITY.md §6 benannte Ausnahmen:** ``low_digest_queue`` und
+  ``outbox`` enthalten bereits **fertig sanitisierten** Ausgabetext (Kritiker-geprüft und
+  durch den Output-Sanitizer gelaufen) — nie Mail-Rohtext, nie Links, nie Anhänge. Ohne
+  diese Persistenz ließe sich weder der tägliche Sammel-Digest noch die
+  „nie stiller Verlust"-Zusage aus F-OPS-3 über einen Prozessneustart hinweg halten.
+  Beide Tabellen werden nach Zustellung geleert.
 * **I5:** Secrets landen nie in der DB. Die Fehlerklasse wird zusätzlich hart auf
   ``[a-z0-9_]`` und 64 Zeichen normalisiert, damit ein durchgereichter Fehlertext (der
   Inhalte enthalten könnte) hier strukturell nicht ankommen kann.
@@ -21,6 +28,7 @@ Primärschlüssel ``message_id_hash`` — genau der erste Aufruf gewinnt, jeder 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -32,7 +40,9 @@ from typing import Final
 
 __all__ = [
     "SCHEMA_VERSION",
+    "LowDigestEntry",
     "MailState",
+    "OutboxItem",
     "SeenMail",
     "StateDB",
     "StateError",
@@ -40,7 +50,12 @@ __all__ = [
 ]
 
 #: Version des DB-Schemas; steht in `meta` und wird beim Öffnen geprüft.
-SCHEMA_VERSION: Final = 1
+#: 1 = WP2 (`seen_mails`, `meta`), 2 = WP8 (zusätzlich `low_digest_queue`, `outbox`).
+SCHEMA_VERSION: Final = 2
+
+#: Schema-Versionen, die rein additiv (nur neue Tabellen) auf SCHEMA_VERSION gehoben
+#: werden können — ohne Migrationswerkzeug (NF-3, ADR-048).
+_UPGRADABLE_FROM: Final = frozenset({"1"})
 
 #: Schlüssel der Schema-Version in der `meta`-Tabelle.
 _META_SCHEMA_VERSION: Final = "schema_version"
@@ -65,7 +80,29 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS low_digest_queue (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id_hash TEXT NOT NULL,
+    received_at     TEXT NOT NULL,
+    headline        TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    from_domain     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS outbox (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id_hash TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    payload         TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    first_queued_at TEXT NOT NULL,
+    next_attempt_at TEXT NOT NULL,
+    last_error      TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_seen_mails_status ON seen_mails(status);
+CREATE INDEX IF NOT EXISTS idx_outbox_next ON outbox(next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_mail ON outbox(message_id_hash);
 """
 
 
@@ -102,6 +139,42 @@ class SeenMail:
     retry_count: int
 
 
+@dataclass(frozen=True)
+class LowDigestEntry:
+    """Eine Zeile der Sammel-Digest-Warteschlange (F-SUM-5).
+
+    `headline` ist bereits durch Summarizer-Nachkontrolle **und** Output-Sanitizer gelaufen
+    (ADR-049) — kein Mail-Rohtext, keine Links.
+    """
+
+    id: int
+    message_id_hash: str
+    received_at: datetime
+    headline: str
+    category: str
+    from_domain: str
+
+
+@dataclass(frozen=True)
+class OutboxItem:
+    """Eine wartende Zustellung (ADR-048).
+
+    `parts` ist der fertig sanitisierte Nachrichtentext aus
+    :meth:`maildigest.output.composer.DigestComposer._finalize` — er wird beim erneuten
+    Versand unverändert übernommen (I3/I4).
+    """
+
+    id: int
+    message_id_hash: str
+    kind: str
+    parts: list[str]
+    importance: str
+    is_warning: bool
+    attempts: int
+    first_queued_at: datetime
+    next_attempt_at: datetime
+
+
 def dedupe_hash(dedupe_key: str) -> str:
     """Bildet den Dedupe-Key auf seinen SHA-256-Hex-Hash ab.
 
@@ -125,6 +198,34 @@ def _clean_error_class(error_class: str | None) -> str | None:
     if not cleaned:
         return None
     return cleaned[:_ERROR_CLASS_MAX_CHARS]
+
+
+def _clean_label(value: str) -> str:
+    """Normalisiert eine Kennung (`kind`) auf ein kurzes, inhaltsfreies Label (I5)."""
+    return _clean_error_class(value) or "unbekannt"
+
+
+def _decode_payload(raw: str) -> tuple[list[str], str, bool]:
+    """Liest eine Outbox-Nutzlast; defekte Einträge werden zu einer leeren Nachricht.
+
+    Ein unlesbarer Eintrag darf den Zustell-Lauf nicht sprengen: Er wird als leere
+    Teileliste zurückgegeben und vom Aufrufer verworfen (nichts wird geraten).
+    """
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return [], "normal", False
+    if not isinstance(data, dict):
+        return [], "normal", False
+    parts = data.get("parts")
+    if not isinstance(parts, list) or not all(isinstance(part, str) for part in parts):
+        return [], "normal", False
+    importance = data.get("importance")
+    return (
+        parts,
+        importance if importance in {"high", "normal", "low"} else "normal",
+        bool(data.get("is_warning", False)),
+    )
 
 
 class StateDB:
@@ -206,9 +307,18 @@ class StateDB:
         self.close()
 
     def _check_schema_version(self) -> None:
-        """Legt die Schema-Version an oder prüft sie (NF-3: keine Migrationstools)."""
+        """Legt die Schema-Version an oder prüft sie (NF-3: keine Migrationstools).
+
+        Rein additive Vorgängerversionen (nur neue Tabellen, keine geänderte Spalte —
+        derzeit Version 1 → 2, ADR-048) werden beim Öffnen stillschweigend hochgesetzt:
+        Die Tabellen sind durch ``CREATE TABLE IF NOT EXISTS`` bereits angelegt, Daten
+        müssen nicht angefasst werden. Alles andere ist ein Fehler.
+        """
         stored = self.meta_get(_META_SCHEMA_VERSION)
         if stored is None:
+            self.meta_set(_META_SCHEMA_VERSION, str(SCHEMA_VERSION))
+            return
+        if stored in _UPGRADABLE_FROM:
             self.meta_set(_META_SCHEMA_VERSION, str(SCHEMA_VERSION))
             return
         if stored != str(SCHEMA_VERSION):
@@ -276,6 +386,30 @@ class StateDB:
                 (dedupe_hash(dedupe_key), timestamp, status.value, cleaned),
             )
 
+    def promote_checked_to_delivered(self, message_id_hash: str, *, delivered: bool) -> None:
+        """Schließt eine Mail ab, deren Zustellung aus der Warteschlange kam (ADR-048).
+
+        Wirkt **nur** auf Datensätze im Status ``checked`` — genau die Mails, deren Inhalt
+        laut ADR-008 versendet werden durfte, aber noch nicht bestätigt war. Ein `failed`
+        (Fail-closed-Notiz) oder `delivered` wird nie überschrieben; damit kann die
+        Zustell-Warteschlange keinen Statusübergang erfinden, den die Pipeline nicht
+        vorgesehen hat.
+
+        Args:
+            message_id_hash: Hash aus :class:`OutboxItem` (der Klartext-Key ist nicht
+                gespeichert).
+            delivered: ``True`` ⇒ `delivered`; ``False`` ⇒ `failed` mit
+                `error_class = "delivery_failed"` (endgültig aufgegeben).
+        """
+        status = MailState.DELIVERED if delivered else MailState.FAILED
+        error_class = None if delivered else "delivery_failed"
+        with self._conn:
+            self._conn.execute(
+                "UPDATE seen_mails SET status = ?, error_class = ? "
+                "WHERE message_id_hash = ? AND status = ?",
+                (status.value, error_class, message_id_hash, MailState.CHECKED.value),
+            )
+
     def get(self, dedupe_key: str) -> SeenMail | None:
         """Liest den Datensatz zu einem Dedupe-Key; ``None``, wenn unbekannt."""
         row = self._conn.execute(
@@ -308,6 +442,155 @@ class StateDB:
         row = self._conn.execute(
             "SELECT COUNT(*) AS n FROM seen_mails WHERE status = ?", (status.value,)
         ).fetchone()
+        return int(row["n"])
+
+    # --- low_digest_queue -------------------------------------------------------------------
+
+    def queue_low(
+        self,
+        dedupe_key: str,
+        *,
+        headline: str,
+        category: str,
+        from_domain: str,
+        now: datetime | None = None,
+    ) -> int:
+        """Stellt eine `low`-Mail in die Sammel-Digest-Warteschlange (F-SUM-5).
+
+        Args:
+            dedupe_key: Dedupe-Key der Mail (wird gehasht gespeichert).
+            headline: Bereits output-sanitisierte Kopfzeile (ADR-049).
+            category: Kategorie aus der Summary, ebenfalls sanitisiert.
+            from_domain: Absender-Domain, sanitisiert/defangt.
+            now: Zeitstempel (Default: jetzt, UTC).
+
+        Returns:
+            Die Zeilen-ID des Eintrags.
+        """
+        timestamp = (now or datetime.now(UTC)).isoformat()
+        with self._conn:
+            cursor = self._conn.execute(
+                "INSERT INTO low_digest_queue "
+                "(message_id_hash, received_at, headline, category, from_domain) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (dedupe_hash(dedupe_key), timestamp, headline, category, from_domain),
+            )
+        return int(cursor.lastrowid or 0)
+
+    def low_digest_entries(self) -> list[LowDigestEntry]:
+        """Alle wartenden Sammel-Digest-Einträge in Eingangsreihenfolge."""
+        rows = self._conn.execute(
+            "SELECT id, message_id_hash, received_at, headline, category, from_domain "
+            "FROM low_digest_queue ORDER BY id"
+        ).fetchall()
+        return [
+            LowDigestEntry(
+                id=int(row["id"]),
+                message_id_hash=str(row["message_id_hash"]),
+                received_at=datetime.fromisoformat(str(row["received_at"])),
+                headline=str(row["headline"]),
+                category=str(row["category"]),
+                from_domain=str(row["from_domain"]),
+            )
+            for row in rows
+        ]
+
+    def clear_low_digest(self, ids: list[int]) -> None:
+        """Entfernt zugestellte Sammel-Digest-Einträge (nach erfolgreicher Zustellung)."""
+        if not ids:
+            return
+        with self._conn:
+            self._conn.executemany(
+                "DELETE FROM low_digest_queue WHERE id = ?", [(item,) for item in ids]
+            )
+
+    # --- outbox ------------------------------------------------------------------------------
+
+    def enqueue_outbox(
+        self,
+        dedupe_key: str,
+        *,
+        kind: str,
+        parts: list[str],
+        importance: str,
+        is_warning: bool,
+        now: datetime | None = None,
+    ) -> int:
+        """Legt eine fertig sanitisierte Nachricht in die Zustell-Warteschlange (ADR-048).
+
+        Der Commit passiert **vor** dem Versandversuch — genau das macht die
+        at-least-once-Zusage aus ADR-008 über einen Prozessabsturz hinweg haltbar.
+
+        Returns:
+            Die Zeilen-ID des Eintrags (für :meth:`outbox_done`/:meth:`outbox_defer`).
+        """
+        timestamp = (now or datetime.now(UTC)).isoformat()
+        payload = json.dumps(
+            {"parts": list(parts), "importance": importance, "is_warning": bool(is_warning)},
+            ensure_ascii=False,
+        )
+        with self._conn:
+            cursor = self._conn.execute(
+                "INSERT INTO outbox "
+                "(message_id_hash, kind, payload, attempts, first_queued_at, next_attempt_at) "
+                "VALUES (?, ?, ?, 0, ?, ?)",
+                (dedupe_hash(dedupe_key), _clean_label(kind), payload, timestamp, timestamp),
+            )
+        return int(cursor.lastrowid or 0)
+
+    def outbox_due(self, *, now: datetime | None = None, limit: int = 50) -> list[OutboxItem]:
+        """Alle fälligen Zustellungen (ältester Eintrag zuerst)."""
+        timestamp = (now or datetime.now(UTC)).isoformat()
+        rows = self._conn.execute(
+            "SELECT id, message_id_hash, kind, payload, attempts, first_queued_at, "
+            "next_attempt_at FROM outbox WHERE next_attempt_at <= ? ORDER BY id LIMIT ?",
+            (timestamp, limit),
+        ).fetchall()
+        items: list[OutboxItem] = []
+        for row in rows:
+            payload = _decode_payload(str(row["payload"]))
+            items.append(
+                OutboxItem(
+                    id=int(row["id"]),
+                    message_id_hash=str(row["message_id_hash"]),
+                    kind=str(row["kind"]),
+                    parts=payload[0],
+                    importance=payload[1],
+                    is_warning=payload[2],
+                    attempts=int(row["attempts"]),
+                    first_queued_at=datetime.fromisoformat(str(row["first_queued_at"])),
+                    next_attempt_at=datetime.fromisoformat(str(row["next_attempt_at"])),
+                )
+            )
+        return items
+
+    def outbox_done(self, item_id: int) -> None:
+        """Entfernt eine zugestellte (oder endgültig aufgegebene) Nachricht."""
+        with self._conn:
+            self._conn.execute("DELETE FROM outbox WHERE id = ?", (item_id,))
+
+    def outbox_defer(
+        self, item_id: int, *, next_attempt_at: datetime, error_class: str | None = None
+    ) -> None:
+        """Zählt einen Fehlversuch und verschiebt den nächsten Versuch."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE outbox SET attempts = attempts + 1, next_attempt_at = ?, "
+                "last_error = ? WHERE id = ?",
+                (next_attempt_at.isoformat(), _clean_error_class(error_class), item_id),
+            )
+
+    def outbox_pending(self, dedupe_key: str) -> bool:
+        """True, wenn zu dieser Mail noch eine Zustellung aussteht."""
+        row = self._conn.execute(
+            "SELECT 1 FROM outbox WHERE message_id_hash = ? LIMIT 1",
+            (dedupe_hash(dedupe_key),),
+        ).fetchone()
+        return row is not None
+
+    def outbox_size(self) -> int:
+        """Anzahl wartender Zustellungen (Betriebs-/Testauswertung)."""
+        row = self._conn.execute("SELECT COUNT(*) AS n FROM outbox").fetchone()
         return int(row["n"])
 
     # --- meta -----------------------------------------------------------------------------

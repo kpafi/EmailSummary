@@ -80,6 +80,7 @@ emailzusammenfassung/
 │   ├── ARCHITECTURE.md        # Komponenten, Datenmodell, Pipeline-Verträge
 │   ├── SECURITY.md            # Threat-Model + Invarianten
 │   ├── TESTING.md             # Hot-/Cold-Tester-Protokoll
+│   ├── BETRIEB.md             # systemd-/Cron-Betrieb (entsteht in WP8)
 │   ├── DECISIONS.md           # ADR-Log (Design Choices)
 │   └── SPEC-CLI.md            # CLI-/Config-Spezifikation (entsteht in WP9, Basis für Cold-Tester)
 ├── src/maildigest/
