@@ -18,9 +18,9 @@
 | F-SUM-3 | Der Nutzer kann das Verhalten per Custom-Instructions anpassen (was zusammenfassen, wie ausführlich, was ist wichtig). | Nutzer | done (WP5) — `[summarizer] instructions` als gelabelter semi-trusted Block (I8, ADR-031) |
 | F-SUM-4 | Inhalte verarbeitbarer Anhänge (v0.1: nur PDF-Text) werden mitzusammengefasst; die Datei selbst wird nie zugestellt. | Nutzer | done (WP5) — Anhangs-Texte stehen im Datenblock, `attachment_summaries` ist auf tatsächlich extrahierte Anhänge beschränkt |
 | F-SUM-5 | Mails unterhalb der konfigurierten Wichtigkeits-Schwelle werden nicht einzeln zugestellt, sondern in einem täglichen Sammel-Digest zusammengefasst. | abgeleitet | open |
-| F-CRIT-1 | Eine zweite, unabhängige LLM-Instanz („Kritiker") bewertet Mail + Zusammenfassung auf Phishing/Scam-Risiko (`none`/`low`/`high`) und auf inhaltliche Korrektheit der Zusammenfassung. | Nutzer | open |
-| F-CRIT-2 | Bei `high`-Risiko wird die Zustellung mit deutlichem Warn-Banner versehen und nie in den Low-Digest verschoben. | abgeleitet | open |
-| F-CRIT-3 | Deterministische Signale (Reply-To≠From, Domain-Diskrepanzen, Punycode, Auth-Results, geblockte Anhänge) werden per Code berechnet und dem Kritiker als Fakten mitgegeben. | abgeleitet | open |
+| F-CRIT-1 | Eine zweite, unabhängige LLM-Instanz („Kritiker") bewertet Mail + Zusammenfassung auf Phishing/Scam-Risiko (`none`/`low`/`high`) und auf inhaltliche Korrektheit der Zusammenfassung. | Nutzer | done (WP6) — `agents.critic.CriticAgent` mit eigenem System-Prompt, eigenem Provider (`[llm.critic]`) und ohne Custom-Instructions (ADR-042) |
+| F-CRIT-2 | Bei `high`-Risiko wird die Zustellung mit deutlichem Warn-Banner versehen und nie in den Low-Digest verschoben. | abgeleitet | done (WP6 + WP7) — Verdict aus WP6, Anhebung auf `importance = normal` in `pipeline.process_mail`, Banner in `output/composer.py`; Kettentest Sanitizer → Kritiker → Composer in `tests/unit/test_critic_corpus.py` |
+| F-CRIT-3 | Deterministische Signale (Reply-To≠From, Domain-Diskrepanzen, Punycode, Auth-Results, geblockte Anhänge) werden per Code berechnet und dem Kritiker als Fakten mitgegeben. | abgeleitet | done (WP3 + WP6) — `agents.critic.collect_signals` aus dem `sanitization_report`, LLM-frei getestet; harte Signale heben die Risikostufe auch ohne Modell an (ADR-043) |
 | F-MSG-1 | Zustellung an mindestens Telegram und Discord; Signal optional über signal-cli. Adapter-Architektur für weitere Messenger. | Nutzer | in-progress (WP7: Telegram-, Discord- und Signal-Adapter hinter gemeinsamem Protokoll fertig; Verdrahtung in den Daemon folgt in WP8, Einrichtung per CLI in WP9) |
 | F-MSG-2 | Einrichtung des Messengers über CLI (`connect-messenger`) inkl. Testnachricht. | Nutzer | open |
 | F-LLM-1 | LLM-Provider ist austauschbar: mindestens Anthropic-API und OpenAI-kompatible Endpoints (deckt lokale Modelle ab). Auswahl + Modellname per Config. | Nutzer | done (WP4) |
@@ -33,12 +33,12 @@
 
 | ID | Anforderung | Status |
 |----|-------------|--------|
-| F-SEC-1 | Kein LLM erhält jemals rohes HTML, rohe MIME-Teile oder Anhangs-Binärdaten — ausschließlich sanitisierten Klartext (Invariante I1). | in-progress (WP3 + WP5: der Summarizer sieht ausschließlich `SanitizedMail`; „done" erst mit dem Kritiker in WP6) |
-| F-SEC-2 | LLM-Aufrufe sind Text-in/Text-out ohne Tools/Function-Calling/Netzzugriff im Modellkontext (I2). | in-progress (WP4 + WP5: der Summarizer ruft nur `complete_json`; „done" erst mit WP6) |
+| F-SEC-1 | Kein LLM erhält jemals rohes HTML, rohe MIME-Teile oder Anhangs-Binärdaten — ausschließlich sanitisierten Klartext (Invariante I1). | done (WP3 + WP5 + WP6) — beide Agenten nehmen strukturell nur `SanitizedMail`/`Summary` entgegen |
+| F-SEC-2 | LLM-Aufrufe sind Text-in/Text-out ohne Tools/Function-Calling/Netzzugriff im Modellkontext (I2). | done (WP4 + WP5 + WP6) — Summarizer und Kritiker rufen ausschließlich `complete_json` über `LLMProvider.complete` |
 | F-SEC-3 | Zugestellte Nachrichten enthalten niemals klickbare URLs, Markdown-/HTML-Links, Dateianhänge oder ausführbare Inhalte. URLs höchstens defanged/als Domain-Text (I3). | done (WP7) — Feld-Scrub + Nachbrenner + Property-Tests; Telegram ohne `parse_mode`, Discord ohne Embeds |
 | F-SEC-4 | Anhänge werden per Allowlist behandelt: nur `text/plain`, `text/html`, `application/pdf` werden inhaltlich verarbeitet; alles andere wird nur als Metadatum gemeldet. MIME-Typ wird per Magic-Bytes verifiziert. | done (WP3) |
 | F-SEC-5 | Instruktionen im Mail-Inhalt („ignore previous instructions", versteckter Text, etc.) dürfen das Verhalten nicht ändern; Verdacht wird geflaggt und dem Nutzer angezeigt. | done (WP5 + WP7) — Prompt-Härtung und deterministische Nachkontrolle setzen `injection_suspected`, die Hinweiszeile der Nachricht zeigt es an; Cold-Nachweis in WP11 |
-| F-SEC-6 | LLM-Ausgaben werden schema-validiert und durchlaufen vor Versand einen deterministischen Output-Sanitizer (I4). | in-progress (WP5 + WP7: der Summarizer-Pfad ist vollständig; „done" mit der Kritiker-Ausgabe aus WP6) |
+| F-SEC-6 | LLM-Ausgaben werden schema-validiert und durchlaufen vor Versand einen deterministischen Output-Sanitizer (I4). | done (WP5 + WP6 + WP7) — `Summary` und `CriticVerdict` werden schema-erzwungen, agentenseitig nachkontrolliert und im Composer erneut gescrubbt |
 | F-SEC-7 | Fehler in Sanitizer/LLM/Kritiker führen zu fail-closed-Verhalten: Metadaten-Notiz statt ungeprüftem Inhalt (I6). | in-progress (WP1) |
 | F-SEC-8 | Secrets erscheinen nie in Prompts, Logs oder der Datenbank; Config-Datei wird mit Mode 0600 angelegt (I5). | open |
 | F-SEC-9 | Anhangs-Text-Extraktion läuft in einem ressourcenbegrenzten Subprozess (Timeout, Speicher, Input-/Output-Größe) (I7). | done (WP3) |

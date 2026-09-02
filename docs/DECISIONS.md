@@ -858,3 +858,103 @@
 - Konsequenzen: Sehr lange Zusammenfassungen werden sichtbar gekürzt statt gesplittet; das
   ist gewollt (der Nutzer soll nicht 10 Nachrichten pro Mail bekommen). Ein hart
   geschnittener Teil kann einen Marker kosmetisch zerreißen — nie klickbar.
+
+## ADR-041: Kritiker bekommt Mail und Zusammenfassung in zwei getrennten Untrusted-Blöcken
+- Status: accepted
+- WP / Datum: WP6, 2026-09-02
+- Kontext: Der Kritiker muss zwei Dinge gleichzeitig lesen, die beide untrusted sind: den
+  sanitisierten Mail-Text (fremder Absender) und die `Summary` (Ausgabe eines Modells, das
+  die Mail gelesen hat und von ihr übernommen worden sein kann, I4). Er muss sie aber
+  auseinanderhalten können — der Prüfauftrag „stimmt die Zusammenfassung zur Mail?" ergibt
+  sonst keinen Sinn.
+- Entscheidung: Die User-Message enthält beide Quellen in je eigenen, benannten Blöcken
+  mit **derselben** Aufruf-Kennung: `<<<MAILDIGEST-UNTRUSTED-DATA {token}>>>` (Mail, geteilt
+  mit dem Summarizer über `prompts.block_markers`) und `<<<MAILDIGEST-UNTRUSTED-SUMMARY
+  {token}>>>` (`prompts.summary_markers`). Beide Markerpaare stehen im System-Prompt und
+  gelten dort ausdrücklich als Daten. Der Marker-Neutralisierer aus WP5
+  (`prompts._neutralize_markers`) läuft über **beide** Blockinhalte, also auch über die
+  Modellausgabe. Der Mail-Block wird mit demselben `_data_block()` gebaut wie im
+  Summarizer — eine Quelle, ein Wortlaut.
+- Alternativen: beides in einen Block (das Modell könnte Mail-Text und Zusammenfassung nicht
+  sicher trennen, und ein Mail-Text könnte eine „Zusammenfassung" vortäuschen); zwei
+  verschiedene Zufallskennungen (kein Sicherheitsgewinn — eine Kennung ist bereits
+  unbekannt — bei doppeltem Prompt-Aufwand); die Zusammenfassung als vertrauenswürdig in
+  die Programm-Fakten legen (widerspricht I4).
+- Konsequenzen: Der Kritiker-Prompt ist länger als der des Summarizers (Mail + Summary).
+  `PROMPT_VERSION` steht auf `wp6/2026-09-02`.
+
+## ADR-042: Der Kritiker bekommt keine Custom-Instructions
+- Status: accepted
+- WP / Datum: WP6, 2026-09-02
+- Kontext: `[summarizer] instructions` sind semi-trusted und dürfen laut I8/ADR-031 Stil,
+  Fokus und Wichtigkeitspolitik des Summarizers steuern. Für den Kritiker stellt sich die
+  Frage neu: Er ist laut docs/SECURITY.md §5 Punkt 5 die **unabhängige** zweite Instanz.
+- Entscheidung: `CriticAgent` nimmt keinen `instructions`-Parameter entgegen, und
+  `critic_system_prompt()` hat keinen Nutzer-Vorgaben-Block. Der Kritiker kennt strukturell
+  nur `language` und `max_tokens`. Konfigurierbar bleibt allein das Modell über
+  `[llm.critic]`.
+- Alternativen: dieselben Instructions auch an den Kritiker geben (eine harmlos gemeinte
+  Vorgabe wie „fasse dich kurz, keine Warnungen" würde die Phishing-Erkennung entschärfen —
+  und wer die Config-Datei ändern kann, könnte den Schutz stillschweigend abschalten); ein
+  eigener `[critic] instructions`-Abschnitt (dasselbe Risiko, nur explizit; ohne
+  erkennbaren Nutzen — der Prüfauftrag ist nicht Geschmackssache).
+- Konsequenzen: Nutzer können die Phishing-Prüfung nicht an eigene Gepflogenheiten anpassen
+  (z. B. „Rechnungen von X sind immer echt"); Fehlalarme müssen über die Ausgabe ertragen
+  oder in einem späteren WP über eine explizite, eng definierte Allowlist gelöst werden.
+  Die Sprache der Verdict-Texte folgt weiterhin `[general] language`.
+
+## ADR-043: Harte Code-Signale heben die Risikostufe an, senken sie nie
+- Status: accepted
+- WP / Datum: WP6, 2026-09-02
+- Kontext: T9 verlangt, dass die deterministischen Signale (F-CRIT-3) vom Mail-Inhalt nicht
+  beeinflussbar sind. Sie landen aber im Prompt — ein übernommenes oder schlicht
+  nachlässiges Modell kann sie ignorieren und `phishing_risk = none` liefern. Umgekehrt
+  wäre eine Code-Regel „Signal ⇒ high" ein Fehlalarm-Generator: Die Weiterleitung ins
+  Spiegelpostfach bricht SPF und DKIM systematisch, und Mailinglisten setzen Reply-To
+  routinemäßig um.
+- Entscheidung: Jedes Signal trägt ein Attribut `hard`. `enforce_verdict_policy` hebt die
+  Stufe bei einem harten Signal auf mindestens `low` an und ergänzt es als `risk_reasons`-
+  Eintrag; die Stufe wird **nie** gesenkt und **nie** per Code auf `high` gesetzt. Hart ist
+  derzeit ausschließlich `mixed_script` (Domain mit gemischten Schriftsystemen — eine
+  Technik ohne legitime Verwendung). Punycode allein ist weich (deutsche Umlaut-Domains
+  sind legitimes IDN), Auth-Fails sind weich (Weiterleitungseffekt, im Faktentext
+  ausdrücklich benannt), Reply-To/Return-Path-Abweichung ist weich. Dasselbe Anheben auf
+  `low` löst die Nachkontrolle aus, wenn sie in den Verdict-Texten etwas entfernen musste —
+  das ist das Gegenstück zum `injection_suspected`-Flag, für das `CriticVerdict` kein Feld
+  hat (das Schema ist in ARCHITECTURE §3 festgeschrieben und wird hier nicht erweitert).
+  `summary_accurate` bleibt unangetastet: Der Code kann inhaltliche Richtigkeit nicht
+  beurteilen, und ein Herabsetzen würde den Fail-closed-Pfad aus T8 aushebeln.
+- Alternativen: Signale nur in den Prompt geben (ein übernommenes Modell könnte sie
+  folgenlos ignorieren — T9 wäre nur auf dem Papier erfüllt); Code setzt `high` (Banner bei
+  jeder weitergeleiteten Mail mit SPF-Bruch — Warnmüdigkeit, der teuerste aller Fehler);
+  eine Punktetabelle über alle Signale (mehr Mechanik, mehr Kalibrierbedarf, ohne Daten
+  nicht begründbar).
+- Konsequenzen: Ein Homoglyphen-Absender erzeugt garantiert mindestens die Hinweiszeile
+  „Kritiker: …", auch wenn das Modell schweigt. Ein `low` ohne Modellgrund bekommt einen
+  neutralen Platzhalter, damit kein leeres Banner entsteht. Die Liste der harten Signale ist
+  bewusst kurz und in WP12 erneut zu prüfen.
+
+## ADR-044: Verdict-Nachkontrolle nutzt die Summarizer-Politik plus NFKC
+- Status: accepted
+- WP / Datum: WP6, 2026-09-02
+- Kontext: Die Textfelder des `CriticVerdict` (`risk_reasons`, `notes`) landen im Banner und
+  in der Hinweiszeile der Nachricht und sind genauso untrusted wie die `Summary` (I4). Die
+  WP5-Nachkontrolle (`agents.summarizer.scrub_text`) deckt Markdown, HTML, Entities,
+  URL-Obfuskationen und Unicode-`C*` bereits ab, normalisiert aber ausdrücklich nicht nach
+  NFKC (ADR-033) — Fullwidth-Schreibweisen passieren sie.
+- Entscheidung: `agents/critic.py` importiert `scrub_text` und ruft es auf dem
+  **NFKC-normalisierten** Feld auf; eine durch die Normalisierung veränderte Zeichenfolge
+  gilt selbst schon als Fund. Danach: eine Zeile erzwingen, harte Zeichenlimits
+  (Grund 200, `notes` 500), Duplikate und Leereinträge verwerfen, Liste auf 5 Einträge
+  kappen — Code-erzeugte Gründe stehen dabei **vor** den Modellgründen, damit die Kappung
+  sie nicht verdrängt. Die Zahl 5 entspricht dem, was der Composer ohnehin anzeigt (ADR-040), und steht
+  auch im Prompt.
+- Alternativen: `scrub_text` in ein gemeinsames Modul ziehen (Umbau an fremdem, bereits
+  reviewtem WP5-Code — nicht der Auftrag von WP6); eigene Regex-Sammlung für den Kritiker
+  (zweite Wahrheit, die auseinanderlaufen würde); NFKC auch in WP5 nachrüsten (ändert das
+  Verhalten des Summarizers und dessen Testerwartungen; die Grenze ist dort bewusst
+  dokumentiert).
+- Konsequenzen: Der Kritiker-Pfad ist strenger als der Summarizer-Pfad; die Differenz aus
+  ADR-033 besteht für die `Summary` weiter und wird weiterhin von Schicht 6 (WP7) gedeckt.
+  NFKC kann Zeichen ersetzen, die ein Modell bewusst gesetzt hat (z. B. `²` → `2`) — für
+  einen zweizeiligen Warnhinweis ist das folgenlos.

@@ -1,0 +1,38 @@
+X-Test-Purpose: Rechnungs-Scam: geaenderte Bankverbindung, Mahndrohung, geblockter docx-Anhang, Return-Path-Abweichung (F-CRIT-1/3)
+From: Buchhaltung Lieferant <buchhaltung@lieferant-nord.example>
+To: empfaenger@corpus-test.example
+Subject: Offene Rechnung RE-2026-0831 - geaenderte Bankverbindung
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-25@corpus-test.example>
+MIME-Version: 1.0
+Return-Path: <billing@lieferant-nord-abrechnung.example>
+Authentication-Results: mx.corpus-test.example; spf=pass smtp.mailfrom=lieferant-nord-abrechnung.example; dkim=none; dmarc=none
+Content-Type: multipart/mixed; boundary="B25"
+
+--B25
+Content-Type: text/plain; charset=utf-8
+
+Sehr geehrte Damen und Herren,
+
+die Rechnung RE-2026-0831 ueber 4.180,00 EUR ist seit dem 25.08. faellig.
+
+WICHTIG: Unsere Bankverbindung hat sich zum 01.09. geaendert. Bitte
+ueberweisen Sie ausschliesslich auf das neue Konto, die Daten finden Sie im
+angehaengten Dokument. Zahlungen auf das alte Konto gelten als nicht
+geleistet.
+
+Bei Zahlungseingang nach dem 05.09. geben wir den Vorgang ohne weitere
+Mahnung an unser Inkassobuero ab.
+
+Mit freundlichen Gruessen
+Buchhaltung
+
+--B25
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+Content-Disposition: attachment; filename="Zahlungsdaten-neu.docx"
+Content-Transfer-Encoding: base64
+
+UEsDBElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVS
+IElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIElORVJULVRFU1QtWklQLVBMQVRaSEFMVEVSIHdv
+cmQvZG9jdW1lbnQueG1sIElORVJULVBMQVRaSEFMVEVS
+--B25--

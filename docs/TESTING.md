@@ -9,7 +9,12 @@
 - Jedes WP liefert Unit-Tests für seine Funktionalität mit; `pytest` muss am Ende jedes
   WP grün sein.
 - Der Angriffs-Korpus `tests/corpus/` (ab WP3) ist die gemeinsame Testbasis: echte-Welt-nahe
-  `.eml`-Dateien inkl. Angriffsfälle. Jede Datei dokumentiert im Kommentar-Header ihren Zweck.
+  `.eml`-Dateien inkl. Angriffsfälle. Jede Datei dokumentiert im Kommentar-Header ihren Zweck
+  (`X-Test-Purpose`). Erzeugt wird er ausschließlich vom deterministischen Generator
+  `tests/corpus/_make_corpus.py` — Dateien nicht von Hand ändern, sondern den Generator.
+  Stand WP6: 01–20 Sanitizer-Fälle, 21–25 Phishing-Fälle für den Kritiker (CEO-Fraud,
+  Paketdienst, Bank-Verifikation, Passwort-Reset, Rechnungs-Scam) mit den jeweils passenden
+  Kopfzeilen-Signalen. Alle Payloads sind inert, alle Domains liegen unter `.example`.
 
 ## 2. Hot-Testing (WP10) — Whitebox
 

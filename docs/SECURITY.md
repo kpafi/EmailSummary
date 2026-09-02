@@ -42,8 +42,8 @@ gemacht**:
 | T5 | Exploit gegen den PDF-Parser | Extraktion in Subprozess mit Timeout/Memory/Größen-Limits (I7); Absturz ⇒ Anhang unverarbeitet (WP3) |
 | T6 | Gefälschter MIME-Typ (exe als „application/pdf") | Magic-Bytes-Verifikation (WP3) |
 | T7 | Markdown-/Formatierungs-Injection Richtung Messenger (Telegram-Markup als Link-Ersatz) | Kein `parse_mode` (Telegram), nur `content` ohne Embeds (Discord); Output-Sanitizer löscht Markup-Zeichen und bricht alle Domain-Punkte sowie jedes lebende Schema (WP7, ADR-036/037) |
-| T8 | Halluzination: Summarizer erfindet harmlosen Inhalt für Phishing-Mail | Kritiker prüft Summary gegen Mail (`summary_accurate`); false ⇒ fail-closed (WP6) |
-| T9 | Injection instruiert Summarizer, Phishing als „wichtig & legitim" zu framen | Kritiker sieht Rohtext (sanitisiert) unabhängig; deterministische Signale (Domain-Checks etc.) sind nicht vom LLM beeinflussbar (WP6) |
+| T8 | Halluzination: Summarizer erfindet harmlosen Inhalt für Phishing-Mail | Kritiker prüft Summary gegen Mail (`summary_accurate`); false ⇒ fail-closed (umgesetzt: WP6 liefert das Feld, `pipeline.process_mail` zieht die Konsequenz) |
+| T9 | Injection instruiert Summarizer, Phishing als „wichtig & legitim" zu framen | Kritiker sieht den sanitisierten Text unabhängig und ohne Custom-Instructions (ADR-042); deterministische Signale (Domain-Checks etc.) sind nicht vom LLM beeinflussbar und heben die Risikostufe notfalls im Code an (WP6, ADR-043) |
 | T10 | Ressourcen-Erschöpfung (Mail-Bombe, 100-MB-Mails, MIME-Rekursion) | Größenlimits auf jeder Stufe, Rekursionstiefe begrenzt, Zeichenlimits (WP3), Rate-Limit im Poll-Loop (WP8) |
 | T11 | Secret-Exfiltration („schreib den API-Key in die Summary") | Secrets sind nie im Prompt-Kontext (I5) — das Modell kennt sie schlicht nicht |
 | T12 | Homoglyphen-/Punycode-Domains täuschen den Nutzer in der Textdarstellung | Kennzeichnung + Warnung im sanitization_report; Kritiker-Signal (WP3/WP6) |
@@ -150,8 +150,22 @@ markierten Sicherheitsregeln. Schicht 4 (`agents/summarizer.enforce_output_polic
 Markdown-Links, HTML-Tags, numerische Entities, URL-Muster inkl. Obfuskationen und
 Unicode-`C*`-Zeichen aus jedem Textfeld und setzt bei jedem Fund `injection_suspected =
 true`. Sie normalisiert bewusst **nicht** nach NFKC — Fullwidth-Formen, nackte IPs und
-nackte Domains passieren sie und werden erst von Schicht 6 entschärft (ADR-033). Schicht 5
-(Kritiker) folgt in WP6.
+nackte Domains passieren sie und werden erst von Schicht 6 entschärft (ADR-033). Im
+Kritiker-Pfad ist diese Lücke geschlossen (ADR-044).
+
+**Stand der Umsetzung (WP6, Schicht 5 — ADR-041 bis ADR-044):** Der Kritiker
+(`agents/critic.py`) hat einen eigenen System-Prompt und eigene, im Code berechnete Fakten.
+Er bekommt **keine** Custom-Instructions (ADR-042) — eine Config-Vorgabe kann die
+Phishing-Prüfung damit weder entschärfen noch abschalten. Mail-Inhalt und die zu prüfende
+`Summary` stehen in zwei getrennten Untrusted-Blöcken mit derselben, pro Aufruf zufälligen
+Kennung (ADR-041); beide Blockinhalte laufen durch die Marker-Neutralisierung, also auch
+die Modellausgabe. Die deterministischen Signale (F-CRIT-3, `collect_signals`) stammen
+ausschließlich aus dem `sanitization_report` und sind vom Absender nicht beeinflussbar
+(T9); harte Signale heben die Risikostufe im Code an, senken sie aber nie und setzen nie
+`high` (ADR-043). Schicht 4 gilt auch für das Verdict: `risk_reasons` und `notes` werden
+NFKC-normalisiert und mit der Summarizer-Politik gescrubbt, ein Fund wird als eigener
+Grund sichtbar gemacht (ADR-044) — das Gegenstück zum `injection_suspected`-Flag, das
+`CriticVerdict` nicht hat.
 
 **Stand der Umsetzung (WP7, Schicht 6 — ADR-035 bis ADR-040):** Verbindliche Politik des
 Output-Sanitizers: Jedes Feld durchläuft Entity-Auflösung (bis Fixpunkt), NFKC +

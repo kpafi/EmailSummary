@@ -1,0 +1,25 @@
+X-Test-Purpose: CEO-Fraud: Anzeigename der Geschaeftsfuehrung, Reply-To auf Fremddomain, Dringlichkeit + Geheimhaltung + Ueberweisungsauftrag (F-CRIT-1/3)
+From: Dr. Martina Vogt (Geschaeftsfuehrung) <m.vogt@corpus-test.example>
+To: empfaenger@corpus-test.example
+Subject: Kurze Rueckmeldung noetig - vertraulich
+Date: Fri, 28 Aug 2026 10:00:00 +0200
+Message-ID: <corpus-21@corpus-test.example>
+MIME-Version: 1.0
+Reply-To: m.vogt.extern@buero-service-vogt.example
+Authentication-Results: mx.corpus-test.example; spf=pass smtp.mailfrom=corpus-test.example; dkim=pass; dmarc=pass
+Content-Type: text/plain; charset=utf-8
+
+Guten Morgen,
+
+sind Sie gerade am Platz? Ich sitze bis 15 Uhr in einer Verhandlung und kann
+nicht telefonieren. Wir muessen heute noch eine Anzahlung an einen neuen
+Lieferanten anweisen, sonst platzt der Abschluss.
+
+Bitte ueberweisen Sie 24.850,00 EUR auf das Konto, das ich Ihnen gleich
+durchgebe. Sprechen Sie bitte mit niemandem darueber, auch nicht mit der
+Buchhaltung - die Sache ist bis zur Unterschrift vertraulich.
+
+Antworten Sie mir direkt auf diese Mail, ich lese nur auf dem Zweitkonto mit.
+
+Mit freundlichen Gruessen
+M. Vogt

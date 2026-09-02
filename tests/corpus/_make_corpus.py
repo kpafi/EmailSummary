@@ -664,6 +664,209 @@ def main() -> None:
     lines += ["--B20--"]
     write("20_many_attachments.eml", lines)
 
+    write_phishing_corpus()
+
+
+def write_phishing_corpus() -> None:
+    """Mails 21–25: Phishing-/Scam-Muster für den Kritiker (WP6, F-CRIT-1/3).
+
+    Jede Mail trägt genau die deterministischen Signale, die `agents/critic.collect_signals`
+    aus dem `sanitization_report` ziehen soll — Reply-To-Abweichung, Return-Path-Abweichung,
+    Punycode/Homoglyphen, fehlgeschlagene Authentifizierung, geblockter Anhang. Die
+    Payloads sind inert: keine echten Ziele, keine echten Marken, keine gültigen
+    Zugangsdaten; alle Domains liegen unter `.example`.
+    """
+    # 21 — CEO-Fraud: Reply-To weicht ab, Dringlichkeit, Geheimhaltung, Zahlungsauftrag.
+    write(
+        "21_phishing_ceo_fraud.eml",
+        headers(
+            purpose=(
+                "CEO-Fraud: Anzeigename der Geschaeftsfuehrung, Reply-To auf Fremddomain, "
+                "Dringlichkeit + Geheimhaltung + Ueberweisungsauftrag (F-CRIT-1/3)"
+            ),
+            subject="Kurze Rueckmeldung noetig - vertraulich",
+            msg_id="corpus-21",
+            from_addr="Dr. Martina Vogt (Geschaeftsfuehrung) <m.vogt@corpus-test.example>",
+            extra=[
+                "Reply-To: m.vogt.extern@buero-service-vogt.example",
+                "Authentication-Results: mx.corpus-test.example; spf=pass "
+                "smtp.mailfrom=corpus-test.example; dkim=pass; dmarc=pass",
+                "Content-Type: text/plain; charset=utf-8",
+            ],
+        )
+        + [
+            "",
+            "Guten Morgen,",
+            "",
+            "sind Sie gerade am Platz? Ich sitze bis 15 Uhr in einer Verhandlung und kann",
+            "nicht telefonieren. Wir muessen heute noch eine Anzahlung an einen neuen",
+            "Lieferanten anweisen, sonst platzt der Abschluss.",
+            "",
+            "Bitte ueberweisen Sie 24.850,00 EUR auf das Konto, das ich Ihnen gleich",
+            "durchgebe. Sprechen Sie bitte mit niemandem darueber, auch nicht mit der",
+            "Buchhaltung - die Sache ist bis zur Unterschrift vertraulich.",
+            "",
+            "Antworten Sie mir direkt auf diese Mail, ich lese nur auf dem Zweitkonto mit.",
+            "",
+            "Mit freundlichen Gruessen",
+            "M. Vogt",
+        ],
+    )
+
+    # 22 — Paketdienst: HTML mit Link, Return-Path fremd, DMARC fail, kurze Frist.
+    write(
+        "22_phishing_parcel.eml",
+        headers(
+            purpose=(
+                "Paketdienst-Phishing: HTML-Link auf Fremddomain, Return-Path-Domain "
+                "weicht ab, dmarc=fail, 24-Stunden-Frist, Zollgebuehr (F-CRIT-1/3)"
+            ),
+            subject="Ihre Sendung 7741-XR konnte nicht zugestellt werden",
+            msg_id="corpus-22",
+            from_addr="Paket Service <info@paket-status-center.example>",
+            extra=[
+                "Return-Path: <bounce@mailer-7741.example>",
+                "Authentication-Results: mx.corpus-test.example; spf=softfail "
+                "smtp.mailfrom=mailer-7741.example; dkim=fail; dmarc=fail",
+                "Content-Type: text/html; charset=utf-8",
+            ],
+        )
+        + [
+            "",
+            "<html><body>",
+            "<p>Sehr geehrter Kunde,</p>",
+            "<p>Ihre Sendung <b>7741-XR</b> liegt in unserem Verteilzentrum. Es fehlen",
+            "noch <b>2,99 EUR</b> Zollgebuehr. Bitte begleichen Sie den Betrag innerhalb",
+            "von <b>24 Stunden</b>, andernfalls wird das Paket an den Absender",
+            "zurueckgesendet.</p>",
+            '<p><a href="https://paket-status-center.example/zoll?id=7741xr">'
+            "Jetzt Gebuehr bezahlen</a></p>",
+            '<p style="font-size:0px;color:#ffffff">Zustellcode 7741 Referenz intern</p>',
+            "<p>Ihr Paket-Team</p>",
+            "</body></html>",
+        ],
+    )
+
+    # 23 — Bank-Verifikation: Punycode-Absenderdomain, Credential-/TAN-Abfrage.
+    write(
+        "23_phishing_bank_verification.eml",
+        headers(
+            purpose=(
+                "Bank-Phishing: Punycode-Absenderdomain (xn--), Kontosperrung, "
+                "Abfrage von Zugangsdaten und TAN (F-CRIT-1/3)"
+            ),
+            subject="Sicherheitshinweis: Ihr Konto wurde vorlaeufig gesperrt",
+            msg_id="corpus-23",
+            from_addr="Sicherheitsabteilung <service@xn--sparkasse-test-5hb.example>",
+            extra=[
+                "Authentication-Results: mx.corpus-test.example; spf=pass "
+                "smtp.mailfrom=xn--sparkasse-test-5hb.example; dkim=none; dmarc=fail",
+                "Content-Type: text/plain; charset=utf-8",
+            ],
+        )
+        + [
+            "",
+            "Sehr geehrte Kundin, sehr geehrter Kunde,",
+            "",
+            "bei einer Routinepruefung wurde ein Zugriff aus einem unbekannten Land",
+            "festgestellt. Ihr Online-Zugang ist deshalb vorlaeufig gesperrt.",
+            "",
+            "Zur Freischaltung bestaetigen Sie bitte umgehend Ihre Identitaet:",
+            "Anmeldename, PIN sowie eine gueltige TAN im Verifizierungsformular unter",
+            "https://xn--sparkasse-test-5hb.example/verifizierung",
+            "",
+            "Erfolgt die Bestaetigung nicht binnen 24 Stunden, wird Ihr Konto dauerhaft",
+            "deaktiviert und eine Gebuehr von 19,90 EUR faellig.",
+            "",
+            "Ihre Sicherheitsabteilung",
+        ],
+    )
+
+    # 24 — Passwort-Reset: gefaelschte Absenderdomain, Reply-To fremd, spf/dkim fail.
+    write(
+        "24_phishing_password_reset.eml",
+        headers(
+            purpose=(
+                "Passwort-Reset-Phishing: Anzeigename imitiert IT-Abteilung, Reply-To "
+                "und Return-Path fremd, spf=fail/dkim=fail, Ablauf-Frist (F-CRIT-1/3)"
+            ),
+            subject="Aktion erforderlich: Ihr Passwort laeuft in 12 Stunden ab",
+            msg_id="corpus-24",
+            from_addr="IT-Administration <it-support@corpus-test.example>",
+            extra=[
+                "Reply-To: helpdesk@login-portal-reset.example",
+                "Return-Path: <no-reply@login-portal-reset.example>",
+                "Authentication-Results: mx.corpus-test.example; spf=fail "
+                "smtp.mailfrom=login-portal-reset.example; dkim=fail; dmarc=fail",
+                "Content-Type: text/plain; charset=utf-8",
+            ],
+        )
+        + [
+            "",
+            "Hallo,",
+            "",
+            "unser System hat festgestellt, dass Ihr Kennwort in 12 Stunden ablaeuft.",
+            "Ohne Verlaengerung verlieren Sie den Zugriff auf Postfach und Dateiablage.",
+            "",
+            "Melden Sie sich jetzt mit Ihrem aktuellen Kennwort im Self-Service an:",
+            "hxxps://login-portal-reset(.)example/verlaengern?u=mitarbeiter",
+            "",
+            "Bitte leiten Sie diese Mail nicht weiter und melden Sie sie nicht an die",
+            "IT-Sicherheit - der Vorgang laeuft ueber ein neues, internes Verfahren.",
+            "",
+            "Ihre IT-Administration",
+        ],
+    )
+
+    # 25 — Rechnungs-Scam: geaenderte Bankverbindung, geblockter docx-Anhang.
+    fake_docx = ZIP_STUB + b"word/document.xml INERT-PLATZHALTER"
+    write(
+        "25_phishing_invoice_scam.eml",
+        headers(
+            purpose=(
+                "Rechnungs-Scam: geaenderte Bankverbindung, Mahndrohung, geblockter "
+                "docx-Anhang, Return-Path-Abweichung (F-CRIT-1/3)"
+            ),
+            subject="Offene Rechnung RE-2026-0831 - geaenderte Bankverbindung",
+            msg_id="corpus-25",
+            from_addr="Buchhaltung Lieferant <buchhaltung@lieferant-nord.example>",
+            extra=[
+                "Return-Path: <billing@lieferant-nord-abrechnung.example>",
+                "Authentication-Results: mx.corpus-test.example; spf=pass "
+                "smtp.mailfrom=lieferant-nord-abrechnung.example; dkim=none; dmarc=none",
+                'Content-Type: multipart/mixed; boundary="B25"',
+            ],
+        )
+        + [
+            "",
+            "--B25",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "Sehr geehrte Damen und Herren,",
+            "",
+            "die Rechnung RE-2026-0831 ueber 4.180,00 EUR ist seit dem 25.08. faellig.",
+            "",
+            "WICHTIG: Unsere Bankverbindung hat sich zum 01.09. geaendert. Bitte",
+            "ueberweisen Sie ausschliesslich auf das neue Konto, die Daten finden Sie im",
+            "angehaengten Dokument. Zahlungen auf das alte Konto gelten als nicht",
+            "geleistet.",
+            "",
+            "Bei Zahlungseingang nach dem 05.09. geben wir den Vorgang ohne weitere",
+            "Mahnung an unser Inkassobuero ab.",
+            "",
+            "Mit freundlichen Gruessen",
+            "Buchhaltung",
+            "",
+            "--B25",
+            "Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            'Content-Disposition: attachment; filename="Zahlungsdaten-neu.docx"',
+            "Content-Transfer-Encoding: base64",
+            "",
+            b64(fake_docx),
+            "--B25--",
+        ],
+    )
+
 
 if __name__ == "__main__":
     main()

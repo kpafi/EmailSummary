@@ -134,14 +134,17 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   Summarizer-Bausteine `summarizer_system_prompt(*, token, language, summary_length,
   custom_instructions)` und `summarizer_user_prompt(mail, *, token)`, dazu
   `default_token_source()` / `block_markers(token)` für die pro Aufruf zufälligen
-  Datenblock-Marker (ADR-032) und `format_size()` für deutsche Größenangaben. Der
-  Kritiker-Prompt kommt in WP6 hinzu.
+  Datenblock-Marker (ADR-032) und `format_size()` für deutsche Größenangaben. Stand WP6:
+  zusätzlich `critic_system_prompt(*, token, language, max_reasons)`,
+  `critic_user_prompt(mail, summary, signals, *, token)` und `summary_markers(token)` für
+  den zweiten Untrusted-Block des Kritikers (ADR-041). `PROMPT_VERSION` steht auf
+  `wp6/2026-09-02`.
 
 ### Agenten (`agents/`)
 - `summarizer.py`: baut Prompt (System + gelabelte Custom-Instructions + delimitierter
   Datenblock), ruft `complete_json`, führt deterministische Nachkontrolle aus.
 - `critic.py`: berechnet erst deterministische Signale (Code!), ruft dann das LLM mit
-  Mail-Klartext + Summary + Signalen, liefert `CriticVerdict`.
+  Mail-Klartext + Summary + Signalen, liefert `CriticVerdict`. Details unter „Stand WP6".
 
 **Stand WP5 (ADR-031 bis ADR-034):**
 
@@ -176,6 +179,45 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
 - **Nicht Aufgabe des Summarizers:** die Zustell-Schwelle `deliver_min_importance` (wertet
   `pipeline.process_mail` aus, inkl. F-CRIT-2-Anhebung) und die Nachrichten-Formatierung
   (WP7).
+
+**Stand WP6 (ADR-041 bis ADR-044):**
+
+- **Einstieg:** `agents.critic.CriticAgent` implementiert das `Critic`-Protokoll aus
+  `pipeline.py` (`review(mail, summary) -> CriticVerdict`). Konstruktor:
+  `CriticAgent(provider, *, language, max_tokens, token_source)`; Komfort:
+  `CriticAgent.from_config(config, provider=None)` (nutzt `[general] language`,
+  `llm.factory.build_provider(config, "critic")` und `max_tokens_for(config, "critic")`,
+  also die Overrides aus `[llm.critic]`). Es gibt **keinen** `instructions`-Parameter:
+  Der Kritiker ist die unabhängige zweite Instanz (ADR-042).
+- **Deterministische Signale (`collect_signals`, reiner Code, F-CRIT-3):** Aus
+  `SanitizationReport` + `AttachmentInfo` entsteht eine geordnete Folge von `Signal(key,
+  text, hard)` mit den Schlüsseln `reply_to_mismatch`, `return_path_mismatch`,
+  `auth_ok` / `auth_failed` / `auth_missing` (Werte-Rendering `DKIM=…, DMARC=…, SPF=…`;
+  „bestanden" = `pass|none|neutral|policy`, identisch zur Hinweiszeile in `output/`),
+  `punycode`, `mixed_script`, `blocked_attachments` (mit deklarierten MIME-Typen),
+  `links_removed`, `hidden_text`, `control_chars`, `truncated`. Die Folge ist nie leer
+  (die Auth-Zeile erscheint immer) und enthält keinen Mail-Text — sie ist vom Absender
+  nicht manipulierbar (T9).
+- **Prompt-Aufbau (I8, SECURITY §5, ADR-041):** System-Prompt = Rolle → unüberschreibbare
+  Sicherheitsregeln (nennen beide Markerpaare) → Prüfauftrag 1 (Phishing-Muster:
+  Dringlichkeit, Zahlungsaufforderung, Credential-Anfrage, Absender-Diskrepanzen,
+  untypische Sprache, Manipulation der Verarbeitung) → Prüfauftrag 2 (Halluzinations-Check
+  inkl. Warnung vor der Fail-closed-Wirkung von `summary_accurate = false`) → Risikostufen
+  → Sprache/Form → Ausgabeformat. User-Message = Signale als Programm-Fakten, dann der
+  Mail-Block (`<<<MAILDIGEST-UNTRUSTED-DATA …>>>`, identisch gebaut wie beim Summarizer),
+  dann der Summary-Block (`<<<MAILDIGEST-UNTRUSTED-SUMMARY …>>>`), beide mit derselben
+  Zufallskennung und beide marker-neutralisiert.
+- **Nachkontrolle (`enforce_verdict_policy`, reiner Code, I4, ADR-043/044):** Jedes
+  Textfeld wird NFKC-normalisiert und mit derselben Politik wie beim Summarizer gescrubbt
+  (`agents.summarizer.scrub_text`); danach einzeilig, `risk_reasons` ≤ 5 Einträge à
+  200 Zeichen ohne Duplikate/Leereinträge, `notes` ≤ 500 Zeichen. Ein Fund macht sich als
+  eigener Grund sichtbar und hebt `phishing_risk` auf mindestens `low`; dasselbe tun harte
+  Signale (`hard=True`, derzeit nur `mixed_script`). Code-Gründe stehen vor den
+  Modellgründen, damit die Kappung sie nicht verdrängt. Die Stufe wird nie gesenkt und nie per
+  Code auf `high` gesetzt; `summary_accurate` bleibt unangetastet.
+- **Nicht Aufgabe des Kritikers:** die Wirkung des Verdicts. Warn-Banner und
+  Mindest-Wichtigkeit bei `high` (F-CRIT-2) sowie der Fail-closed-Pfad bei
+  `summary_accurate = false` (T8) liegen in `pipeline.process_mail` und `output/composer.py`.
 
 ### Output (`output/`)
 - Baut aus Summary + Verdict die `DigestMessage` (Format §7) und sanitisiert jedes Feld
