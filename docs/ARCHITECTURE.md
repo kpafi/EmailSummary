@@ -129,14 +129,54 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
 - `factory.py`: `build_provider(config, role)` mit `role = "summarizer" | "critic"`
   (Override-Vererbung aus `[llm.critic]`), dazu `max_tokens_for(config, role)`. Fehlender
   API-Key bei Provider `anthropic` ⇒ `ConfigError` mit Hinweis auf `MAILDIGEST_LLM_API_KEY`.
-- `prompts.py`: alle Prompt-Texte zentral, mit Versions-Kommentar (weiterhin Platzhalter,
-  entsteht in WP5/WP6).
+- `prompts.py`: alle Prompt-Texte zentral, versioniert über `PROMPT_VERSION` (Schema
+  `wp<NR>/<YYYY-MM-DD>[.n]`; jede inhaltliche Änderung erhöht sie). Stand WP5: die
+  Summarizer-Bausteine `summarizer_system_prompt(*, token, language, summary_length,
+  custom_instructions)` und `summarizer_user_prompt(mail, *, token)`, dazu
+  `default_token_source()` / `block_markers(token)` für die pro Aufruf zufälligen
+  Datenblock-Marker (ADR-032) und `format_size()` für deutsche Größenangaben. Der
+  Kritiker-Prompt kommt in WP6 hinzu.
 
 ### Agenten (`agents/`)
 - `summarizer.py`: baut Prompt (System + gelabelte Custom-Instructions + delimitierter
   Datenblock), ruft `complete_json`, führt deterministische Nachkontrolle aus.
 - `critic.py`: berechnet erst deterministische Signale (Code!), ruft dann das LLM mit
   Mail-Klartext + Summary + Signalen, liefert `CriticVerdict`.
+
+**Stand WP5 (ADR-031 bis ADR-034):**
+
+- **Einstieg:** `agents.summarizer.SummarizerAgent` implementiert das `Summarizer`-Protokoll
+  aus `pipeline.py` (`summarize(mail) -> Summary`). Konstruktor:
+  `SummarizerAgent(provider, *, language, summary_length, instructions, max_tokens,
+  token_source)`; Komfort: `SummarizerAgent.from_config(config, provider=None)` (nutzt
+  `[general] language/summary_length`, `[summarizer] instructions`,
+  `llm.factory.build_provider(config, "summarizer")` und `max_tokens_for(config,
+  "summarizer")`). Ein `[llm.summarizer]`-Abschnitt existiert nicht (ADR-025): Rolle
+  `summarizer` = `[llm]`.
+- **Prompt-Aufbau (I8, SECURITY §5):** System-Prompt = Rolle → Nutzer-Vorgaben (eigener,
+  gelabelter, auf 2000 Zeichen gedeckelter Block) → unüberschreibbare Sicherheitsregeln +
+  Sprache/Länge/Wichtigkeit/Ausgabeformat. User-Message = vertrauenswürdige Programm-Fakten
+  aus dem `sanitization_report`, dann der Mail-Inhalt (Betreff, Anzeigename, Domain, Datum,
+  geblockte Anhänge als Metadaten, `body_text`, `attachment_texts`) zwischen pro Aufruf
+  zufälligen Markern mit Untrusted-Hinweis, dann eine Format-Erinnerung.
+- **Nachkontrolle (`enforce_output_policy`, reiner Code, I4):** Scan jedes Textfelds auf
+  Markdown-Links, HTML-Tags, numerische Entities, URL-Muster (`schema://`, `hxxp`, `www.`,
+  `mailto:`, `tel:`, `(.)`/`[.]`/`(dot)`, `domain.tld/pfad`) und Unicode-`C*`-Zeichen.
+  Fund ⇒ Ersetzung durch `[entfernt]` (URL-Muster wortweise) **und**
+  `injection_suspected = true`; ein vom Modell gesetztes Flag bleibt gesetzt. Danach:
+  Headline einzeilig und ≤ 100 Zeichen, leere Felder aus Sanitizer-Werten aufgefüllt
+  (`headline` ← Betreff, `category` ← `sonstiges`, `summary_text` ← Metadaten-Ersatztext),
+  `attachment_summaries` auf Schlüssel aus `attachment_texts` beschränkt. Nackte Domains
+  ohne Pfad bleiben stehen — die Marker `[Link #n: domain.tld]` sind nach I3 erlaubt.
+  Diese Schicht normalisiert **nicht** nach NFKC; Fullwidth-Formen fängt erst der
+  Output-Sanitizer (ADR-033 „Konsequenzen", ADR-036).
+- **Mail ohne darstellbaren Text:** Der LLM-Aufruf findet trotzdem statt
+  (Betreff/Absender/Anhangsnamen sind Signale); bleibt `summary_text` leer, greift der
+  deterministische Ersatztext „Mail ohne darstellbaren Inhalt, N geblockte Anhänge: …".
+- **Nicht Aufgabe des Summarizers:** die Zustell-Schwelle `deliver_min_importance` (wertet
+  `pipeline.process_mail` aus, inkl. F-CRIT-2-Anhebung) und die Nachrichten-Formatierung
+  (WP7).
+
 
 ### Output (`output/sanitizer.py`)
 - Baut aus Summary + Verdict die `DigestMessage` (Format §7) und sanitisiert jedes Feld

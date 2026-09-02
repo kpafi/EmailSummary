@@ -141,6 +141,18 @@ Reihenfolge der Verteidigung (Defense in Depth — jede Schicht darf versagen):
 steuern, aber die Sicherheitsregeln im System-Prompt stehen textlich **nach** ihnen und
 sind als unüberschreibbar markiert. Der Output-Sanitizer gilt unabhängig davon immer.
 
+**Stand der Umsetzung (WP5, Summarizer — ADR-031 bis ADR-034):** Schicht 1–4 stehen. Die
+Marker tragen eine pro Aufruf aus `secrets` gezogene 96-Bit-Kennung (`llm/prompts.py`,
+Zufallsquelle nur für Tests injizierbar); der System-Prompt nennt sie, und eine im Mail-Text
+auftauchende Kennung wird vor dem Einbau neutralisiert. Die Custom-Instructions stehen in
+einem gelabelten, auf 2000 Zeichen gedeckelten Block **vor** den als unüberschreibbar
+markierten Sicherheitsregeln. Schicht 4 (`agents/summarizer.enforce_output_policy`) säubert
+Markdown-Links, HTML-Tags, numerische Entities, URL-Muster inkl. Obfuskationen und
+Unicode-`C*`-Zeichen aus jedem Textfeld und setzt bei jedem Fund `injection_suspected =
+true`. Sie normalisiert bewusst **nicht** nach NFKC — Fullwidth-Formen, nackte IPs und
+nackte Domains passieren sie und werden erst von Schicht 6 entschärft (ADR-033). Schicht 5
+(Kritiker) folgt in WP6.
+
 ## 6. Betriebssicherheit
 
 - Config `0600`; Secrets bevorzugt via Env (`MAILDIGEST_IMAP_PASSWORD`,

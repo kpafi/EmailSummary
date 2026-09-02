@@ -601,3 +601,107 @@
   Body und ein Anhang-Metadatum — WP7 meldet das als „nicht verarbeiteter Anhang".
   Tiefe, legitime Newsletter-Verschachtelungen (> 10 Ebenen) verlieren Inhalt; das
   Limit ist per Config anhebbar.
+
+## ADR-031: Prompt-Aufbau des Summarizers — Sicherheitsregeln stehen nach den Custom-Instructions
+- Status: accepted
+- WP / Datum: WP5, 2026-09-02
+- Kontext: Der System-Prompt enthält zwei Quellen mit unterschiedlichem Vertrauen: fest im
+  Code stehende Sicherheitsregeln und die semi-trusted Custom-Instructions aus
+  `[summarizer] instructions` (I8). Modelle gewichten spätere Anweisungen im selben Prompt
+  tendenziell stärker; die Reihenfolge ist damit sicherheitsrelevant, nicht kosmetisch.
+- Entscheidung: `llm/prompts.py` baut den System-Prompt in fester Reihenfolge Rolle →
+  Nutzer-Vorgaben (eigener Block zwischen `--- Anfang/Ende der Nutzer-Vorgaben ---`, als
+  semi-vertrauenswürdig gelabelt, auf 2000 Zeichen gedeckelt) → unüberschreibbare
+  Sicherheitsregeln inkl. Sprache/Länge/Wichtigkeit/Ausgabeformat. Der Regelblock ist
+  explizit als „höchste Priorität, steht bewusst nach den Nutzer-Vorgaben" ausgezeichnet.
+  Alle Wortlaute liegen ausschließlich in `llm/prompts.py` und tragen mit `PROMPT_VERSION`
+  eine Version im Schema `wp<NR>/<YYYY-MM-DD>[.n]`, die bei jeder inhaltlichen Änderung
+  erhöht wird.
+- Alternativen: Custom-Instructions in die User-Message (verletzt I8 — sie sind
+  Konfiguration, keine Daten); Custom-Instructions nach den Regeln (widerspricht
+  docs/SECURITY.md §5 letzter Absatz); Instructions ungedeckelt übernehmen (ein
+  versehentlich riesiger Config-Wert würde den Regelblock aus dem effektiven Kontext
+  drängen).
+- Konsequenzen: Nutzer können Stil, Fokus und Wichtigkeitspolitik steuern, aber die Regeln
+  nicht lockern. Die Zeichengrenze kann sehr ausführliche Vorgaben kürzen (sichtbar über
+  den Marker `[…gekürzt]`). Prompt-Änderungen sind reviewbar und über die Version
+  referenzierbar.
+
+## ADR-032: Zufällige Datenblock-Marker mit injizierbarer Zufallsquelle
+- Status: accepted
+- WP / Datum: WP5, 2026-09-02
+- Kontext: docs/SECURITY.md §5 Punkt 1 verlangt pro Aufruf zufällige Delimiter, damit der
+  Mail-Text den Datenblock nicht vorzeitig „schließen" und danach als Instruktion
+  weiterschreiben kann. Gleichzeitig müssen Tests den Prompt-Aufbau exakt prüfen können.
+- Entscheidung: `prompts.default_token_source()` zieht 12 Byte aus `secrets` (96 Bit,
+  CSPRNG) und baut daraus `<<<MAILDIGEST-UNTRUSTED-DATA {token}>>>` /
+  `<<<MAILDIGEST-END-UNTRUSTED-DATA {token}>>>`. `SummarizerAgent` nimmt die Quelle als
+  Konstruktor-Parameter `token_source` entgegen (Default: der CSPRNG); Tests injizieren
+  eine feste Kennung. Der System-Prompt nennt die konkreten Marker, damit das Modell weiß,
+  was Daten sind. Zusätzlich wird eine im Mail-Text auftauchende Kennung vor dem Einbau
+  durch `MARKER-ENTFERNT` ersetzt — Tiefenverteidigung für den Fall, dass die Kennung
+  anderswo leckt.
+- Alternativen: Fester Delimiter (im Angreifermodell aus SECURITY §1 kennt der Angreifer
+  die Prompts und kann ihn nachbauen); Zufall aus `random` (nicht kryptografisch);
+  Zufallsquelle als Modul-Global monkeypatchen (unsichtbare Kopplung, schlecht in
+  parallelen Tests).
+- Konsequenzen: Prompt-Caching über Mails hinweg ist für den System-Prompt nicht möglich,
+  weil er die Kennung enthält — akzeptiert, Sicherheit vor Kosten. Eine falsch injizierte
+  Quelle in Produktivcode wäre eine echte Schwächung; deshalb ist der Parameter
+  keyword-only und nur in Tests gesetzt.
+
+## ADR-033: Deterministische Nachkontrolle redigiert wortweise und flaggt jeden Fund
+- Status: accepted
+- WP / Datum: WP5, 2026-09-02
+- Kontext: Die LLM-Ausgabe ist untrusted (I4). Ein reines Ersetzen der Fundstelle („://")
+  ließe den gefährlichen Rest stehen (`https://boese.example/x` →
+  `httpsboese.example/x`); ein zu breites Muster würde die legitimen Sanitizer-Marker
+  `[Link #n: domain.tld]` zerstören, die laut I3 erlaubt sind.
+- Entscheidung: `agents/summarizer.scrub_text` arbeitet in drei Pässen: (1) Struktur-Muster
+  (Markdown-Link/-Bild, Markdown-Referenzdefinition, HTML-Tag, numerische HTML-Entity)
+  werden als Ganzes durch `[entfernt]` ersetzt; (2) URL-Muster (`schema://`, `hxxp`,
+  `www.`, `mailto:`, `tel:`, `(.)`/`[.]`/`(dot)`, `domain.tld/pfad`) ersetzen das komplette
+  umgebende Nicht-Whitespace-Wort; (3) alle Unicode-`C*`-Zeichen außer Tab/Zeilenumbruch
+  fallen weg. Nackte Domains **ohne** Pfad werden bewusst nicht angetastet. Jeder Fund in
+  irgendeinem Feld setzt `injection_suspected = true`; ein vom Modell gesetztes Flag wird
+  nie gelöscht. Anschließend werden Headline auf eine Zeile und ≤ 100 Zeichen gezwungen und
+  leere Felder aus Sanitizer-Werten aufgefüllt.
+- Alternativen: Feld bei Fund komplett verwerfen (Nutzer verliert die Information, obwohl
+  der Rest brauchbar ist); nur flaggen ohne Säubern (widerspricht I3/PLAN WP5); auch nackte
+  Domains redigieren (zerstört die Marker und damit die einzige verbliebene
+  Herkunftsinformation).
+- Konsequenzen: Der Nutzer sieht `[entfernt]`-Lücken statt stiller Kürzungen.
+  Falsch-Positive sind möglich (ein Text über „www." als Wort), kosten aber nur ein Flag
+  und ein Wort. **Bekannte Grenze (Finalisierungs-Review WP5/WP7, 2026-09-02):** Diese
+  Schicht normalisiert **nicht** nach NFKC. Fullwidth-Schreibweisen (`ｈｔｔｐｓ://…`),
+  nackte IPv4-Adressen und der ideographische Punkt (`boese。example`) passieren sie
+  unverändert und **ohne** Flag. Das ist tolerierbar, weil der Output-Sanitizer (ADR-036)
+  vor der Zustellung NFKC-normalisiert und diese Formen sicher entschärft — es ist aber
+  ein realer Unterschied zwischen den beiden Schichten und darf nicht als „doppelte
+  Absicherung derselben Muster" gelesen werden.
+
+## ADR-034: Mails ohne darstellbaren Text gehen trotzdem ans LLM; Metadaten-Text nur als Fallback
+- Status: accepted
+- WP / Datum: WP5, 2026-09-02
+- Kontext: Nach der Allowlist-Politik (SECURITY §4) kann eine Mail komplett ohne
+  verwertbaren Text ankommen — etwa eine Rechnung, die nur als `.docx` anhängt. Der
+  WP3-Bericht (g)5 verlangt trotzdem eine brauchbare Zusammenfassung aus Metadaten. Die
+  Frage war, ob der Agent das LLM in diesem Fall überspringt.
+- Entscheidung: Der Aufruf findet statt. Der Datenblock markiert den fehlenden Text
+  explizit („(kein darstellbarer Text vorhanden)") und listet die geblockten Anhänge mit
+  Name, deklariertem MIME-Typ und Größe. Betreff, Absender und Anhangsnamen bleiben damit
+  als Signale für `importance` und `category` erhalten. Erst wenn `summary_text` nach der
+  Nachkontrolle leer ist, greift der rein deterministische Ersatztext
+  `describe_without_body()` („Mail ohne darstellbaren Inhalt, 2 geblockte Anhänge:
+  rechnung.docx (34 KB), setup.exe (1,2 MB)."), der ausschließlich aus Sanitizer-Werten
+  gebaut wird. Ergänzend werden Einträge in `attachment_summaries` verworfen, deren
+  Schlüssel nicht in `SanitizedMail.attachment_texts` steht — über geblockte oder erfundene
+  Anhänge kann das Modell keine Inhalte behaupten.
+- Alternativen: LLM überspringen und rein deterministisch antworten (spart einen Aufruf,
+  verschenkt aber die Wichtigkeitsbewertung aus dem Betreff — genau die Mail „Mahnung" mit
+  nur einem `.docx` würde als `low` einsortiert); die Metadatenzeile immer zusätzlich
+  anhängen (Dopplung zur Anhangs-Zeile des WP7-Nachrichtenformats).
+- Konsequenzen: Ein LLM-Aufruf auch für inhaltsleere Mails (Kosten akzeptiert). Der
+  Ersatztext ist der einzige Summary-Text, der nicht vom Modell stammt — er ist deshalb
+  nicht scrub-pflichtig, weil alle Bestandteile bereits durch den Sanitizer gegangen sind.
+
