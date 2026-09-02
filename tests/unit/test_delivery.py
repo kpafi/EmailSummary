@@ -181,7 +181,7 @@ def test_unusable_payload_is_dropped_and_booked_as_failed() -> None:
         db.claim("<a@x>")
         db.mark_status("<a@x>", MailState.CHECKED)
         item_id = db.enqueue_outbox(
-            "<a@x>", kind="mail", parts=["x"], importance="normal", is_warning=False
+            "<a@x>", kind="mail", parts=["x"], importance="normal", is_warning=False, now=clock()
         )
         db._conn.execute("UPDATE outbox SET payload = ? WHERE id = ?", ("[]", item_id))
         adapter = RecordingMessenger()
