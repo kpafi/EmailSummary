@@ -1,0 +1,304 @@
+"""Zusammenbau der versandfertigen :class:`~maildigest.models.DigestMessage` (Stufe 5).
+
+Implementiert das Protokoll `OutputComposer` aus :mod:`maildigest.pipeline`
+(:meth:`DigestComposer.compose` **und** :meth:`DigestComposer.compose_failure`).
+Format: docs/ARCHITECTURE.md §7.
+
+Jedes Feld, das in die Nachricht wandert, ist untrusted (LLM-Ausgabe oder Mail-Metadatum)
+und läuft durch :func:`maildigest.output.sanitizer.scrub_field`; die fertige Nachricht
+läuft zusätzlich durch :func:`maildigest.output.sanitizer.final_guard` und wird erst
+danach in messenger-taugliche Teile gesplittet (I3/I4).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from maildigest.config import Config
+from maildigest.models import (
+    AttachmentInfo,
+    CriticVerdict,
+    DigestMessage,
+    FailureNotice,
+    SanitizationReport,
+    SanitizedMail,
+    Summary,
+)
+from maildigest.output.sanitizer import (
+    DISCORD_MAX_PART_CHARS,
+    SIGNAL_MAX_PART_CHARS,
+    TELEGRAM_MAX_PART_CHARS,
+    final_guard,
+    scrub_field,
+    scrub_plain,
+    split_parts,
+)
+from maildigest.sanitize.links import LinkCollector
+
+__all__ = ["DigestComposer", "part_limit_for"]
+
+#: Zeichenlimit je Messenger (docs/ARCHITECTURE.md §5, `[messenger] active`).
+_PART_LIMITS: dict[str, int] = {
+    "telegram": TELEGRAM_MAX_PART_CHARS,
+    "discord": DISCORD_MAX_PART_CHARS,
+    "signal": SIGNAL_MAX_PART_CHARS,
+}
+
+#: Einzellimits der untrusted Felder — verhindert, dass ein Feld die Nachricht sprengt.
+_MAX_HEADLINE_CHARS = 120
+_MAX_SUMMARY_CHARS = 3000
+_MAX_ATTACHMENT_SUMMARY_CHARS = 400
+_MAX_REASON_CHARS = 200
+_MAX_DISPLAY_CHARS = 80
+_MAX_DOMAIN_CHARS = 100
+_MAX_FILENAME_CHARS = 80
+
+#: Höchstzahl der im Banner genannten Kritiker-Gründe.
+_MAX_RISK_REASONS = 5
+
+#: Höchstzahl der namentlich genannten, nicht verarbeiteten Anhänge.
+_MAX_LISTED_ATTACHMENTS = 10
+
+#: Auth-Ergebnisse, die kein Warnsignal sind.
+_AUTH_OK = frozenset({"pass", "none", "neutral", "policy"})
+
+
+def part_limit_for(messenger: str) -> int:
+    """Zeichenlimit eines Nachrichtenteils für den aktiven Messenger.
+
+    Unbekannte Namen bekommen das kleinste bekannte Limit — lieber unnötig splitten als
+    eine abgeschnittene Nachricht.
+    """
+    return _PART_LIMITS.get(messenger, min(_PART_LIMITS.values()))
+
+
+def _format_size(size_bytes: int) -> str:
+    """Deutsche Größenangabe: `812 B`, `34 KB`, `1,2 MB`."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{round(size_bytes / 1024)} KB"
+    megabytes = size_bytes / (1024 * 1024)
+    return f"{megabytes:.1f}".replace(".", ",") + " MB"
+
+
+def _format_date(value: datetime | None) -> str:
+    """`TT.MM. HH:MM` oder ein Platzhalter, wenn der Date-Header fehlte/kaputt war."""
+    if value is None:
+        return "Datum unbekannt"
+    return f"{value:%d.%m. %H:%M}"
+
+
+class DigestComposer:
+    """Baut aus Summary + Verdict (bzw. aus einer FailureNotice) die fertige Nachricht.
+
+    Zustandslos bis auf das Zeichenlimit — eine Instanz kann für alle Mails benutzt
+    werden. Der :class:`LinkCollector` wird pro Nachricht neu erzeugt, damit die
+    Marker-Nummerierung innerhalb einer Nachricht durchläuft und nicht über Mails hinweg
+    weiterzählt.
+    """
+
+    def __init__(self, *, part_limit: int = TELEGRAM_MAX_PART_CHARS) -> None:
+        """Args: part_limit: Zeichenlimit eines Nachrichtenteils (Default: Telegram)."""
+        if part_limit < 1:
+            raise ValueError("part_limit muss mindestens 1 sein.")
+        self._part_limit = part_limit
+
+    @classmethod
+    def from_config(cls, config: Config) -> DigestComposer:
+        """Baut den Composer mit dem Limit des in `[messenger] active` gewählten Adapters."""
+        return cls(part_limit=part_limit_for(config.messenger.active))
+
+    @property
+    def part_limit(self) -> int:
+        """Das konfigurierte Zeichenlimit eines Nachrichtenteils."""
+        return self._part_limit
+
+    def __repr__(self) -> str:
+        """Repräsentation ohne jeden Inhalt (I5)."""
+        return f"DigestComposer(part_limit={self._part_limit})"
+
+    # --- OutputComposer -----------------------------------------------------------
+
+    def compose(
+        self, mail: SanitizedMail, summary: Summary, verdict: CriticVerdict
+    ) -> DigestMessage:
+        """Baut die Nachricht zu einer erfolgreich geprüften Mail (docs/ARCHITECTURE.md §7)."""
+        collector = LinkCollector()
+        lines: list[str] = []
+        is_warning = verdict.phishing_risk == "high"
+
+        if is_warning:
+            lines.append(self._banner(verdict, collector))
+
+        headline = scrub_field(
+            summary.headline, collector=collector, max_chars=_MAX_HEADLINE_CHARS
+        ) or "(keine Zusammenfassung)"
+        tag = " [wichtig]" if summary.importance == "high" else ""
+        lines.append(f"📧 {_one_line(headline)}{tag}")
+        lines.append(self._sender_line(mail))
+
+        body = scrub_field(
+            summary.summary_text, collector=collector, max_chars=_MAX_SUMMARY_CHARS
+        )
+        if body:
+            lines.append(body)
+
+        lines.extend(self._attachment_summary_lines(summary, collector))
+
+        unprocessed = self._unprocessed_line(mail.attachments)
+        if unprocessed:
+            lines.append(unprocessed)
+
+        hints = self._hints_line(mail.sanitization_report, summary, verdict, collector)
+        if hints:
+            lines.append(hints)
+
+        return DigestMessage(
+            parts=self._finalize("\n".join(lines)),
+            importance=summary.importance,
+            is_warning=is_warning,
+            dedupe_key=mail.dedupe_key,
+        )
+
+    def compose_failure(self, notice: FailureNotice) -> DigestMessage:
+        """Baut die Metadaten-Notiz des Fail-closed-Pfades (I6, F-OPS-3).
+
+        Enthält bewusst keinen Mail-Inhalt: Der Betreff kommt aus dem Not-Sanitizer der
+        Pipeline und wird hier trotzdem noch einmal gescrubbt (die Notiz kann entstehen,
+        *weil* der reguläre Sanitizer versagt hat).
+        """
+        collector = LinkCollector()
+        domain = _one_line(scrub_plain(notice.from_domain, max_chars=_MAX_DOMAIN_CHARS))
+        subject = _one_line(
+            scrub_field(
+                notice.subject_sanitized, collector=collector, max_chars=_MAX_HEADLINE_CHARS
+            )
+        )
+        lines = [
+            "⚠️ Mail konnte nicht sicher verarbeitet werden — kein Inhalt zugestellt.",
+            f"Von: {domain or 'unbekannt'}",
+            f"Betreff: {subject or '(kein Betreff)'}",
+            f"Stufe: {_label(notice.stage)} · Grund: {_label(notice.reason_class)}",
+            "Zum Lesen ins echte Postfach schauen.",
+        ]
+        return DigestMessage(
+            parts=self._finalize("\n".join(lines)),
+            importance="normal",
+            is_warning=False,
+            dedupe_key=notice.dedupe_key,
+        )
+
+    # --- Bausteine ----------------------------------------------------------------
+
+    def _finalize(self, text: str) -> list[str]:
+        """Nachbrenner + Split — der einzige Weg, auf dem Text `parts` erreicht."""
+        return split_parts(final_guard(text).strip(), self._part_limit)
+
+    def _banner(self, verdict: CriticVerdict, collector: LinkCollector) -> str:
+        """Warn-Banner bei `phishing_risk == "high"` (F-CRIT-2)."""
+        reasons = [
+            _one_line(scrub_field(reason, collector=collector, max_chars=_MAX_REASON_CHARS))
+            for reason in verdict.risk_reasons[:_MAX_RISK_REASONS]
+        ]
+        joined = ", ".join(reason for reason in reasons if reason)
+        return f"⚠️ PHISHING-VERDACHT: {joined}" if joined else "⚠️ PHISHING-VERDACHT"
+
+    def _sender_line(self, mail: SanitizedMail) -> str:
+        """`Von: <Anzeigename> (<domain>) · <TT.MM. HH:MM>`."""
+        display = _one_line(scrub_plain(mail.from_display, max_chars=_MAX_DISPLAY_CHARS))
+        domain = _one_line(scrub_plain(mail.from_domain, max_chars=_MAX_DOMAIN_CHARS))
+        if display and domain and display.lower() != domain.lower():
+            sender = f"{display} ({domain})"
+        else:
+            sender = display or domain or "unbekannt"
+        return f"Von: {sender} · {_format_date(mail.date)}"
+
+    def _attachment_summary_lines(
+        self, summary: Summary, collector: LinkCollector
+    ) -> list[str]:
+        """Je verarbeitetem Anhang eine Zeile `— <datei>: <1-2 Sätze>` (F-SUM-4)."""
+        lines: list[str] = []
+        for filename, text in list(summary.attachment_summaries.items())[
+            :_MAX_LISTED_ATTACHMENTS
+        ]:
+            name = _one_line(scrub_plain(filename, max_chars=_MAX_FILENAME_CHARS))
+            content = scrub_field(
+                text, collector=collector, max_chars=_MAX_ATTACHMENT_SUMMARY_CHARS
+            )
+            if not name and not content:
+                continue
+            lines.append(f"— {name or '(Datei)'}: {content or '(keine Zusammenfassung)'}")
+        return lines
+
+    def _unprocessed_line(self, attachments: list[AttachmentInfo]) -> str:
+        """`📎 Nicht verarbeitet: rechnung.docx (34 KB), setup.exe (1,2 MB)` (F-SEC-4)."""
+        blocked = [item for item in attachments if not item.processed]
+        if not blocked:
+            return ""
+        shown: list[str] = []
+        for item in blocked[:_MAX_LISTED_ATTACHMENTS]:
+            name = _one_line(
+                scrub_plain(item.filename_sanitized, max_chars=_MAX_FILENAME_CHARS)
+            )
+            shown.append(f"{name or '(ohne Namen)'} ({_format_size(item.size_bytes)})")
+        rest = len(blocked) - len(shown)
+        suffix = f" und {rest} weitere" if rest > 0 else ""
+        return f"📎 Nicht verarbeitet: {', '.join(shown)}{suffix}"
+
+    def _hints_line(
+        self,
+        report: SanitizationReport,
+        summary: Summary,
+        verdict: CriticVerdict,
+        collector: LinkCollector,
+    ) -> str:
+        """`🔍 Hinweise: …` aus deterministischen Signalen + Injection-Flag (T1/T12)."""
+        hints: list[str] = []
+        if summary.injection_suspected:
+            hints.append("Mail enthielt Anweisungen an die KI (ignoriert)")
+        failed_auth = [
+            f"{key.upper()}={value}"
+            for key, value in sorted(report.auth_results.items())
+            if value.lower() not in _AUTH_OK
+        ]
+        if failed_auth:
+            hints.append("Absender-Prüfung: " + ", ".join(failed_auth))
+        if report.punycode_domains:
+            hints.append("Punycode-Domain(s): " + ", ".join(report.punycode_domains[:3]))
+        if report.mixed_script_domains:
+            hints.append(
+                "gemischte Schriftsysteme: " + ", ".join(report.mixed_script_domains[:3])
+            )
+        if report.reply_to_mismatch:
+            hints.append("Antwortadresse weicht vom Absender ab")
+        if report.return_path_mismatch:
+            hints.append("Return-Path-Domain weicht ab")
+        if report.truncated:
+            hints.append("Text gekürzt")
+        if verdict.phishing_risk == "low" and verdict.risk_reasons:
+            reasons = [
+                _one_line(
+                    scrub_field(reason, collector=collector, max_chars=_MAX_REASON_CHARS)
+                )
+                for reason in verdict.risk_reasons[:_MAX_RISK_REASONS]
+            ]
+            joined = ", ".join(reason for reason in reasons if reason)
+            if joined:
+                hints.append(f"Kritiker: {joined}")
+        if not hints:
+            return ""
+        return "🔍 Hinweise: " + "; ".join(
+            _one_line(scrub_field(hint, collector=collector)) for hint in hints
+        )
+
+
+def _one_line(text: str) -> str:
+    """Presst ein Feld auf eine Zeile — Zeilenumbrüche würden das Format zerschießen."""
+    return " ".join(text.split())
+
+
+def _label(value: str) -> str:
+    """Normalisiert eine Stufen-/Fehlerklassen-Kennung auf ein knappes ASCII-Label (I5)."""
+    kept = [char if char.isalnum() or char in "_-" else " " for char in value[:64]]
+    return " ".join("".join(kept).split()) or "unbekannt"

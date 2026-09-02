@@ -705,3 +705,156 @@
   Ersatztext ist der einzige Summary-Text, der nicht vom Modell stammt — er ist deshalb
   nicht scrub-pflichtig, weil alle Bestandteile bereits durch den Sanitizer gegangen sind.
 
+## ADR-035: Output-Sanitizer in zwei Stufen — Feld-Scrub plus unabhängiger Nachbrenner
+- Status: accepted
+- WP / Datum: WP7, 2026-09-02
+- Kontext: Der Output-Sanitizer ist laut SECURITY §5 die letzte Schicht vor dem Nutzer
+  (I3/I4). Er muss (a) bereits vom WP3-Sanitizer erzeugte sichere Formen
+  (`[Link #n: domain]`, `[Tel #n]`, `hxxps[:]//evil[.]com`) unverändert durchreichen und
+  (b) in jedem anderen Textteil jede — auch rekonstruierte oder kodierte — Adresse
+  entschärfen. Beides zugleich in einer Regex-Schicht zu lösen führt zu einem
+  komplizierten Muster, dessen Lücken niemand mehr überblickt.
+- Entscheidung: Zwei Stufen. (1) `scrub_field` arbeitet je Feld: HTML-Entities bis Fixpunkt
+  auflösen (max. 3 Runden), `unicode_clean.clean_text` (NFKC + „C*"-Entfernung), optionale
+  Feldkürzung **vor** der Link-Erkennung, Tag-Strip inkl. Entfernen verbliebener `<`/`>`,
+  dann Segmentierung: sichere Formen werden per Regex erkannt und wörtlich übernommen, alle
+  übrigen Segmente laufen durch Markup-Neutralisierung und
+  `links.LinkCollector.scrub` (Wiederverwendung der WP3-Erkennung mit allen
+  Obfuskationspässen, ein Collector pro Nachricht ⇒ durchlaufende Marker-Nummerierung).
+  (2) `final_guard` läuft über die **fertige** Nachricht und ist bewusst trivial: lebende
+  Schemata brechen, `www.` brechen, `<`/`>` entfernen, `](` auftrennen, domain-/IPv4-artige
+  Token defangen. `DigestMessage.parts` entsteht ausschließlich über diesen Weg
+  (`DigestComposer._finalize`).
+- Alternativen: nur eine Regex-Schicht (Segmentierungslücken wären unmittelbar
+  I3-Verletzungen — konkret rutschte in einem Zwischenstand `http://evil.com/x[.]y` durch,
+  weil der `[.]`-Schutz tokenweit griff; der Nachbrenner fängt genau das ab); Markup
+  escapen statt entfernen (setzt einen Rendering-Modus voraus, den wir bewusst nicht
+  wählen); den WP3-Sanitizer erneut über die ganze Nachricht laufen lassen (würde eigene
+  Marker verschachteln und neu nummerieren).
+- Konsequenzen: Die Sicherheitsaussage hängt nicht mehr allein an der
+  Segmentierungs-Regex. Preis ist eine gewisse Über-Entfernung (Winkelklammern in „5 < 7",
+  ein Punkt in „usw.Dann" wird gebrochen) — fail-safe und dokumentiert. Die Property „kein
+  Teil enthält eine klickbare Adresse oder Markup" ist als Testfunktion `assert_safe` einmal
+  formuliert und wird über 25 Angriffs-Payloads sowie 300 zufällige Kombinationen geprüft.
+
+## ADR-036: Domain-Punkte werden im Output gebrochen — auch in Markern und Dateinamen
+- Status: accepted
+- WP / Datum: WP7, 2026-09-02 (im Finalisierungs-Review am selben Tag erweitert)
+- Kontext: I3 erlaubt ausdrücklich „bloßer Domain-Name in Textform", und ARCHITECTURE §7
+  zeigte genau das (`Von: rechnung@stadtwerke-x.de`, `[Link #n: evil.com]`). Telegram und
+  Discord verlinken jedoch nackte Domains im Klartext automatisch (Autolinker) — aus dem
+  „bloßen Domain-Namen" wird im Client wieder ein klickbares Ziel (T7). Dasselbe gilt für
+  Dateinamen mit TLD-kollidierender Endung (`rechnung.zip`, `bericht.app`).
+- Entscheidung: `final_guard` bricht in der fertigen Nachricht jeden Punkt eines
+  domainartigen Tokens, dessen letzte Marke 2–24 alphabetische Zeichen hat, sowie
+  IPv4-Adressen: `stadtwerke-x[.]de`, `[Link #1: evil[.]com]`, `rechnung[.]pdf`,
+  `192[.]168[.]0[.]1`. Struktur und Nummerierung der WP3-Marker bleiben unangetastet —
+  verändert wird nur die Punkt-Darstellung innerhalb der Domain. Zahlen (`3.14`), Kürzel mit
+  einbuchstabiger „TLD" (`z.B.`) und bereits defangte Formen bleiben unberührt.
+  **Ergänzung aus dem Finalisierungs-Review (2026-09-02):** (a) Gebrochen wird **jedes**
+  lebende Schema mit `://`, nicht nur `http(s)`/`ftp(s)` — `tg://` ist in Telegram selbst
+  ein anklickbarer Deep-Link, `steam://`/`file://` in anderen Clients ebenso; (b) für
+  Schemata ohne `//` (`javascript:`, `data:`, `vbscript:`, `tg:`, `intent:`, `market:`,
+  `smb:`) bleibt eine Namensliste unvermeidlich, weil `wort:wort` im Fließtext normal ist;
+  (c) die Punkt-Varianten U+3002/U+FF61 (`boese。example`) werden vor jeder Prüfung auf `.`
+  abgebildet — NFKC tut das nicht, IDN-fähige Clients behandeln sie aber als Label-Trenner.
+- Alternativen: Domains unverändert lassen (verlässt sich darauf, dass der Nutzer nicht auf
+  den Autolink tippt — genau das Risiko, das I3 ausschließen soll); nur Dateinamen mit
+  riskanter Endung defangen (Pflegeliste, dieselbe Klasse Fehler wie eine Blocklist);
+  Marker-Domains durch Platzhalter ersetzen (der Nutzer verlöre die für Phishing-Erkennung
+  wichtigste Information).
+- Konsequenzen: Die Nachricht weicht optisch vom früheren Beispiel in ARCHITECTURE §7 ab
+  (dort jetzt angepasst). Lesbarkeit leidet minimal, dafür ist keine Zeichenkette der
+  Nachricht mehr autolinkbar. Die Regel ist eine einzige Funktion und damit in WP12
+  grep-/testbar. Die Namensliste unter (b) ist die einzige Blocklist im Sanitizer-Pfad und
+  muss bei WP12 erneut geprüft werden.
+
+## ADR-037: Markup wird entfernt statt escaped; `_` bleibt erhalten
+- Status: accepted
+- WP / Datum: WP7, 2026-09-02
+- Kontext: Der Output-Sanitizer muss Markdown-/HTML-/Telegram-/Discord-Formatierungstricks
+  aus jedem Feld entfernen (T7). Escaping setzt voraus, dass man den Rendering-Modus des
+  Ziels kennt — Telegram bekommt laut ADR-006 gar keinen `parse_mode`, Discord rendert im
+  `content` immer Markdown. Ein Escape-Zeichen im falschen Modus ist selbst sichtbarer Müll.
+- Entscheidung: In untrusted Segmenten werden die Zeichen `` ` ``, `*`, `|`, `~`, `\`, `[`,
+  `]` ersatzlos gelöscht; tag-artige Sequenzen und alle `<`/`>` fallen ohnehin. `[`/`]`
+  fallen mit, damit weder ein Sanitizer-Marker gefälscht noch die Markdown-Link-Syntax
+  `[text](ziel)` zusammengesetzt werden kann; die *echten* Marker sind vor dieser Löschung
+  durch die Segmentierung geschützt. `_` bleibt erhalten: Es kann höchstens Kursivschrift
+  erzeugen, nie ein Ziel, und seine Löschung würde Dateinamen und Bezeichner zerstören. Der
+  Kürzungsmarker ist deshalb `…` statt `[…]`.
+- Alternativen: HTML-`parse_mode` mit hartem Escaping (PLAN nennt es als Option; es öffnet
+  einen Rendering-Modus, den wir sonst gar nicht brauchen — mehr Angriffsfläche für null
+  Nutzen); alle Sonderzeichen löschen inkl. `_` und Klammern (Lesbarkeitsverlust ohne
+  Sicherheitsgewinn, da ohne URL kein Ziel existiert).
+- Konsequenzen: Kursivschrift durch `_` ist in Discord weiterhin möglich (kosmetisch). Der
+  Nutzer sieht bei Angriffs-Mails leicht zerpflückten Text — gewollt: Er soll erkennen,
+  dass etwas entfernt wurde.
+
+## ADR-038: Eigene HTTP-Mechanik für Messenger statt Wiederverwendung von `llm/_http.py`
+- Status: accepted
+- WP / Datum: WP7, 2026-09-02
+- Kontext: Telegram und Discord brauchen dieselbe Retry-/Backoff-/Timeout-Politik wie die
+  LLM-Provider (nur 429/5xx, max. 3 Versuche, Backoff 1 s/2 s bzw. `Retry-After`, Timeouts
+  nicht wiederholt — ADR-023). `llm/_http.post_json` implementiert das bereits. Es wirft
+  aber `LLMTimeout`/`LLMRateLimited`/`LLMTransportError`, und `pipeline._ERROR_CLASSES`
+  bildet genau diese Namen auf `llm_*`-Fehlerklassen ab.
+- Entscheidung: `messenger/_http.request_json` als eigenständige, kleine Kopie der Politik
+  mit `MessengerError` als einziger Fehlerklasse (bereits als `delivery_error` in der
+  Pipeline-Tabelle vorgesehen). Zusätzlich unterstützt sie GET (Discord-Healthcheck) und
+  Antworten ohne Körper (Discord antwortet auf Webhook-Posts mit `204`).
+- Alternativen: `llm/_http` mit einem Exception-Mapping-Parameter generalisieren (Umbau an
+  fremdem, bereits abgenommenem WP4-Code; die gemeinsame Abstraktion müsste die
+  Fehlerdomäne beider Seiten kennen); Zustellfehler als LLM-Fehler durchreichen (die
+  Metadaten-Notiz nennte dem Nutzer und dem State die falsche Ursache — I6/NF-5 wären
+  formal erfüllt, praktisch aber irreführend).
+- Konsequenzen: ~60 Zeilen bewusste Duplikation. Ändert sich die Retry-Politik, müssen zwei
+  Stellen angefasst werden; beide Module verweisen im Docstring aufeinander, und WP12 kann
+  den Abgleich prüfen.
+
+## ADR-039: Signal-Adapter minimal — JSON-RPC über Unix-Socket, Zustellung an „Note to Self"
+- Status: accepted
+- WP / Datum: WP7, 2026-09-02
+- Kontext: PLAN.md WP7 verlangt den Signal-Adapter „optional, hinter Feature-Flag, Aufwand
+  begrenzen". Die Config (`[messenger.signal]`) kennt nur `enabled` und
+  `signal_cli_socket` — es gibt kein Feld für eine Empfängernummer, und das Config-Schema
+  gehört zu einem anderen Arbeitspaket.
+- Entscheidung: Der Adapter spricht mit `signal-cli --daemon --socket <pfad>` über
+  zeilengetrenntes JSON-RPC auf einem Unix-Domain-Socket (stdlib `socket`, keine neue
+  Dependency; Verbindungsfabrik injizierbar ⇒ testbar ohne Daemon). Gesendet wird `send`
+  mit `noteToSelf: true`, geprüft wird mit `version`. Kein Prozess-Management: Fehlt der
+  Daemon, gibt es eine deutsche Meldung samt Startbefehl statt eines Startversuchs.
+  Antwortmenge auf 1 MB gedeckelt.
+- Alternativen: Empfängernummer als neues Config-Feld (Scope-Verletzung in diesem WP;
+  Vorschlag für WP9 dokumentiert); signal-cli per Subprozess je Nachricht aufrufen
+  (Startkosten pro Nachricht, kein Fehlerkanal, und wir starten grundsätzlich keine fremden
+  Prozesse); Signal ganz weglassen (F-MSG-1 nennt es ausdrücklich als optionalen dritten
+  Adapter).
+- Konsequenzen: v0.1 stellt Signal-Nachrichten nur an das eigene Konto zu — für ein
+  persönliches Mail-Digest der Normalfall. Eine Empfängernummer
+  (`[messenger.signal] recipient`) ist in WP9 nachrüstbar, ohne den Adapter umzubauen (nur
+  `params` ändern sich).
+
+## ADR-040: Zeichenlimits je Messenger, Einzellimits je Feld, Split ohne Teil-Zähler
+- Status: accepted
+- WP / Datum: WP7, 2026-09-02
+- Kontext: PLAN.md nennt nur Telegrams 4096-Zeichen-Limit. Discord akzeptiert im `content`
+  eines Webhooks aber nur 2000 Zeichen; ein einzelnes entartetes LLM-Feld (Modell dreht
+  durch, Injection erzeugt Endlostext) könnte außerdem eine Nachricht aus hundert Teilen
+  erzeugen (T10).
+- Entscheidung: (a) Limit-Tabelle je Adapter (`telegram` 4096, `discord` 2000, `signal`
+  2000); unbekannte Namen bekommen das kleinste bekannte Limit. `DigestComposer.from_config`
+  zieht das Limit aus `[messenger] active`. (b) Zusätzlich Einzellimits je untrusted Feld
+  (Headline 120, Summary 3000, Anhang-Zusammenfassung 400, Kritiker-Grund 200, Anzeigename
+  80, Domain 100, Dateiname 80 Zeichen; höchstens 10 gelistete Anhänge, Rest als „und N
+  weitere", höchstens 5 Banner-Gründe) — Kürzung mit `…`-Marker. (c) Gesplittet wird an
+  Zeilengrenzen, überlange Einzelzeilen bevorzugt am Leerzeichen, notfalls hart; die Teile
+  bekommen **keinen** „(1/3)"-Zähler.
+- Alternativen: nur das Telegram-Limit verwenden (Discord-Zustellung würde bei langen Mails
+  hart abgelehnt); Felder unbegrenzt lassen und allein splitten (eine Mail könnte Dutzende
+  Nachrichten erzeugen); Teil-Zähler anhängen (verändert den bereits sanitisierten Text nach
+  dem Nachbrenner und kostet Platz im ohnehin knappen Limit — die Reihenfolge der Zustellung
+  ist im Messenger ohnehin sichtbar).
+- Konsequenzen: Sehr lange Zusammenfassungen werden sichtbar gekürzt statt gesplittet; das
+  ist gewollt (der Nutzer soll nicht 10 Nachrichten pro Mail bekommen). Ein hart
+  geschnittener Teil kann einen Marker kosmetisch zerreißen — nie klickbar.

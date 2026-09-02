@@ -177,15 +177,43 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `pipeline.process_mail` aus, inkl. F-CRIT-2-Anhebung) und die Nachrichten-Formatierung
   (WP7).
 
-
-### Output (`output/sanitizer.py`)
+### Output (`output/`)
 - Baut aus Summary + Verdict die `DigestMessage` (Format §7) und sanitisiert jedes Feld
   (URL-/Markdown-/HTML-Strip, Escaping, Längen-Split je Messenger).
+
+**Stand WP7 (ADR-035 bis ADR-040):** Zwei Module. `output/sanitizer.py` liefert
+`scrub_field` (Entity-Auflösung → `unicode_clean.clean_text` → optionale Feldkürzung →
+Tag-Strip → Segmentierung: WP3-Marker und bereits defangte Formen unverändert, alles andere
+Markup-Neutralisierung + `links.LinkCollector.scrub`), `scrub_plain` (dasselbe ohne
+Link-Erkennung, für Domain/Anzeigename/Dateiname), `final_guard` (Nachbrenner über die
+fertige Nachricht: jedes lebende Schema mit `://` sowie `javascript:`/`data:`-artige
+Schemata brechen, `www.` brechen, `<`/`>` entfernen, `](` auftrennen, Domains/IPv4 defangen)
+und `split_parts`. `output/composer.py` enthält `DigestComposer` (implementiert
+`OutputComposer` aus `pipeline.py` mit `compose` **und** `compose_failure`; `from_config`
+wählt das Messenger-Limit); `parts` entsteht ausschließlich über `_finalize()` =
+`final_guard` + `split_parts`. Ein `LinkCollector` pro Nachricht ⇒ durchlaufende
+Marker-Nummerierung über alle Felder.
 
 ### Messenger (`messenger/`)
 - Protokoll `Messenger.send(DigestMessage)`, `healthcheck()`.
 - `telegram.py` (Bot-API, reiner Text ohne parse_mode), `discord.py` (Webhook),
   `signal.py` (signal-cli JSON-RPC, Feature-Flag).
+
+**Stand WP7:** `base.py` = Adapter-Protokoll `send(DigestMessage)` + `healthcheck() -> bool`
+plus `MessengerError` (in `pipeline._ERROR_CLASSES` als `delivery_error` geführt) und die
+Konstanten `DEFAULT_TIMEOUT_SECONDS = 30.0`, `MAX_ATTEMPTS = 3`. Das Protokoll ist bewusst
+breiter als das gleichnamige in `pipeline.py` (die CLI braucht den Healthcheck).
+`_http.py` = eigene Retry-Mechanik mit der Politik der LLM-Schicht (nur 429/5xx, max. 3
+Versuche, Backoff 1 s/2 s bzw. `Retry-After`, Timeouts nicht wiederholt), Fehlermeldungen
+ohne URL/Header/Body (I5 — Telegram trägt das Token im Pfad). `telegram.py`:
+`POST {base_url}/bot<token>/sendMessage`, ein Request je Teil, **kein `parse_mode`**
+(ADR-006) und `disable_web_page_preview: true`; `ok: false` gilt trotz HTTP 200 als Fehler;
+Healthcheck über `getMe`. `discord.py`: Webhook-POST mit ausschließlich `content` und
+`allowed_mentions: {"parse": []}`, keine Embeds; Healthcheck über GET auf die Webhook-URL.
+`signal.py`: JSON-RPC (`send` mit `noteToSelf`, `version`) über Unix-Socket, hinter
+`[messenger.signal] enabled`. `factory.py`: `build_messenger(config)` wählt nach
+`[messenger] active` und wirft `ConfigError` bei fehlendem Token/Chat-ID/Webhook bzw. nicht
+freigeschaltetem Signal.
 
 ### State (`state/db.py`)
 - SQLite, Tabellen:
@@ -459,6 +487,11 @@ max_attachments_processed = 20
   tatsächlichen Code-Defaults.
 - Neben `load_config(path)` gibt es `load_config_from_dict(data)` für CLI (WP9) und Tests.
 
+**Offen für WP9 (aus WP7):** `[messenger.signal]` hat kein Empfängerfeld; der Adapter stellt
+deshalb an „Note to Self" zu (ADR-039). Für die Zustellung an eine andere Nummer wäre
+`[messenger.signal] recipient = ""` nötig — eigener ADR, weil es das Config-Schema
+erweitert.
+
 **Ergänzungen aus WP4 (ADR-025):**
 
 - `[llm] api_key` gilt für **beide** Rollen. Nutzt der Kritiker einen anderen *Cloud*-Provider
@@ -487,17 +520,43 @@ max_attachments_processed = 20
 - Prozess-Crash: State in SQLite so, dass Wiederanlauf idempotent ist (Status vor Versand
   committen ⇒ schlimmstenfalls eine Doppelzustellung, nie Verlust — als ADR festhalten).
 
-## 7. Nachrichtenformat (Referenz für WP7, final dort festschreiben)
+## 7. Nachrichtenformat (final festgeschrieben in WP7, `output/composer.py`)
 
 ```
-⚠️ PHISHING-VERDACHT: <risk_reasons, kommasepariert>          ← nur bei phishing_risk=high
-📧 <headline> [wichtig]                                        ← Tag nur bei high
-Von: <from_display> (<from_domain>) · <TT.MM. HH:MM>
+⚠️ PHISHING-VERDACHT: <risk_reasons, kommasepariert, max. 5>   ← nur bei phishing_risk = high
+📧 <headline> [wichtig]                                         ← Tag nur bei importance = high
+Von: <from_display> (<from_domain>) · <TT.MM. HH:MM>            ← ohne Anzeigename nur Domain;
+                                                                  ohne Date-Header „Datum unbekannt"
 <summary_text>
-<attachment_summaries als „— <datei>: <1–2 Sätze>">
-📎 Nicht verarbeitet: <datei (größe)>, …                       ← nur wenn vorhanden
-🔍 Hinweise: <injection_suspected/auth-fails/punycode-Hinweise> ← nur wenn vorhanden
+— <datei>: <1–2 Sätze je verarbeitetem Anhang>
+📎 Nicht verarbeitet: <datei (größe)>, … [und N weitere]        ← alle AttachmentInfo mit processed = false
+🔍 Hinweise: <Injection-Flag; Auth-Fails; Punycode; gemischte Schriftsysteme;
+              Reply-To-/Return-Path-Abweichung; Text gekürzt; Kritiker-Gründe bei risk = low>
 ```
+
+Verbindliche Zusatzregeln (WP7):
+
+1. **Alle** Domains und Dateinamen erscheinen mit gebrochenen Punkten
+   (`stadtwerke-x[.]de`, `rechnung[.]pdf`, auch innerhalb von `[Link #n: …]`-Markern) —
+   Telegram und Discord verlinken nackte Domains sonst automatisch (T7, ADR-036). Das
+   Beispiel oben ist entsprechend zu lesen.
+2. Einzellimits je untrusted Feld (Headline 120, Summary 3000, Anhangs-Zusammenfassung 400,
+   Kritiker-Grund 200, Anzeigename 80, Domain 100, Dateiname 80 Zeichen; max. 10 gelistete
+   Anhänge, max. 5 Banner-Gründe), Kürzung mit `…` (ADR-040).
+3. Split an Zeilengrenzen auf das Limit des aktiven Messengers (Telegram 4096, Discord 2000,
+   Signal 2000), ohne Teil-Zähler.
+4. Fail-closed-Notiz (`compose_failure`, F-OPS-3) — fünf Zeilen, ausschließlich Metadaten:
+
+   ```
+   ⚠️ Mail konnte nicht sicher verarbeitet werden — kein Inhalt zugestellt.
+   Von: <from_domain>
+   Betreff: <not-sanitisierter Betreff>
+   Stufe: <stage> · Grund: <reason_class>
+   Zum Lesen ins echte Postfach schauen.
+   ```
+
+   `importance = normal`, `is_warning = false`; Stufe und Grund werden auf
+   `[A-Za-z0-9_-]`-Labels normalisiert (I5).
 
 Sammel-Digest (täglich): eine Nachricht, gruppiert nach Kategorie, je Mail eine Zeile
 `• <headline> (<from_domain>)`.

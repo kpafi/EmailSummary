@@ -41,7 +41,7 @@ gemacht**:
 | T4 | Malware/Makrovirus im Anhang (docx, xlsm, exe, js, iso, zip …) | Allowlist: Anhänge außer PDF/Text werden nie geöffnet, nur Metadatum (F-SEC-4, WP3) |
 | T5 | Exploit gegen den PDF-Parser | Extraktion in Subprozess mit Timeout/Memory/Größen-Limits (I7); Absturz ⇒ Anhang unverarbeitet (WP3) |
 | T6 | Gefälschter MIME-Typ (exe als „application/pdf") | Magic-Bytes-Verifikation (WP3) |
-| T7 | Markdown-/Formatierungs-Injection Richtung Messenger (Telegram-Markup als Link-Ersatz) | Kein parse_mode bzw. hartes Escaping; Output-Sanitizer-Whitelist (WP7) |
+| T7 | Markdown-/Formatierungs-Injection Richtung Messenger (Telegram-Markup als Link-Ersatz) | Kein `parse_mode` (Telegram), nur `content` ohne Embeds (Discord); Output-Sanitizer löscht Markup-Zeichen und bricht alle Domain-Punkte sowie jedes lebende Schema (WP7, ADR-036/037) |
 | T8 | Halluzination: Summarizer erfindet harmlosen Inhalt für Phishing-Mail | Kritiker prüft Summary gegen Mail (`summary_accurate`); false ⇒ fail-closed (WP6) |
 | T9 | Injection instruiert Summarizer, Phishing als „wichtig & legitim" zu framen | Kritiker sieht Rohtext (sanitisiert) unabhängig; deterministische Signale (Domain-Checks etc.) sind nicht vom LLM beeinflussbar (WP6) |
 | T10 | Ressourcen-Erschöpfung (Mail-Bombe, 100-MB-Mails, MIME-Rekursion) | Größenlimits auf jeder Stufe, Rekursionstiefe begrenzt, Zeichenlimits (WP3), Rate-Limit im Poll-Loop (WP8) |
@@ -152,6 +152,18 @@ Unicode-`C*`-Zeichen aus jedem Textfeld und setzt bei jedem Fund `injection_susp
 true`. Sie normalisiert bewusst **nicht** nach NFKC — Fullwidth-Formen, nackte IPs und
 nackte Domains passieren sie und werden erst von Schicht 6 entschärft (ADR-033). Schicht 5
 (Kritiker) folgt in WP6.
+
+**Stand der Umsetzung (WP7, Schicht 6 — ADR-035 bis ADR-040):** Verbindliche Politik des
+Output-Sanitizers: Jedes Feld durchläuft Entity-Auflösung (bis Fixpunkt), NFKC +
+`C*`-Entfernung, Feldkürzung, Tag-Strip, Markup-Löschung und Link-Scrub; bereits defangte
+WP3-Formen werden unverändert durchgereicht. Über der **fertigen** Nachricht läuft ein
+zweiter, von der Segmentierung unabhängiger Nachbrenner (`final_guard`): jedes lebende
+Schema mit `://` sowie `javascript:`/`data:`-artige Schemata brechen, `www.` brechen,
+Winkelklammern entfernen, `](` auftrennen, Domains und IPv4 defangen. Domains und Dateinamen
+erscheinen ausschließlich mit gebrochenen Punkten, weil Messenger nackte Domains automatisch
+verlinken (T7); die IDN-Punktvarianten U+3002/U+FF61 werden vorher auf `.` abgebildet.
+Zustellung erfolgt ohne `parse_mode` und ohne Embeds. `DigestMessage.parts` entsteht
+ausschließlich über `DigestComposer._finalize()` — es gibt keinen zweiten Weg zum Messenger.
 
 ## 6. Betriebssicherheit
 
