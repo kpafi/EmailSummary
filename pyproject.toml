@@ -22,11 +22,14 @@ dependencies = [
 maildigest = "maildigest.cli:run_cli"
 
 [project.optional-dependencies]
+# `hypothesis` ist Dev-only (Property-Based-Tests, WP10/ADR-058). NF-1/NF-2 begrenzen
+# ausschließlich die Laufzeit-Dependencies oben — `src/maildigest/` importiert es nie.
 dev = [
     "pytest",
     "pytest-cov",
     "ruff",
     "mypy",
+    "hypothesis",
 ]
 
 # src-Layout: Wheel enthält genau das Paket unter src/.

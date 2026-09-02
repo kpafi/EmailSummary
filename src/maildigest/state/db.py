@@ -27,16 +27,18 @@ Primärschlüssel ``message_id_hash`` — genau der erste Aufruf gewinnt, jeder 
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
-from typing import Final
+from typing import Final, ParamSpec, TypeVar
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -107,7 +109,37 @@ CREATE INDEX IF NOT EXISTS idx_outbox_mail ON outbox(message_id_hash);
 
 
 class StateError(Exception):
-    """Die State-Datenbank ist nicht benutzbar (I/O-Fehler, fremdes Schema, Schema-Version)."""
+    """Die State-Datenbank ist nicht benutzbar (I/O-Fehler, fremdes Schema, Schema-Version).
+
+    Gilt für den gesamten Lebenszyklus, nicht nur fürs Öffnen: Jede öffentliche Methode von
+    :class:`StateDB` verpackt `sqlite3.Error` in diesen Typ (HT-3). Ein schreibgeschütztes
+    oder volles Dateisystem erreicht die Pipeline dadurch als dokumentierter Fehler mit der
+    Fehlerklasse ``state_error`` (``pipeline._ERROR_CLASSES``) statt als roher
+    `sqlite3.OperationalError`, den die CLI nur noch als Traceback zeigen könnte.
+    """
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _wrap_sqlite_errors(func: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Verpackt `sqlite3.Error` einer Methode in :class:`StateError`.
+
+    Die Meldung enthält nur den Methodennamen und den SQLite-Text (Dinge wie „attempt to
+    write a readonly database") — nie Mail-Inhalt, nie Secrets (I5).
+    """
+
+    @functools.wraps(func)
+    def inner(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            return func(*args, **kwargs)
+        except sqlite3.Error as exc:
+            raise StateError(
+                f"State-Datenbank nicht benutzbar ({func.__name__}): {exc}"
+            ) from exc
+
+    return inner
 
 
 class MailState(StrEnum):
@@ -329,6 +361,7 @@ class StateDB:
 
     # --- seen_mails -----------------------------------------------------------------------
 
+    @_wrap_sqlite_errors
     def claim(self, dedupe_key: str, *, now: datetime | None = None) -> bool:
         """Reserviert eine Mail zur Verarbeitung — der Kern der Idempotenz (F-ING-2).
 
@@ -350,6 +383,7 @@ class StateDB:
             )
         return cursor.rowcount == 1
 
+    @_wrap_sqlite_errors
     def was_seen(self, dedupe_key: str) -> bool:
         """True, wenn zu diesem Dedupe-Key bereits ein Datensatz existiert."""
         row = self._conn.execute(
@@ -357,6 +391,7 @@ class StateDB:
         ).fetchone()
         return row is not None
 
+    @_wrap_sqlite_errors
     def mark_status(
         self,
         dedupe_key: str,
@@ -386,6 +421,7 @@ class StateDB:
                 (dedupe_hash(dedupe_key), timestamp, status.value, cleaned),
             )
 
+    @_wrap_sqlite_errors
     def promote_checked_to_delivered(self, message_id_hash: str, *, delivered: bool) -> None:
         """Schließt eine Mail ab, deren Zustellung aus der Warteschlange kam (ADR-048).
 
@@ -410,6 +446,7 @@ class StateDB:
                 (status.value, error_class, message_id_hash, MailState.CHECKED.value),
             )
 
+    @_wrap_sqlite_errors
     def get(self, dedupe_key: str) -> SeenMail | None:
         """Liest den Datensatz zu einem Dedupe-Key; ``None``, wenn unbekannt."""
         row = self._conn.execute(
@@ -427,6 +464,7 @@ class StateDB:
             retry_count=int(row["retry_count"]),
         )
 
+    @_wrap_sqlite_errors
     def increment_retry(self, dedupe_key: str) -> int:
         """Erhöht den Retry-Zähler und gibt den neuen Wert zurück (0, wenn unbekannt)."""
         with self._conn:
@@ -437,6 +475,7 @@ class StateDB:
         record = self.get(dedupe_key)
         return 0 if record is None else record.retry_count
 
+    @_wrap_sqlite_errors
     def count_by_status(self, status: MailState) -> int:
         """Anzahl der Mails in einem Status (für Betriebs-/Testauswertung)."""
         row = self._conn.execute(
@@ -446,6 +485,7 @@ class StateDB:
 
     # --- low_digest_queue -------------------------------------------------------------------
 
+    @_wrap_sqlite_errors
     def queue_low(
         self,
         dedupe_key: str,
@@ -477,6 +517,7 @@ class StateDB:
             )
         return int(cursor.lastrowid or 0)
 
+    @_wrap_sqlite_errors
     def low_digest_entries(self) -> list[LowDigestEntry]:
         """Alle wartenden Sammel-Digest-Einträge in Eingangsreihenfolge."""
         rows = self._conn.execute(
@@ -495,6 +536,7 @@ class StateDB:
             for row in rows
         ]
 
+    @_wrap_sqlite_errors
     def clear_low_digest(self, ids: list[int]) -> None:
         """Entfernt zugestellte Sammel-Digest-Einträge (nach erfolgreicher Zustellung)."""
         if not ids:
@@ -506,6 +548,7 @@ class StateDB:
 
     # --- outbox ------------------------------------------------------------------------------
 
+    @_wrap_sqlite_errors
     def enqueue_outbox(
         self,
         dedupe_key: str,
@@ -538,6 +581,7 @@ class StateDB:
             )
         return int(cursor.lastrowid or 0)
 
+    @_wrap_sqlite_errors
     def outbox_due(self, *, now: datetime | None = None, limit: int = 50) -> list[OutboxItem]:
         """Alle fälligen Zustellungen (ältester Eintrag zuerst)."""
         timestamp = (now or datetime.now(UTC)).isoformat()
@@ -564,11 +608,13 @@ class StateDB:
             )
         return items
 
+    @_wrap_sqlite_errors
     def outbox_done(self, item_id: int) -> None:
         """Entfernt eine zugestellte (oder endgültig aufgegebene) Nachricht."""
         with self._conn:
             self._conn.execute("DELETE FROM outbox WHERE id = ?", (item_id,))
 
+    @_wrap_sqlite_errors
     def outbox_defer(
         self, item_id: int, *, next_attempt_at: datetime, error_class: str | None = None
     ) -> None:
@@ -580,6 +626,7 @@ class StateDB:
                 (next_attempt_at.isoformat(), _clean_error_class(error_class), item_id),
             )
 
+    @_wrap_sqlite_errors
     def outbox_pending(self, dedupe_key: str) -> bool:
         """True, wenn zu dieser Mail noch eine Zustellung aussteht."""
         row = self._conn.execute(
@@ -588,6 +635,7 @@ class StateDB:
         ).fetchone()
         return row is not None
 
+    @_wrap_sqlite_errors
     def outbox_size(self) -> int:
         """Anzahl wartender Zustellungen (Betriebs-/Testauswertung)."""
         row = self._conn.execute("SELECT COUNT(*) AS n FROM outbox").fetchone()
@@ -595,11 +643,13 @@ class StateDB:
 
     # --- meta -----------------------------------------------------------------------------
 
+    @_wrap_sqlite_errors
     def meta_get(self, key: str) -> str | None:
         """Liest einen Wert aus der `meta`-Tabelle."""
         row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return None if row is None else str(row["value"])
 
+    @_wrap_sqlite_errors
     def meta_set(self, key: str, value: str) -> None:
         """Setzt einen Wert in der `meta`-Tabelle (Upsert)."""
         with self._conn:

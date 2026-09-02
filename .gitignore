@@ -19,3 +19,6 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Property-Based-Tests (hypothesis, ADR-058): Beispiel-Datenbank ist lokaler Cache
+.hypothesis/

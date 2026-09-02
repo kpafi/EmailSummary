@@ -70,7 +70,7 @@ _STRUCTURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 #: Domain-Namen als Text), und der Output-Sanitizer (WP7) prüft ohnehin noch einmal.
 _URL_TOKEN_RE = re.compile(
     r"""(?xi)
-      [a-z][a-z0-9+.\-]{1,15}://          # irgendein Schema mit ://
+      [a-z][a-z0-9+.\-]{0,15}://          # irgendein Schema mit :// (auch einbuchstabig)
     | h\W{0,2}x\W{0,2}x\W{0,2}p           # hxxp / h.x.x.p
     | \bwww\s*\.                          # www.
     | \bmailto\s*:                        # mailto:

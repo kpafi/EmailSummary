@@ -71,17 +71,42 @@ _RE_MARKUP = re.compile("[" + re.escape(_MARKUP_CHARS) + "]")
 _RE_TAG = re.compile(r"<[^<>]{0,400}>")
 _RE_ANGLE = re.compile(r"[<>]")
 
-#: Ein bereits defangtes Fragment: normales Zeichen oder ein `[.]`/`[:]`-Token.
-_DEFANGED_ATOM = r"(?:[^\s\[\]]|\[[.:]\])"
+#: Markup-Zeichen als Zeichenklassen-Inhalt (für die Ausschlüsse unten).
+_MARKUP_CLASS = re.escape(_MARKUP_CHARS)
 
-#: Vom WP3-Sanitizer erzeugte, bereits sichere Formen (ADR-028). Werden unverändert
-#: durchgereicht — erneutes Scrubben würde Marker verschachteln und die Nummerierung
-#: zerstören.
+#: Ein bereits defangtes Fragment: normales Zeichen oder ein `[.]`/`[:]`-Token.
+#: Markup-Zeichen sind hier **ausgeschlossen** (HT-1): Der WP3-Sanitizer erzeugt in
+#: defangten Formen nie ein ``*``/``|``/``~``/Backtick — steht dort eines, ist der Span in
+#: Wahrheit vom Modell gebaut und darf die Markup-Neutralisierung nicht überspringen.
+_DEFANGED_ATOM = rf"(?:[^\s{_MARKUP_CLASS}]|\[[.:]\])"
+
+#: Inhalt eines `[Link #n: …]`-Markers: wie oben, aber Leerzeichen sind erlaubt
+#: (`(Achtung: Punycode)`), Zeilenumbrüche nicht.
+_MARKER_ATOM = rf"(?:[^\n{_MARKUP_CLASS}]|\[[.:]\])"
+
+#: Schema-Namen ohne `//`, die in Messengern als Aktion gelten (ADR-036). Einmal
+#: definiert, zweimal gebraucht: zum Brechen im Nachbrenner und zum Wiedererkennen der
+#: bereits gebrochenen Form als „sichere Form".
+_BARE_SCHEME_NAMES = "javascript|vbscript|data|tg|intent|market|smb"
+
+#: Vom WP3-Sanitizer erzeugte bzw. vom Nachbrenner hinterlassene, bereits sichere Formen
+#: (ADR-028/ADR-036). Werden unverändert durchgereicht — erneutes Scrubben würde Marker
+#: verschachteln und die Nummerierung zerstören.
+#:
+#: Die gebrochenen Aktions-Schemata (``javascript[:]``) gehören ausdrücklich dazu (HT-6):
+#: Ohne sie riss ein **zweiter** Durchlauf die Klammern als Markup wieder heraus und machte
+#: aus ``javascript[:]`` erneut ``javascript:``. Zweite Durchläufe sind real — der Composer
+#: scrubbt Hinweiszeilen und die bereits sanitisierten Sammel-Digest-Kopfzeilen (ADR-049)
+#: ein weiteres Mal.
 _RE_SAFE_SPAN = re.compile(
-    r"\[(?:Link|Mail) #\d{1,5}: (?:[^\[\]\n]|\[[.:]\]){1,200}\]"
+    rf"\[(?:Link|Mail) #\d{{1,5}}: {_MARKER_ATOM}{{1,200}}\]"
     r"|\[Tel #\d{1,5}\]"
-    rf"|(?:hxxps?|fxps?|mailto|tel)\[:\]{_DEFANGED_ATOM}{{0,300}}"
+    rf"|(?:hxxps?|fxps?|mailto|tel|{_BARE_SCHEME_NAMES})\[:\]{_DEFANGED_ATOM}{{0,300}}"
     rf"|{_DEFANGED_ATOM}{{0,120}}\[\.\]{_DEFANGED_ATOM}{{0,120}}"
+    # Einzelnes Defang-Token ohne Kontext. Es entsteht, wenn der Nachbrenner eine
+    # `](`-Naht auftrennt und dabei ein `[:]`/`[.]` aus seinem Wort löst (HT-6). Ohne
+    # diese Alternative fräste der nächste Durchlauf die Klammern wieder heraus.
+    r"|\[[.:]\]"
 )
 
 #: Lebendes URL-Schema (auch mit eingeschobenen Leerzeichen) — wird im Nachbrenner
@@ -93,15 +118,19 @@ _RE_LIVE_SCHEME = re.compile(r"(?i)\b(h\s*t\s*t\s*p\s*s?|f\s*t\s*p\s*s?)\s*:\s*/
 #: (Allowlist-Haltung: nicht „welche Schemata sind gefährlich", sondern „kein lebendes
 #: Schema überlebt"). Läuft **nach** :data:`_RE_LIVE_SCHEME`, dessen Treffer danach kein
 #: `:` mehr tragen.
-_RE_LIVE_SCHEME_ANY = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,15})\s*:\s*/\s*/")
+#:
+#: Der Schema-Name ist **optional** und **ohne** ``\b`` verankert (HT-2): Gebrochen wird
+#: die Sequenz ``://`` selbst, nicht der Name davor. Mit Pflicht-Name und Wortgrenze
+#: überlebte ``einsehrlangeswort://ziel`` die Regel — der Name war länger als das
+#: Zeichenlimit, und links davon stand keine Wortgrenze. In einer fertigen Nachricht ist
+#: ``://`` nie legitim, also darf die Regel hier großzügig zuschlagen.
+_RE_LIVE_SCHEME_ANY = re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,15})?\s*:\s*/\s*/")
 
 #: Schemata **ohne** `//`, die in Messengern trotzdem als Aktion interpretiert werden
 #: können. Hier ist eine Namensliste unvermeidlich: `wort:wort` ist im Fließtext normal,
 #: eine generische Regel würde „Achtung:Bitte" zerlegen. Der Fund wird nur gebrochen,
 #: wenn direkt ein Nicht-Leerzeichen folgt.
-_RE_LIVE_SCHEME_BARE = re.compile(
-    r"(?i)\b(javascript|vbscript|data|tg|intent|market|smb)\s*:(?=\S)"
-)
+_RE_LIVE_SCHEME_BARE = re.compile(rf"(?i)\b({_BARE_SCHEME_NAMES})\s*:(?=\S)")
 
 _RE_LIVE_WWW = re.compile(r"(?i)\bwww\s*\.")
 
@@ -112,8 +141,19 @@ _IDN_DOTS = str.maketrans({"。": ".", "｡": "."})
 
 #: Domainartiges Token (mind. zwei Labels). Die Entscheidung, ob defangt wird, fällt in
 #: :func:`_defang_domain_match` — nur so bleiben „3.14" oder „z.B." unangetastet.
+#: Zwei bewusste Abweichungen vom naheliegenden `\b…\b` (beide HT-4):
+#:
+#: * **ASCII statt `\w`:** `\w` ist Unicode-fähig, weshalb `evil.comÄ` gar nicht erst als
+#:   Token erkannt und damit nie defangt wurde — ein Nicht-ASCII-Buchstabe direkt hinter
+#:   der TLD reichte, um den Nachbrenner auszuhebeln.
+#: * **Bindestrich/Unterstrich links erlaubt:** Ein vorangestelltes `-` machte aus
+#:   `evil.example` ein `-evil.example`, das die Regel komplett verfehlte. Messenger
+#:   verlinken trotzdem, weil ein Label nicht mit `-` beginnen darf und ihr Linkifier dort
+#:   neu ansetzt. Der Match darf deshalb hinter einem `-` beginnen; nur mitten in einem
+#:   alphanumerischen Lauf neu anzusetzen wäre sinnlos (der Lauf ist schon konsumiert).
 _RE_DOMAINISH = re.compile(
-    r"(?<![\w\-])[a-z0-9](?:[a-z0-9\-]{0,62})(?:\.[a-z0-9\-]{1,63})+(?![\w\-])",
+    r"(?<![A-Za-z0-9])[a-z0-9](?:[a-z0-9\-]{0,62})(?:\.[a-z0-9\-]{1,63})+"
+    r"(?![A-Za-z0-9_\-])",
     re.IGNORECASE,
 )
 
@@ -239,18 +279,29 @@ def _break_scheme(match: re.Match[str]) -> str:
 
 
 def _defang_domain_match(match: re.Match[str]) -> str:
-    """Defangt ein domainartiges Token, wenn seine letzte Marke wie eine TLD aussieht.
+    """Defangt ein domainartiges Token, sobald **irgendeine** Marke wie eine TLD anfängt.
 
     Hintergrund (T7): Telegram und Discord verlinken nackte Domains im Klartext
     automatisch. I3 erlaubt zwar „bloßer Domain-Name in Textform", aber genau diese
     Autolinker machen daraus wieder ein klickbares Ziel. Deshalb bekommt jede Domain —
     auch die in einem `[Link #n: …]`-Marker und in Dateinamen — gebrochene Punkte.
+
+    Geprüft wird **jede** Marke ab der zweiten, nicht nur die letzte (HT-4). Grund ist die
+    Reihenfolge im Composer: Der Nachbrenner läuft vor :func:`split_parts`, und ein harter
+    Schnitt kann aus einem unauffälligen Token ein Bruchstück mit neuem Ende machen —
+    aus ``evil.com.123abc`` (letzte Marke ziffernbeginnend, früher unangetastet) wurde beim
+    Schnitt ``evil.com``, also wieder eine lebende Domain. Da jede Marke geprüft wird, kann
+    kein Bruchstück mehr TLD-förmig enden, ohne dass das Token schon gebrochen war.
+
+    „TLD-förmig" heißt: mindestens zwei Zeichen lang und mit zwei Buchstaben beginnend.
+    Damit bleiben Zahlen unangetastet — ``3.14``, ``1.2.3`` und ``2.0rc1`` sind keine
+    Domains und sollen lesbar bleiben.
     """
     token = match.group(0)
-    last_label = token.rsplit(".", 1)[-1]
-    if not (2 <= len(last_label) <= 24 and last_label.isalpha()):
-        return token
-    return token.replace(".", "[.]")
+    labels = token.split(".")
+    if any(len(label) >= 2 and label[:2].isalpha() for label in labels[1:]):
+        return token.replace(".", "[.]")
+    return token
 
 
 def final_guard(text: str) -> str:
@@ -264,7 +315,7 @@ def final_guard(text: str) -> str:
     Nachricht danach keine anklickbare Adresse mehr enthalten (I3).
     """
     guarded = _RE_LIVE_SCHEME.sub(_break_scheme, text.translate(_IDN_DOTS))
-    guarded = _RE_LIVE_SCHEME_ANY.sub(lambda m: f"{m.group(1)}[:]//", guarded)
+    guarded = _RE_LIVE_SCHEME_ANY.sub(lambda m: f"{m.group(1) or ''}[:]//", guarded)
     guarded = _RE_LIVE_SCHEME_BARE.sub(lambda m: f"{m.group(1)}[:]", guarded)
     guarded = _RE_LIVE_WWW.sub("www[.]", guarded)
     guarded = _RE_ANGLE.sub("", guarded)

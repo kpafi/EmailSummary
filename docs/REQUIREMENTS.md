@@ -53,9 +53,9 @@
 | NF-3 | Konfiguration vollständig über eine `config.toml` + Env-Vars; keine Datenbank-Migrationstools. | done (WP1 + WP8 + WP9) — jedes Feld ist in docs/SPEC-CLI.md §5 mit Default dokumentiert und wird von einem Test gegen das Schema abgeglichen; Schema-Upgrade der DB additiv im Code (ADR-048) |
 | NF-4 | Verarbeitungslatenz pro Mail < 60 s unter Normalbedingungen (exkl. LLM-Ausreißer). | open |
 | NF-5 | Logs strukturiert, ohne Mail-Inhalte und ohne PII über Absender-Domain + gehashte Message-ID hinaus. | done (WP2 + WP8) — JSON-Zeilen auf stdout, Level aus `[general] log_level`, nicht serialisierbare `extra`-Werte werden auf ihren Typnamen reduziert; Tracebacks nur bei DEBUG (ADR-046/047) |
-| NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | in-progress (`output/` liegt seit WP7 bei rund 98 % Zeilenabdeckung) |
+| NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | done (WP10) — `sanitize/` 98 %, `output/` 99 %, gesamt 97 % bei 1103 Tests; Messwerte und Restlücken in docs/TESTING.md §5. Ergänzt um Property-Based-Tests (hypothesis, Dev-only, ADR-058), Fehlerinjektion an jeder Stufe und den Findings-Log HT-1…HT-12 |
 | NF-7 | Doku-Pflicht: REQUIREMENTS/ARCHITECTURE/SECURITY/DECISIONS werden in jedem WP mitgepflegt; SPEC-CLI.md ist vollständiger CLI-Vertrag. | in-progress (WP9) — SPEC-CLI.md liegt vor und wird von `tests/unit/test_spec_cli.py` maschinell gegen argparse und das Config-Schema abgeglichen; die laufende Mitpflege endet erst mit WP12 |
-| NF-8 | Zwei unabhängige Testdurchläufe: Hot (Whitebox) und Cold (Blackbox durch Agent ohne Code-Zugriff) gemäß TESTING.md. | open |
+| NF-8 | Zwei unabhängige Testdurchläufe: Hot (Whitebox) und Cold (Blackbox durch Agent ohne Code-Zugriff) gemäß TESTING.md. | in-progress — Hot-Durchlauf abgeschlossen (WP10, Findings-Log in docs/TESTING.md §5); der Cold-Durchlauf folgt in WP11 |
 
 ## 4. Explizit außerhalb des Scopes (v0.1)
 

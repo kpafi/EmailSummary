@@ -179,6 +179,31 @@ verlinken (T7); die IDN-Punktvarianten U+3002/U+FF61 werden vorher auf `.` abgeb
 Zustellung erfolgt ohne `parse_mode` und ohne Embeds. `DigestMessage.parts` entsteht
 ausschließlich über `DigestComposer._finalize()` — es gibt keinen zweiten Weg zum Messenger.
 
+**Nachgeschärft in WP10 (Hot-Testing, ADR-059/ADR-060; Befunde HT-1…HT-6 in
+docs/TESTING.md §5):** Vier Details dieser Politik hielten nicht, was der Absatz oben
+zusagt. Verbindlich ist jetzt zusätzlich:
+
+- Der Nachbrenner läuft **nach** der Segmentierung über **jeden einzelnen Nachrichtenteil**,
+  nicht nur über die ungeteilte Nachricht (ADR-059). Zugestellt wird der Teil; ein harter
+  Schnitt in `split_parts` konnte vorher aus einem unauffälligen Token ein Bruchstück
+  machen, das erst für sich genommen wie eine Domain aussah.
+- Ein Token wird defangt, sobald **irgendeine** seiner Marken ab der zweiten TLD-förmig
+  beginnt (zwei Zeichen, davon zwei Buchstaben) — nicht nur, wenn die letzte es ist. Die
+  Token-Grenzen sind ASCII und lassen einen Treffer hinter `-`/`_` beginnen; `evil.comÄ`
+  und `-evil.example` entgingen der Regel sonst vollständig.
+- Gebrochen wird die Sequenz `://` selbst, unabhängig von Länge und Wortgrenze des
+  Schema-Namens davor.
+- „Bereits sichere Formen" werden **ohne** Markup-Zeichen definiert (`` ` `` `*` `|` `~` `\`
+  gehören nie zu einer WP3-Form) und umfassen umgekehrt auch die gebrochenen
+  Aktions-Schemata (`javascript[:]`) sowie das nackte `[.]`/`[:]`. Ersteres verhinderte
+  Markup-Schmuggel, Letzteres das Wiederaufbrechen eines Defang-Tokens im zweiten
+  Scrub-Durchlauf — den es real gibt (Hinweiszeilen, Sammel-Digest-Kopfzeilen nach ADR-049).
+
+Die Zusage aus ADR-035 („die Invariante I3 hängt nicht an der Korrektheit der
+Segmentierungs-Regex") gilt damit auch für das, was der Nutzer tatsächlich sieht. Geprüft
+wird sie nicht mehr nur an Beispiel-Payloads, sondern als Allaussage über zufällige
+Eingaben (`tests/unit/test_hot_properties.py`, ADR-058).
+
 ## 6. Betriebssicherheit
 
 - Config `0600`; Secrets bevorzugt via Env (`MAILDIGEST_IMAP_PASSWORD`,

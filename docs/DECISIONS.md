@@ -1270,3 +1270,88 @@
 - Konsequenzen: `maildigest test` sagt nichts über die IMAP-Verbindung aus — dafür ist
   `connect-mail` zuständig. Ein Zustellfehler im Selbsttest bleibt in der temporären
   Warteschlange liegen und wird nicht wiederholt; die CLI meldet das als Exit-Code 1.
+
+## ADR-058: `hypothesis` als Dev-Dependency für Property-Based-Tests
+- Status: accepted
+- WP / Datum: WP10, 2026-09-02
+- Kontext: docs/TESTING.md §2 Punkt 3 verlangt Property-Based-Tests für Output-Sanitizer,
+  Link-Erkennung und Unicode-Cleaning. Die zentrale Zusage dieser Schichten ist eine
+  Allaussage („∀ Eingabe-String: kein Link, kein Tag, kein Markup, kein Steuerzeichen"),
+  und Allaussagen lassen sich mit handverlesenen Payloads nur illustrieren, nicht prüfen.
+  Der bis WP9 benutzte Ersatz — ein `random.Random` mit fester Saat über einer Payload-Liste
+  (`tests/unit/test_output_sanitizer.py`) — findet nur, was jemand vorher als gefährlich
+  erkannt hat, und schrumpft ein Gegenbeispiel nicht auf seinen Kern.
+- Entscheidung: `hypothesis` wird als **Dev-Dependency** in `pyproject [project.optional-
+  dependencies] dev` aufgenommen. NF-1 („Laufzeit-Dependencies ≤ 8 Pakete") und NF-2
+  („neue Laufzeit-Dependency nur mit ADR") betreffen ausdrücklich die **Laufzeit**: Was ein
+  Nutzer auf seinem VPS/Pi installiert, ist `pip install maildigest` und damit
+  `[project] dependencies` — dort ändert sich nichts. `src/maildigest/` importiert
+  `hypothesis` nirgends; ein Import dort wäre ein Fehler, der im Betrieb sofort als
+  `ModuleNotFoundError` aufschlüge. Damit ist die Aufnahme kostenneutral für NF-1.
+- Alternativen: (a) Beim eigenen Zufalls-Fuzzer bleiben — er hat die in WP10 gefundenen
+  Lücken HT-1/HT-2/HT-4/HT-6 über neun WPs hinweg nicht gefunden, weil sein Alphabet aus
+  fertigen Payloads bestand und nie ein `[.]` neben ein `*` setzte. (b) Einen eigenen
+  Generator + Shrinker schreiben — das ist genau `hypothesis`, nur schlechter und als
+  Eigenentwicklung ungetestet. (c) Property-Tests weglassen — widerspricht TESTING.md §2.
+- Konsequenzen: `pip install -e .[dev]` zieht `hypothesis` und `sortedcontainers`.
+  Property-Tests sind nicht deterministisch: Jeder Lauf zieht neue Beispiele, ein bisher
+  unentdecktes Gegenbeispiel kann also in einem *späteren* Lauf auftauchen. Das ist der
+  Zweck, macht CI-Läufe aber prinzipiell „flakig nach oben" — ein neuer Fehlschlag ist
+  ein Befund, kein Infrastrukturproblem, und gehört als HT-Eintrag ins Findings-Log.
+  Gegenbeispiele werden zusätzlich als Beispiel-Test festgepinnt
+  (`tests/unit/test_hot_edge_cases.py`), damit die Regression auch ohne Zufall hält.
+  `.hypothesis/` ist lokaler Cache und steht in `.gitignore`.
+
+## ADR-059: Der Nachbrenner läuft nach der Segmentierung, nicht nur davor
+- Status: accepted
+- WP / Datum: WP10, 2026-09-02
+- Kontext: ADR-035 stellt `final_guard` als „zweiten, von der Segmentierung unabhängigen
+  Nachbrenner über die **fertige** Nachricht" auf — er lief in `DigestComposer._finalize`
+  aber **vor** `split_parts`. Zugestellt wird jedoch nicht die fertige Nachricht, sondern
+  ihre Teile. `split_parts` schneidet notfalls hart mitten in einem Wort, und genau dieser
+  Schnitt kann ein Bruchstück erzeugen, das erst für sich genommen wie eine Domain aussieht
+  — links wie rechts. Aus `-0000000.beispiel` (führender Bindestrich, deshalb kein
+  Domain-Token) wurde beim Schnitt `0000000.beispiel`; aus `evil.com.123abc` wurde
+  `evil.com`. Der Property-Test `test_split_never_produces_an_unsafe_part` hat beide Formen
+  gefunden (HT-4).
+- Entscheidung: `_finalize` teilt, lässt `final_guard` über **jeden Teil** erneut laufen und
+  teilt erneut, falls ein Teil durch das Defangen über das Limit gewachsen ist — bis zum
+  Fixpunkt, höchstens vier Runden. Das terminiert, weil der Nachbrenner auf bereits
+  gebrochenem Text nur noch Klammern hinzufügt und es endlich viele Punkte gibt. Ergänzend
+  entscheidet `_defang_domain_match` jetzt anhand **jeder** Marke ab der zweiten statt nur
+  der letzten, und die Token-Grenzen von `_RE_DOMAINISH` sind ASCII (nicht `\w`) und lassen
+  einen Match hinter `-`/`_` beginnen — sonst hebelten `evil.comÄ` und `-evil.example` die
+  Regel schon vor jedem Schnitt aus.
+- Alternativen: (a) Den Split domain-bewusst machen (nie innerhalb eines punkthaltigen
+  Tokens schneiden) — scheitert an Tokens, die länger als das Messenger-Limit sind, und
+  verteilt die Sicherheitslogik auf zwei Stellen. (b) Nur den Nachbrenner verschärfen —
+  schließt die konkreten Formen, nicht die Klasse: Jede künftige Lücke im Domain-Muster
+  wäre über den Schnitt wieder ausnutzbar. (c) Jeden Punkt bedingungslos brechen — macht
+  `3.14`, `1.2.3` und Versionsnummern unlesbar.
+- Konsequenzen: `_finalize` läuft im Normalfall mit genau einer zusätzlichen
+  Vergleichsrunde (der Nachbrenner ändert nichts mehr, die Schleife bricht ab). Die Zusage
+  aus ADR-035 gilt jetzt für das, was der Nutzer tatsächlich sieht — den einzelnen
+  Nachrichtenteil. Leicht mehr Über-Defanging: `Satz.Fortsetzungohneleerzeichen` bekommt
+  gebrochene Punkte. Das ist die in ADR-027 gewählte fail-safe Richtung.
+
+## ADR-060: `StateDB` verpackt jeden SQLite-Fehler in `StateError`
+- Status: accepted
+- WP / Datum: WP10, 2026-09-02
+- Kontext: `StateError` war als „die State-Datenbank ist nicht benutzbar" dokumentiert, wurde
+  aber nur in `StateDB.__init__` erzeugt. Jede spätere Operation reichte `sqlite3.Error`
+  roh durch. Ein schreibgeschütztes Dateisystem oder eine volle Platte trafen damit zwei
+  Stellen, die den Fehler nicht kennen: `pipeline.classify_failure` bildete ihn auf die
+  generische Klasse `<stufe>_error` statt auf `state_error` ab, und `cli.main` fängt
+  gezielt `ConfigError`/`StateError`/… — ein `sqlite3.OperationalError` wurde also als
+  Traceback auf das Terminal geschrieben (I5: Tracebacks können Inhalte transportieren).
+- Entscheidung: Ein Dekorator `_wrap_sqlite_errors` liegt auf jeder öffentlichen Methode von
+  `StateDB` und übersetzt `sqlite3.Error` in `StateError`. Die Meldung enthält nur den
+  Methodennamen und den SQLite-Text („attempt to write a readonly database", „database or
+  disk is full") — keine Mail-Inhalte, keine Secrets.
+- Alternativen: (a) An den Aufrufstellen fangen — verteilt dieselbe Übersetzung über
+  `runner.py`, `delivery.py`, `ingest/` und `cli.py` und wird beim nächsten Aufrufer
+  vergessen. (b) Nichts tun und `sqlite3.Error` in `cli.main` mitfangen — behebt den
+  Traceback, aber nicht die falsche Fehlerklasse in der Metadaten-Notiz.
+- Konsequenzen: Der Fehlertyp der State-Schicht ist jetzt an einer Stelle definiert. Eine
+  unbrauchbare Datenbank beendet den Daemon weiterhin — das ist beabsichtigt (ohne Dedupe
+  keine Verarbeitung, fail-closed), aber nun mit einer lesbaren Meldung und Exit-Code 1.

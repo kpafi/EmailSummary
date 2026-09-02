@@ -84,6 +84,9 @@ _MAX_LOW_DIGEST_ITEMS = 60
 #: Zeichenlimit einer Kategorie-Überschrift im Sammel-Digest.
 _MAX_CATEGORY_CHARS = 40
 
+#: Höchstzahl der Nachbrenner-/Split-Runden in :meth:`DigestComposer._finalize` (HT-4).
+_MAX_GUARD_ROUNDS = 4
+
 
 @dataclass(frozen=True)
 class LowDigestItem:
@@ -297,8 +300,31 @@ class DigestComposer:
     # --- Bausteine ----------------------------------------------------------------
 
     def _finalize(self, text: str) -> list[str]:
-        """Nachbrenner + Split — der einzige Weg, auf dem Text `parts` erreicht."""
-        return split_parts(final_guard(text).strip(), self._part_limit)
+        """Nachbrenner + Split bis zum Fixpunkt — der einzige Weg von Text zu `parts`.
+
+        Der Nachbrenner allein reicht **nicht**, wenn er nur über dem ungeteilten Text
+        läuft (HT-4): :func:`split_parts` schneidet notfalls mitten in einem Wort, und
+        genau dieser Schnitt kann aus einem unauffälligen Token ein Bruchstück machen, das
+        für sich genommen wie eine Domain aussieht — links wie rechts. Aus
+        ``-0000000.beispiel`` (führender Bindestrich, deshalb kein Domain-Token) wurde
+        beim Schnitt ``0000000.beispiel``.
+
+        Deshalb läuft :func:`final_guard` **nach** dem Split noch einmal über jeden Teil;
+        wächst ein Teil dadurch über das Limit (Defangen fügt ``[.]`` hinzu), wird er
+        erneut geteilt. Das terminiert: Auf bereits gebrochenem Text fügt der Nachbrenner
+        nur noch Klammern hinzu und es gibt endlich viele Punkte. Die Rundenzahl ist
+        trotzdem gedeckelt — eine Endlosschleife im Zustellpfad wäre schlimmer als ein
+        theoretisch ungeprüftes Bruchstück nach vier Runden.
+        """
+        parts = split_parts(final_guard(text).strip(), self._part_limit)
+        for _ in range(_MAX_GUARD_ROUNDS):
+            guarded = [final_guard(part) for part in parts]
+            if guarded == parts:
+                break
+            parts = [
+                piece for part in guarded for piece in split_parts(part, self._part_limit)
+            ]
+        return parts
 
     def _banner(self, verdict: CriticVerdict, collector: LinkCollector) -> str:
         """Warn-Banner bei `phishing_risk == "high"` (F-CRIT-2)."""
