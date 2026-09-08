@@ -429,6 +429,12 @@ class DigestComposer:
             # der Klartext-Teil. Ohne diesen Hinweis wäre eine „harmlos"-Meldung zu einem
             # Text möglich, den der Nutzer nie zu Gesicht bekommt (ADR-067).
             hints.append("HTML-Teil weicht vom Textteil ab")
+        if report.hidden_text_removed:
+            # Deterministisch, ohne jedes Modell (CT-6): Der Sanitizer *weiß*, dass im HTML
+            # unsichtbarer Text stand. Bewusst als eigener Hinweis und nicht über
+            # `injection_suspected`: Unsichtbarer Text ist auch der legitime
+            # Newsletter-Preheader, „Anweisungen an die KI" wäre dann schlicht falsch.
+            hints.append("versteckter Text im HTML entfernt")
         if report.reply_to_mismatch:
             hints.append("Antwortadresse weicht vom Absender ab")
         if report.return_path_mismatch:

@@ -75,6 +75,31 @@ _RISK_RANK: dict[str, int] = {"none": 0, "low": 1, "high": 2}
 #: Grund, den der Code selbst anhängt, wenn die Nachkontrolle etwas entfernen musste.
 _SCRUBBED_REASON = "Kritiker-Ausgabe enthielt unzulässige Inhalte (entfernt)"
 
+#: Signale, die auf eine **Absender-Fälschung** deuten — die einzigen, die zusammen die
+#: Stufe `high` erzwingen dürfen (CT-11). Anhangs-, Link- und Kürzungssignale sagen über
+#: die Echtheit des Absenders nichts aus und bleiben deshalb außen vor.
+_SPOOFING_KEYS = frozenset(
+    {
+        "auth_failed",
+        "reply_to_mismatch",
+        "return_path_mismatch",
+        "punycode",
+        "mixed_script",
+    }
+)
+
+#: Kurzbezeichnungen für den vom Code formulierten Kombinations-Grund.
+_SIGNAL_LABELS: dict[str, str] = {
+    "auth_failed": "Absender-Authentifizierung fehlgeschlagen",
+    "reply_to_mismatch": "abweichende Antwortadresse",
+    "return_path_mismatch": "abweichender Return-Path",
+    "punycode": "Punycode-Domain",
+    "mixed_script": "gemischte Schriftsysteme",
+}
+
+#: Ab so vielen **unabhängigen** Fälschungssignalen greift die Anhebung auf `high`.
+_HIGH_SIGNAL_COUNT = 3
+
 
 @dataclass(frozen=True)
 class Signal:
@@ -85,11 +110,15 @@ class Signal:
         text: Der Wortlaut, wie er als Programm-Fakt in den Prompt geht.
         hard: True für Indizien, die ein Angreifer nicht versehentlich auslöst und die
             deshalb eine Mindest-Risikostufe erzwingen (ADR-043).
+        label: Kurzfassung für den Nutzer (Warn-Banner). `text` ist für den Prompt
+            formuliert — mit defangten Domains und Erläuterung — und wäre im Banner
+            unlesbar. Leer ⇒ `text` wird verwendet.
     """
 
     key: str
     text: str
     hard: bool = False
+    label: str = ""
 
 
 def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
@@ -156,6 +185,12 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
                 "punycode",
                 f"Punycode-Domains ({len(report.punycode_domains)}): {listed} — "
                 "IDN-Schreibweise, kann legitim oder eine Namensfälschung sein",
+                # Hart im Sinne von ADR-043: Eine Weiterleitung ins Spiegelpostfach kann
+                # SPF/DKIM brechen, aber sie schreibt keine Absender-Domain in Punycode um.
+                # Das Signal ist deshalb — anders als `auth_failed` — nicht wegzuerklären
+                # und hebt für sich allein auf `low` an (CT-11).
+                hard=True,
+                label=_SIGNAL_LABELS["punycode"],
             )
         )
     if report.mixed_script_domains:
@@ -166,6 +201,7 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
                 f"Domains mit gemischten Schriftsystemen ({len(report.mixed_script_domains)}): "
                 f"{listed} — typische Homoglyphen-Fälschung",
                 hard=True,
+                label=_SIGNAL_LABELS["mixed_script"],
             )
         )
 
@@ -198,6 +234,7 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
                 "Die HTML-Fassung der Mail weicht inhaltlich vom ausgewerteten "
                 "Klartext-Teil ab — der Empfänger sieht in seinem Mailprogramm den "
                 "HTML-Teil, zusammengefasst wurde der Klartext",
+                label="HTML-Teil weicht vom Textteil ab",
             )
         )
     if report.control_chars_removed:
@@ -263,7 +300,11 @@ def enforce_verdict_policy(
        (ADR-043).
     3. Harte Code-Signale (:attr:`Signal.hard`) heben die Stufe ebenfalls auf mindestens
        `low` an und werden als Grund ergänzt, falls das Modell sie übergangen hat (T9).
-    4. `phishing_risk != "none"` ohne jeden Grund bekommt einen neutralen Platzhalter,
+    4. Treffen mindestens :data:`_HIGH_SIGNAL_COUNT` unabhängige Fälschungssignale
+       (:data:`_SPOOFING_KEYS`) zusammen und ist darunter mindestens ein hartes, geht die
+       Stufe auf `high` — dann trägt die Nachricht das Warn-Banner (F-CRIT-2/F-CRIT-3).
+       Ein einzelnes weiterleitungs-erklärbares Signal tut das weiterhin nicht (ADR-043).
+    5. `phishing_risk != "none"` ohne jeden Grund bekommt einen neutralen Platzhalter,
        damit das Warn-Banner nie leer bleibt.
 
     `summary_accurate` bleibt unangetastet: Der Code kann inhaltliche Richtigkeit nicht
@@ -301,9 +342,27 @@ def enforce_verdict_policy(
         if not signal.hard:
             continue
         risk = _raise_risk(risk, "low")
-        hint = _one_line(signal.text, MAX_REASON_CHARS)
+        # Für den Nutzer zählt das Kurzlabel: `signal.text` ist für den Prompt formuliert
+        # (mit defangten Domains und Erläuterung) und wäre im Warn-Banner unlesbar. Die
+        # Domains selbst stehen ohnehin in der Hinweiszeile der Nachricht.
+        hint = _one_line(signal.label or signal.text, MAX_REASON_CHARS)
         if hint and hint not in code_reasons:
             code_reasons.append(hint)
+
+    # Kombination unabhängiger Fälschungssignale (CT-11). Ein einzelnes Signal bleibt
+    # bewusst harmlos — eine Weiterleitung ins Spiegelpostfach bricht SPF/DKIM und
+    # verändert den Return-Path, das ist der Normalfall dieses Produkts (ADR-043). Treffen
+    # aber mehrere unabhängige Signale zusammen **und** ist mindestens eines davon durch
+    # Weiterleitung nicht erklärbar (`hard`), ist das kein Nebeneffekt mehr.
+    spoofing = [signal for signal in signals if signal.key in _SPOOFING_KEYS]
+    if len(spoofing) >= _HIGH_SIGNAL_COUNT and any(signal.hard for signal in spoofing):
+        risk = _raise_risk(risk, "high")
+        listed = ", ".join(
+            _SIGNAL_LABELS.get(signal.key, signal.key) for signal in spoofing
+        )
+        code_reasons.insert(
+            0, _one_line(f"Mehrere unabhängige Fälschungssignale: {listed}", MAX_REASON_CHARS)
+        )
 
     reasons = code_reasons + [reason for reason in model_reasons if reason not in code_reasons]
     if risk != "none" and not reasons:

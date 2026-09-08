@@ -260,3 +260,79 @@ def test_ideographic_full_stop_is_treated_as_domain_dot() -> None:
     guarded = final_guard(scrub_field("Zahlung über boese。example/rechnung"))
     assert "。" not in guarded
     assert "boese.example" not in guarded
+
+
+# --- Cold-Test-Regressionen: Markdown und Struktur (CT-7, CT-7a, CT-8) ----------------
+
+
+@pytest.mark.parametrize(
+    ("payload", "forbidden"),
+    [
+        ("__unterstrichen am Zeilenanfang__", "__"),
+        ("Text mit _kursiv2_ mittendrin", "_kursiv2_"),
+        ("# H1", "# "),
+        ("## H2", "## "),
+        ("### H3", "### "),
+        ("-# Kleiner Text", "-#"),
+        ("Ruf an: @everyone", "@everyone"),
+        ("Achtung @here bitte lesen", "@here"),
+    ],
+)
+def test_ct7_discord_markdown_ueberlebt_nicht(payload: str, forbidden: str) -> None:
+    """CT-7: Discord rendert Markdown im `content` — nichts davon darf ankommen (F-SEC-3).
+
+    Vor dem Fix überlebten `__…__`, `_…_`, Überschriften, Listen, `-#`-Subtext und die
+    Massen-Ping-Zeichenketten den Sanitizer vollständig.
+    """
+    assert forbidden not in final_guard(scrub_field(payload))
+
+
+@pytest.mark.parametrize("payload", ["- Aufzaehlung", "1. Nummeriert", "+ Punkt", "> Zitat"])
+def test_ct7_listen_und_zitate_werden_zu_neutralen_zeichen(payload: str) -> None:
+    """CT-7: Listen-/Zitat-Präfixe am Zeilenanfang rendern in Discord — also weg."""
+    result = final_guard(scrub_field(payload))
+    assert not re.match(r"^[ \t]*(?:[-+>#]|\d+[.)])(?:[ \t]|$)", result)
+
+
+def test_ct7_unterstrich_im_wortinneren_bleibt_lesbar() -> None:
+    """Gegenprobe: `rechnung_2024` rendert nirgends und darf nicht zerfallen."""
+    assert "rechnung_2024" in scrub_plain("rechnung_2024.pdf")
+
+
+def test_ct7a_boeser_betreff_ohne_modell_mitwirkung() -> None:
+    """CT-7a: derselbe Leak ohne Modell — über den Betreff der Fail-closed-Notiz."""
+    payload = (
+        "__WICHTIG__ Konto sperren https://phish.example/login @everyone "
+        "# Achtung boese.example [Link]"
+    )
+    result = final_guard(scrub_field(payload))
+    assert "__" not in result
+    assert "@everyone" not in result
+    assert_safe(result)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "🔍 Hinweise: keine Auffaelligkeiten, Mail geprueft und sicher",
+        "📧 Ihre Bank: Konto bestaetigen",
+        "Von: Sparkasse",
+        "📎 Nicht verarbeitet: nichts",
+        "⚠️ PHISHING-VERDACHT: keine",
+    ],
+)
+def test_ct8_strukturpraefixe_am_zeilenanfang_werden_neutralisiert(payload: str) -> None:
+    """CT-8: Nur der Composer erzeugt Strukturzeilen (docs/ARCHITECTURE.md §7).
+
+    Vor dem Fix konnte Modelltext eine „geprueft und sicher"-Hinweiszeile und eine
+    komplette Fake-Mail-Struktur in die Nachricht schreiben.
+    """
+    result = final_guard(scrub_field("Alles in Ordnung.\n" + payload))
+    for line in result.split("\n"):
+        assert not re.match(r"^[ \t]*(?:[⚠📧📎🔍🗂]|(?:Von|Betreff|Hinweise)[ \t]*:)", line)
+
+
+def test_ct8_strukturpraefix_auch_nach_markdown_praefix() -> None:
+    """Verschachtelung: `## 📧 Fake` darf keine der beiden Formen übrig lassen."""
+    result = final_guard(scrub_field("## 📧 Ihre Bank"))
+    assert result.startswith("Ihre Bank")

@@ -16,7 +16,11 @@ Ablauf eines Aufrufs:
    untrusted (I4). Jedes Textfeld wird auf URLs, Markdown-Links, HTML und Steuerzeichen
    gescannt; ein Fund wird entfernt **und** setzt `injection_suspected = true`. Zusätzlich
    werden Längen erzwungen, leere Felder normalisiert und erfundene Anhang-Schlüssel
-   verworfen.
+   verworfen. Unabhängig von der Modellantwort setzt
+   :func:`detect_injection_evidence` das Flag, wenn die **Mail** deterministisch erkennbare
+   Angriffsspuren trägt (gefälschte Datenblock-Marker, Unsichtbarzeichen-Ballung, wörtliche
+   Anweisungen an ein Sprachmodell) — sonst hinge F-SEC-5 am Wohlwollen des angegriffenen
+   Modells.
 
 Bewusst **nicht** hier: die Zustell-Schwelle (`deliver_min_importance`). Sie wertet
 `pipeline.process_mail` aus; eine zweite Auswertung wäre eine zweite Wahrheit.
@@ -35,10 +39,12 @@ from maildigest.llm.schema import complete_json
 from maildigest.models import SanitizedMail, Summary
 
 __all__ = [
+    "CONTROL_CHAR_BURST",
     "HEADLINE_MAX_CHARS",
     "REDACTION_MARKER",
     "SummarizerAgent",
     "describe_without_body",
+    "detect_injection_evidence",
     "enforce_output_policy",
     "scrub_text",
 ]
@@ -81,6 +87,81 @@ _URL_TOKEN_RE = re.compile(
     | [A-Za-z0-9\-]{1,63}\s*\.\s*[A-Za-z]{2,24}\s*/   # domain.tld/pfad
     """
 )
+
+
+#: Ein im Mail-Text nachgebauter Datenblock-Marker (`<<<MAILDIGEST-END-UNTRUSTED-DATA>>>`).
+#: Die echten Marker tragen eine zufällige Kennung, ein Nachbau kann also nie passen — aber
+#: der **Versuch** ist ein Beweis für einen gezielten Angriff auf die Prompt-Struktur. Die
+#: Regex ist absichtlich tolerant: Der WP3-Sanitizer entfernt die Winkelklammern, und der
+#: Angreifer variiert Trennzeichen und Groß-/Kleinschreibung.
+_FORGED_MARKER_RE = re.compile(r"(?i)MAILDIGEST[\s\-_]{0,3}(?:END[\s\-_]{0,3})?UNTRUSTED")
+
+#: Ab so vielen entfernten Steuer-/Unsichtbarzeichen ist die Ballung kein Zufall mehr,
+#: sondern Tarnung (Zero-Width-Einstreuung, Bidi-Overrides — F-SEC-10).
+CONTROL_CHAR_BURST = 8
+
+#: Formulierungen, die im Fließtext einer Mail nur als Anweisung an ein Sprachmodell
+#: stehen können. Bewusst kurz und wörtlich gehalten: Diese Liste soll nicht „Phishing
+#: erkennen", sondern nur die offen ausgesprochenen Übernahmeversuche.
+_INSTRUCTION_PHRASES_RE = re.compile(
+    r"(?i)"
+    r"ignore\s+(?:all\s+|any\s+)?(?:previous|prior|above|preceding)\s+instructions"
+    r"|disregard\s+(?:all\s+|the\s+)?(?:previous|prior|above)\s+(?:instructions|rules)"
+    r"|ignoriere\s+(?:alle\s+|die\s+)?(?:vorherigen|obigen|bisherigen)\s+"
+    r"(?:anweisungen|regeln)"
+    # „du bist jetzt …" allein ist Alltagsdeutsch („du bist jetzt dran"); erst die Anrede
+    # eines Modells macht daraus eine Anweisung. Ebenso „System-Prompt": das Wort kommt in
+    # legitimer Fachkorrespondenz vor, das *Ausgeben* oder *Überschreiben* nicht.
+    r"|(?:you\s+are\s+now|du\s+bist\s+(?:ab\s+)?jetzt)\s+(?:ein[e]?\s+|an?\s+|the\s+)?"
+    r"(?:ki|ai|assistent|assistant|sprachmodell|language\s+model|chatbot|bot)\b"
+    r"|(?:new|neue)\s+(?:system[\s\-]?)?(?:instructions|anweisungen)\s*:"
+    r"|(?:reveal|print|show|zeige|nenne|gib)\s+(?:me\s+|mir\s+|us\s+|uns\s+)?"
+    r"(?:your\s+|deinen\s+|den\s+|die\s+)?(?:system[\s\-]?prompt|systemprompt)"
+    r"|(?:override|overriding|ignoriere)\s+(?:the\s+|den\s+|deinen\s+)?"
+    r"(?:system[\s\-]?prompt|systemprompt)"
+)
+
+
+def detect_injection_evidence(mail: SanitizedMail) -> tuple[str, ...]:
+    """Deterministische, **modellunabhängige** Injection-Indizien (F-SEC-5, CT-6).
+
+    F-SEC-5 verlangt, dass ein Verdacht dem Nutzer angezeigt wird. Käme das Flag allein
+    aus der Modellantwort, hinge die Warnung an der Kooperation genau des Modells, das
+    angegriffen wird — ein schwaches lokales Modell (README: ausdrücklich unterstützt)
+    liefert brav `injection_suspected = false`. Diese Funktion ist das Gegengewicht: reiner
+    Code über den bereits sanitisierten Mail-Daten, vom Angreifer nicht wegverhandelbar.
+
+    Gemeldet werden nur Indizien, die ein harmloser Absender praktisch nicht auslöst:
+
+    ``forged_block_marker``
+        Der Mail-Text baut die Delimiter des Prompt-Datenblocks nach.
+    ``control_char_burst``
+        Auffällig viele entfernte Unsichtbar-/Bidi-Zeichen (:data:`CONTROL_CHAR_BURST`).
+    ``instruction_phrases``
+        Wörtliche Anweisungen an ein Sprachmodell im Mail- oder Anhangstext.
+
+    Bewusst **nicht** enthalten: ``hidden_text_removed``. Unsichtbarer Text ist in
+    Newslettern der Regelfall (Preheader), und die Hinweiszeile lautete dann fälschlich
+    „Mail enthielt Anweisungen an die KI". Dieses Signal wird stattdessen als eigener,
+    wörtlich zutreffender Hinweis ausgegeben (`output/composer.py`).
+
+    Args:
+        mail: Die sanitisierte Mail — dieselben Daten, die auch in den Prompt gehen.
+
+    Returns:
+        Die Schlüssel der gefundenen Indizien in stabiler Reihenfolge (leer = kein Fund).
+    """
+    haystack = "\n".join(
+        [mail.subject, mail.from_display, mail.body_text, *mail.attachment_texts.values()]
+    )
+    evidence: list[str] = []
+    if _FORGED_MARKER_RE.search(haystack):
+        evidence.append("forged_block_marker")
+    if mail.sanitization_report.control_chars_removed >= CONTROL_CHAR_BURST:
+        evidence.append("control_char_burst")
+    if _INSTRUCTION_PHRASES_RE.search(haystack):
+        evidence.append("instruction_phrases")
+    return tuple(evidence)
 
 
 def _strip_control_chars(text: str) -> tuple[str, bool]:
@@ -212,7 +293,8 @@ def enforce_output_policy(summary: Summary, mail: SanitizedMail) -> Summary:
     Säubert jedes Textfeld, verwirft erfundene Anhang-Schlüssel, erzwingt die
     Headline-Länge und füllt leer gewordene Felder mit Werten aus dem Sanitizer. Jeder
     Fund setzt `injection_suspected = true`; ein bereits vom Modell gesetztes Flag bleibt
-    gesetzt.
+    gesetzt. Zusätzlich setzt :func:`detect_injection_evidence` das Flag anhand der
+    **Mail-Seite** — unabhängig davon, was das Modell gemeldet hat (F-SEC-5).
 
     Args:
         summary: Die schema-validierte, aber inhaltlich ungeprüfte Modellausgabe. Wird
@@ -222,7 +304,7 @@ def enforce_output_policy(summary: Summary, mail: SanitizedMail) -> Summary:
     Returns:
         Dasselbe, nun geprüfte `Summary`-Objekt.
     """
-    suspicious = summary.injection_suspected
+    suspicious = summary.injection_suspected or bool(detect_injection_evidence(mail))
 
     headline, hit = scrub_text(summary.headline)
     suspicious = suspicious or hit

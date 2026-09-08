@@ -21,6 +21,10 @@ Reihenfolge je Textfeld (:func:`scrub_field`):
    werden erkannt und *unverändert* durchgereicht — sie dürfen nicht ein zweites Mal
    nummeriert oder zerlegt werden. Alles dazwischen läuft durch Markup-Neutralisierung
    und :class:`maildigest.sanitize.links.LinkCollector`.
+6. **Markup- und Strukturneutralisierung** (:func:`neutralize_markup`) über das ganze Feld:
+   Konstrukte, die kein einzelnes Zeichen sind — Unterstriche am Wortrand, Markdown am
+   Zeilenanfang (Überschrift, Liste, Zitat, Discord-Subtext), Massen-Pings — und die
+   Zeilen-Präfixe des Nachrichtenformats, die nur der Composer erzeugen darf (CT-7/CT-8).
 
 Die Zusammenbau-Stufe (:mod:`maildigest.output.composer`) legt darüber noch
 :func:`final_guard` über die **fertige** Nachricht: ein enger, von der Segmentierung
@@ -42,6 +46,7 @@ __all__ = [
     "SIGNAL_MAX_PART_CHARS",
     "TELEGRAM_MAX_PART_CHARS",
     "final_guard",
+    "neutralize_markup",
     "scrub_field",
     "scrub_plain",
     "split_parts",
@@ -61,9 +66,10 @@ _MAX_ROUNDS = 3
 
 #: Zeichen, die Struktur/Formatierung erzeugen können und in untrusted Text nichts zu
 #: suchen haben. `[`/`]` fallen mit, damit niemand einen Sanitizer-Marker fälschen kann
-#: und `[text](ziel)` nicht als Markdown-Link zusammenfindet. `_` bleibt erhalten:
-#: Es erzeugt höchstens Kursivschrift, aber nie ein klickbares Ziel — und zerstörte
-#: Dateinamen wären ein realer Lesbarkeitsverlust.
+#: und `[text](ziel)` nicht als Markdown-Link zusammenfindet. `_` steht **nicht** in dieser
+#: Liste, wird aber gezielt entschärft (:data:`_RE_UNDERSCORE_RUN`/:data:`_RE_UNDERSCORE_EDGE`):
+#: Ein `_` mitten in einem Wort (`rechnung_2024.pdf`) rendert nirgends, ein `_` am Wortrand
+#: (`__fett__`, `_kursiv_`) rendert in Discord sehr wohl (CT-7).
 _MARKUP_CHARS = "`*|~\\[]"
 
 _RE_MARKUP = re.compile("[" + re.escape(_MARKUP_CHARS) + "]")
@@ -163,6 +169,39 @@ _RE_IPV4 = re.compile(r"(?<![\w.\-])\d{1,3}(?:\.\d{1,3}){3}(?![\w.\-])")
 #: im Ziel zwar nie eine URL, aber die Form soll gar nicht erst entstehen (T7).
 _RE_MARKDOWN_SEAM = re.compile(r"\]\(")
 
+#: Unterstrich-Läufe (`__fett__`, `___`) auf **einen** Unterstrich zusammenziehen. Damit
+#: kann aus `a__b__c` keine Unterstreichung mehr werden, ohne dass ein Dateiname zerfällt.
+_RE_UNDERSCORE_RUN = re.compile(r"__+")
+
+#: Ein Unterstrich am Wortrand ist in Discord eine Kursiv-Klammer (`_kursiv_`) — er fällt
+#: weg. Mitten in einem alphanumerischen Lauf (`rechnung_2024`) bleibt er stehen: Dort
+#: rendert kein Messenger etwas, und ein zerstörter Dateiname wäre ein realer Verlust.
+_RE_UNDERSCORE_EDGE = re.compile(r"(?<![^\W_])_|_(?![^\W_])")
+
+#: Discord-Massen-Pings. `allowed_mentions` verhindert den Ping bereits im Adapter; die
+#: Zeichenkette selbst soll trotzdem nicht wie ein echter Ping aussehen (CT-7/CT-7a).
+_RE_MASS_MENTION = re.compile(r"(?i)@(everyone|here)\b")
+
+#: Markdown-Konstrukte, die **nur am Zeilenanfang** rendern: Überschriften (`#`..`######`),
+#: Discord-Subtext (`-#`), Zitate (`>`/`>>>`) und Listen (`-`/`+`/`1.`/`1)`). Sie werden
+#: nicht durch Zeichenlöschung erfasst, weil dieselben Zeichen mitten im Satz harmlos sind.
+_RE_LINE_MARKUP = re.compile(r"(?m)^[ \t]*(-#|#{1,6}|>{1,3}|[-+]|\d{1,3}[.)])(?=[ \t]|$)[ \t]*")
+
+#: Zeilen-Präfixe des Nachrichtenformats (docs/ARCHITECTURE.md §7). Nur der Composer darf
+#: sie erzeugen; in untrusted Text am Zeilenanfang wären sie eine gefälschte Programmzeile
+#: (CT-8) — insbesondere die Hinweiszeile ist der einzige Warnkanal des Produkts.
+_STRUCTURE_EMOJI = "⚠\U0001f4e7\U0001f4ce\U0001f50d\U0001f5c2"
+_RE_STRUCTURE_EMOJI = re.compile(
+    rf"(?m)^[ \t]*(?:[{_STRUCTURE_EMOJI}][\ufe0e\ufe0f]?[ \t]*)+"
+)
+
+#: Beschriftete Strukturzeilen (`Von: …`, `Betreff: …`, `🔍 Hinweise: …`, `Stufe: …`).
+#: Der Doppelpunkt wird zum Trennpunkt — die Zeile bleibt lesbar, sieht aber nicht mehr
+#: wie eine vom Programm erzeugte Kopfzeile aus.
+_RE_STRUCTURE_LABEL = re.compile(
+    r"(?mi)^[ \t]*(Von|Betreff|Hinweise|Stufe|Grund|PHISHING-VERDACHT)[ \t]*:[ \t]*"
+)
+
 _RE_TRAILING_SPACE = re.compile(r"[ \t]+$", re.MULTILINE)
 _RE_MANY_NEWLINES = re.compile(r"\n{3,}")
 
@@ -209,6 +248,48 @@ def _scrub_segment(segment: str, collector: LinkCollector) -> str:
     return collector.scrub(_RE_MARKUP.sub("", segment))
 
 
+def _neutralize_line_markup(match: re.Match[str]) -> str:
+    """Ersetzt ein Markdown-Konstrukt am Zeilenanfang.
+
+    Aufzählungs-Präfixe werden zu ``• `` (rendert nirgends, hält aber die Liste lesbar);
+    bei nummerierten Listen bleibt die Zahl stehen und nur das Satzzeichen wird ersetzt —
+    ``12. März …`` am Zeilenanfang ist meist ein Datum und kein Listenpunkt.
+    Überschriften, Zitate und Discord-Subtext fallen ersatzlos weg.
+    """
+    marker = match.group(1)
+    if marker in ("-", "+"):
+        return "• "
+    if marker[0].isdigit():
+        return f"{marker[:-1]} · "
+    return ""
+
+
+def neutralize_markup(text: str) -> str:
+    """Entschärft Formatierung und gefälschte Strukturzeilen in untrusted Text (F-SEC-3).
+
+    Ergänzt die zeichenweise Neutralisierung (:data:`_RE_MARKUP`) um die Konstrukte, die
+    sich nicht an einem einzelnen Zeichen festmachen lassen (CT-7/CT-7a/CT-8):
+
+    * Unterstriche am Wortrand (`__fett__`, `_kursiv_`) und Unterstrich-Läufe,
+    * Zeilenanfangs-Markdown: Überschriften, Zitate, Listen, Discord-Subtext ``-#``,
+    * Discord-Massen-Pings (``@everyone``/``@here``),
+    * die Zeilen-Präfixe des Nachrichtenformats (``⚠️``, ``📧``, ``📎``, ``🔍``, ``Von:`` …).
+
+    Der letzte Punkt ist eine Struktur- und keine Formatierungsfrage: Vertrauenswürdige
+    Zeilen erzeugt allein der Composer, deshalb darf modellgelieferter Text sie am
+    Zeilenanfang nicht nachbauen (docs/ARCHITECTURE.md §7).
+    """
+    cleaned = _RE_UNDERSCORE_EDGE.sub("", _RE_UNDERSCORE_RUN.sub("_", text))
+    cleaned = _RE_MASS_MENTION.sub(r"(at)\1", cleaned)
+    for _ in range(_MAX_ROUNDS):
+        stripped = _RE_LINE_MARKUP.sub(_neutralize_line_markup, cleaned)
+        stripped = _RE_STRUCTURE_EMOJI.sub("", stripped)
+        if stripped == cleaned:
+            break
+        cleaned = stripped
+    return _RE_STRUCTURE_LABEL.sub(r"\1 · ", cleaned)
+
+
 def _collapse_whitespace(text: str) -> str:
     """Vereinheitlicht Leerraum: keine Zeilen-Endleerzeichen, höchstens eine Leerzeile."""
     return _RE_MANY_NEWLINES.sub("\n\n", _RE_TRAILING_SPACE.sub("", text)).strip()
@@ -248,7 +329,7 @@ def scrub_field(
         position = match.end()
     chunks.append(_scrub_segment(prepared[position:], link_collector))
 
-    return _collapse_whitespace("".join(chunks))
+    return _collapse_whitespace(neutralize_markup("".join(chunks)))
 
 
 def scrub_plain(text: str, *, max_chars: int | None = None) -> str:
@@ -266,7 +347,9 @@ def scrub_plain(text: str, *, max_chars: int | None = None) -> str:
     cleaned = cleaned.translate(_IDN_DOTS)
     if max_chars is not None and len(cleaned) > max_chars:
         cleaned = cleaned[:max_chars].rstrip() + _TRUNCATION_MARKER
-    return _collapse_whitespace(_RE_MARKUP.sub("", _strip_tags(cleaned)))
+    return _collapse_whitespace(
+        neutralize_markup(_RE_MARKUP.sub("", _strip_tags(cleaned)))
+    )
 
 
 def _break_scheme(match: re.Match[str]) -> str:
@@ -320,6 +403,12 @@ def final_guard(text: str) -> str:
     guarded = _RE_LIVE_WWW.sub("www[.]", guarded)
     guarded = _RE_ANGLE.sub("", guarded)
     guarded = _RE_MARKDOWN_SEAM.sub("] (", guarded)
+    # Formatierung, die kein einzelnes Zeichen ist: Unterstriche am Wortrand und
+    # Massen-Pings. Bewusst **ohne** die Zeilenanfangs-Regeln aus
+    # :func:`neutralize_markup` — die dürfen nur auf Feldern laufen, nie auf der fertigen
+    # Nachricht, deren eigene Struktur-Präfixe (`📧 `, `Von: `) genau so aussehen (CT-8).
+    guarded = _RE_UNDERSCORE_EDGE.sub("", _RE_UNDERSCORE_RUN.sub("_", guarded))
+    guarded = _RE_MASS_MENTION.sub(r"(at)\1", guarded)
     guarded = _RE_DOMAINISH.sub(_defang_domain_match, guarded)
     return _RE_IPV4.sub(lambda m: m.group(0).replace(".", "[.]"), guarded)
 

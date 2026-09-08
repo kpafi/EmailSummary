@@ -31,7 +31,12 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from maildigest.agents.summarizer import enforce_output_policy, scrub_text
-from maildigest.models import SanitizationReport, SanitizedMail, Summary
+from maildigest.models import (
+    CriticVerdict,
+    SanitizationReport,
+    SanitizedMail,
+    Summary,
+)
 from maildigest.output.composer import DigestComposer
 from maildigest.output.sanitizer import (
     TELEGRAM_MAX_PART_CHARS,
@@ -110,8 +115,25 @@ _RE_LIVE_DOMAIN = re.compile(
 )
 
 #: Markup, das Telegram/Discord als Formatierung interpretieren (Discord rendert Markdown
-#: im `content`-Feld). `_` bleibt bewusst erlaubt (ADR-037).
+#: im `content`-Feld). `_` steht nicht in der Menge, weil es im Wortinneren erlaubt bleibt
+#: (`rechnung_2024`); am Wortrand prüft es :data:`_RE_UNDERSCORE_EDGE` (CT-7).
 _MARKUP = set("`*|~\\")
+
+#: Ein Unterstrich am Wortrand ist in Discord eine Kursiv-/Unterstreichungsklammer.
+_RE_UNDERSCORE_EDGE = re.compile(r"(?<![^\W_])_|_(?![^\W_])")
+
+#: Discord-Massen-Pings — im gelieferten Text darf die Zeichenkette nicht stehen (CT-7).
+_RE_MASS_MENTION = re.compile(r"(?i)@(everyone|here)\b")
+
+#: Markdown, das **am Zeilenanfang** rendert: Überschrift, Zitat, Liste, Discord-Subtext.
+_RE_LINE_MARKUP = re.compile(r"(?m)^[ \t]*(?:-#|#{1,6}|>{1,3}|[-+]|\d{1,3}[.)])(?=[ \t]|$)")
+
+#: Zeilen-Präfixe des Nachrichtenformats (docs/ARCHITECTURE.md §7) — nur der Composer darf
+#: sie erzeugen, modellgelieferter Text nie (CT-8).
+_RE_STRUCTURE_LINE = re.compile(
+    r"(?mi)^[ \t]*(?:[\u26a0\U0001f4e7\U0001f4ce\U0001f50d\U0001f5c2]"
+    r"|(?:Von|Betreff|Hinweise|Stufe)[ \t]*:)"
+)
 
 #: IDN-Punktvarianten, die ein Client wie `.` behandelt (SECURITY §5, WP7).
 _IDN_DOTS = "。｡"
@@ -131,6 +153,8 @@ def assert_output_safe(text: str) -> None:
     assert "](" not in text, f"Markdown-Naht in {text!r}"
     assert not _RE_LIVE_DOMAIN.search(text), f"lebende Domain in {text!r}"
     assert not (_MARKUP & set(text)), f"Messenger-Markup in {text!r}"
+    assert not _RE_UNDERSCORE_EDGE.search(text), f"Unterstrich am Wortrand in {text!r}"
+    assert not _RE_MASS_MENTION.search(text), f"Massen-Ping in {text!r}"
     assert not (set(_IDN_DOTS) & set(text)), f"IDN-Punkt in {text!r}"
     for char in text:
         if char in "\t\n":
@@ -412,3 +436,76 @@ def test_wp7_closes_the_wp5_layer_gap(payload: str) -> None:
     """
     from_model, _ = scrub_text(payload)
     assert_output_safe(final_guard(scrub_field(from_model)))
+
+
+# --- (e) Markdown- und Strukturklassen aus dem Cold-Test (CT-7/CT-7a/CT-8) --------------
+
+#: Bausteine, die genau die im Cold-Test übrig gebliebenen Konstrukte erzeugen. Sie fehlen
+#: in :data:`_PIECES`, weil dort kein Zeilenanfangs-Kontext entsteht — und ohne
+#: Zeilenanfang rendert Discord weder Überschrift noch Liste noch Subtext.
+_MARKDOWN_PIECES = [
+    "\n", " ", "\t", "#", "##", "###", "-#", "-", "+", ">", ">>>", "1.", "12)",
+    "_", "__", "___", "@everyone", "@here", "⚠️", "📧", "📎", "🔍", "🗂",
+    "Von:", "Betreff:", "Hinweise:", "Stufe:", "a", "Text", "boese.example",
+]
+
+MARKDOWN_ATTACK = st.lists(st.sampled_from(_MARKDOWN_PIECES), min_size=1, max_size=30).map(
+    "".join
+)
+
+
+@_SLOW
+@given(MARKDOWN_ATTACK)
+def test_no_rendered_markdown_survives_the_field_scrub(payload: str) -> None:
+    """CT-7: ∀ Eingabe — kein Zeilenanfangs-Markdown übersteht `scrub_field` (F-SEC-3)."""
+    result = final_guard(scrub_field(payload))
+    assert not _RE_LINE_MARKUP.search(result), f"Zeilen-Markdown in {result!r}"
+    assert_output_safe(result)
+
+
+@_SLOW
+@given(MARKDOWN_ATTACK)
+def test_no_rendered_markdown_survives_the_plain_scrub(payload: str) -> None:
+    """Dasselbe für Nicht-Fließtext-Felder (Anzeigename, Domain, Dateiname)."""
+    result = final_guard(scrub_plain(payload))
+    assert not _RE_LINE_MARKUP.search(result), f"Zeilen-Markdown in {result!r}"
+    assert_output_safe(result)
+
+
+@_SLOW
+@given(MARKDOWN_ATTACK)
+def test_model_text_can_never_forge_a_structure_line(payload: str) -> None:
+    """CT-8: ∀ Modelltext — keine Zeile beginnt wie eine Zeile des Nachrichtenformats.
+
+    Vertrauenswürdige Zeilen (`📧`, `Von:`, `🔍 Hinweise:`, `⚠️`) erzeugt allein der
+    Composer; sonst ist der einzige Warnkanal des Produkts vom Angreifer beschreibbar.
+    """
+    assert not _RE_STRUCTURE_LINE.search(scrub_field(payload))
+    assert not _RE_STRUCTURE_LINE.search(scrub_plain(payload))
+
+
+@_SLOW
+@given(MARKDOWN_ATTACK, MARKDOWN_ATTACK, MARKDOWN_ATTACK)
+def test_composed_message_keeps_exactly_the_composer_structure(
+    headline: str, body: str, reason: str
+) -> None:
+    """Die **fertige** Nachricht trägt genau eine 📧- und eine Von-Zeile (CT-8).
+
+    Geprüft wird der echte Weg über `DigestComposer.compose`, nicht nur der Feld-Scrub.
+    """
+    mail = SanitizedMail(
+        dedupe_key="k",
+        from_display=headline,
+        from_domain="absender.example",
+        subject=body,
+        body_text=body,
+        sanitization_report=SanitizationReport(),
+    )
+    summary = Summary(headline=headline[:100], summary_text=body, importance="normal")
+    verdict = CriticVerdict(phishing_risk="low", risk_reasons=[reason], summary_accurate=True)
+    text = "\n".join(DigestComposer().compose(mail, summary, verdict).parts)
+    lines = text.split("\n")
+    assert sum(1 for line in lines if line.startswith("📧 ")) == 1
+    assert sum(1 for line in lines if line.startswith("Von: ")) == 1
+    assert sum(1 for line in lines if line.startswith("🔍 Hinweise: ")) <= 1
+    assert not any(line.startswith("⚠️") for line in lines)

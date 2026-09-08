@@ -95,8 +95,13 @@ def test_spf_fail_ist_kein_hartes_signal() -> None:
     assert not any(signal.hard for signal in collect_signals(mail))
 
 
-def test_punycode_ist_faktum_mixed_script_ist_hart() -> None:
-    """IDN kann legitim sein; gemischte Schriftsysteme sind eine Fälschungstechnik."""
+def test_ct11_punycode_und_mixed_script_sind_hart() -> None:
+    """Beides ist durch eine Weiterleitung nicht erklärbar (CT-11).
+
+    Vorher galt Punycode nur als Faktum: `hard=False`. Eine Weiterleitung ins
+    Spiegelpostfach bricht aber SPF/DKIM — sie schreibt keine Absender-Domain in
+    IDN-Schreibweise um. Genau darin unterscheidet sich das Signal von `auth_failed`.
+    """
     mail = make_mail(
         report=SanitizationReport(
             punycode_domains=["xn--test-3ya[.]example"],
@@ -104,7 +109,7 @@ def test_punycode_ist_faktum_mixed_script_ist_hart() -> None:
         )
     )
     signals = {signal.key: signal for signal in collect_signals(mail)}
-    assert signals["punycode"].hard is False
+    assert signals["punycode"].hard is True
     assert signals["mixed_script"].hard is True
 
 
@@ -288,3 +293,92 @@ def test_code_gruende_verdraengen_modellgruende_statt_umgekehrt() -> None:
     assert result.risk_reasons[0].startswith("Kritiker-Ausgabe enthielt")
     assert result.risk_reasons[1] == "Homoglyphen-Domain erkannt"
     assert "boese" not in " ".join(result.risk_reasons)
+
+
+# --- Cold-Test-Regression CT-11: Kombination harter Signale ---------------------------
+
+
+def test_ct11_sechs_zusammenpassende_signale_heben_auf_high() -> None:
+    """CT-11: Die auffälligste Mail des Cold-Tests kam ohne Warn-Banner an.
+
+    Punycode-Absender, SPF/DKIM/DMARC=fail, abweichendes Reply-To und Return-Path —
+    das Modell sagte `none`, und der Code hob nichts an. Jetzt greift die Kombination
+    (F-CRIT-2/F-CRIT-3).
+    """
+    mail = make_mail(
+        report=SanitizationReport(
+            auth_results={"spf": "fail", "dkim": "fail", "dmarc": "fail"},
+            punycode_domains=["xn--sparkasse-77a[.]example"],
+            reply_to_mismatch=True,
+            return_path_mismatch=True,
+        )
+    )
+    result = enforce_verdict_policy(verdict(phishing_risk="none"), collect_signals(mail))
+    assert result.phishing_risk == "high"
+    assert result.risk_reasons[0].startswith("Mehrere unabhängige Fälschungssignale")
+
+
+def test_ct11_weiterleitungsschaden_bleibt_ohne_risiko() -> None:
+    """Gegenprobe zu ADR-043: Weiterleitung bricht SPF/DKIM und den Return-Path.
+
+    Genau dieser Fall darf **nicht** eskalieren — sonst trüge jede weitergeleitete Mail
+    im Spiegelpostfach ein Phishing-Banner.
+    """
+    mail = make_mail(
+        report=SanitizationReport(
+            auth_results={"spf": "fail", "dkim": "fail", "dmarc": "fail"},
+            return_path_mismatch=True,
+        )
+    )
+    result = enforce_verdict_policy(verdict(phishing_risk="none"), collect_signals(mail))
+    assert result.phishing_risk == "none"
+
+
+def test_ct11_drei_signale_ohne_hartes_eskalieren_nicht() -> None:
+    """Auch drei weiterleitungs-erklärbare Signale bleiben unter `high` (ADR-043)."""
+    mail = make_mail(
+        report=SanitizationReport(
+            auth_results={"spf": "fail"},
+            reply_to_mismatch=True,
+            return_path_mismatch=True,
+        )
+    )
+    result = enforce_verdict_policy(verdict(phishing_risk="none"), collect_signals(mail))
+    assert result.phishing_risk == "none"
+
+
+def test_ct11_punycode_allein_hebt_nur_auf_low() -> None:
+    """Eine IDN-Domain kann legitim sein — sie warnt, sie alarmiert nicht."""
+    mail = make_mail(report=SanitizationReport(punycode_domains=["xn--test-3ya[.]example"]))
+    result = enforce_verdict_policy(verdict(phishing_risk="none"), collect_signals(mail))
+    assert result.phishing_risk == "low"
+    assert "Punycode-Domain" in result.risk_reasons
+
+
+def test_ct11_kombinationsgrund_nennt_keine_domains() -> None:
+    """Die Code-Gründe stehen im Banner — dort gehören keine defangten Adressen hin."""
+    mail = make_mail(
+        report=SanitizationReport(
+            auth_results={"spf": "fail"},
+            mixed_script_domains=["раypal[.]example"],
+            reply_to_mismatch=True,
+        )
+    )
+    result = enforce_verdict_policy(verdict(phishing_risk="none"), collect_signals(mail))
+    assert result.phishing_risk == "high"
+    assert all("[.]" not in reason for reason in result.risk_reasons)
+
+
+def test_ct15_html_divergenz_ist_ein_signal_fuer_den_kritiker() -> None:
+    """`html_divergent` erreicht den Kritiker als Programm-Fakt (F-CRIT-3, ADR-067)."""
+    mail = make_mail(report=SanitizationReport(html_divergent=True))
+    keys = {signal.key for signal in collect_signals(mail)}
+    assert "html_divergent" in keys
+
+
+def test_ct15_html_divergenz_ist_weich_und_hebt_die_stufe_nicht() -> None:
+    """Die Divergenz sagt über die Echtheit des Absenders nichts — sie bleibt weich."""
+    signals = [s for s in collect_signals(
+        make_mail(report=SanitizationReport(html_divergent=True))
+    ) if s.key == "html_divergent"]
+    assert signals and not signals[0].hard
