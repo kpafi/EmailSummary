@@ -48,14 +48,14 @@
 
 | ID | Anforderung | Status |
 |----|-------------|--------|
-| NF-1 | Lightweight: Python ≥ 3.11, Laufzeit-Dependencies ≤ 8 Pakete, SQLite als einziger Store, lauffähig auf einem kleinen VPS/Raspberry Pi. | open |
-| NF-2 | Neue Laufzeit-Dependency nur mit ADR. | open |
+| NF-1 | Lightweight: Python ≥ 3.11, Laufzeit-Dependencies ≤ 8 Pakete, SQLite als einziger Store, lauffähig auf einem kleinen VPS/Raspberry Pi. | done (WP12) — sechs Laufzeit-Pakete (`imap-tools`, `httpx`, `pydantic`, `beautifulsoup4`, `lxml`, `pdfminer.six`), SQLite aus der stdlib, `hypothesis` ist Dev-only. **Nicht** belegt: die Lauffähigkeit auf einem Raspberry Pi ist nie gemessen worden |
+| NF-2 | Neue Laufzeit-Dependency nur mit ADR. | done (WP12) — die sechs Pakete stehen mit Begründung in PLAN §3 und in docs/DECISIONS.md; seit WP0 ist keines ohne ADR hinzugekommen |
 | NF-3 | Konfiguration vollständig über eine `config.toml` + Env-Vars; keine Datenbank-Migrationstools. | done (WP1 + WP8 + WP9) — jedes Feld ist in docs/SPEC-CLI.md §5 mit Default dokumentiert und wird von einem Test gegen das Schema abgeglichen; Schema-Upgrade der DB additiv im Code (ADR-048) |
-| NF-4 | Verarbeitungslatenz pro Mail < 60 s unter Normalbedingungen (exkl. LLM-Ausreißer). | open |
+| NF-4 | Verarbeitungslatenz pro Mail < 60 s unter Normalbedingungen (exkl. LLM-Ausreißer). | **open** — nie gemessen. Ohne echte LLM-API gibt es keine belastbare Zahl; die eigenen Stufen (Sanitizer, Composer) liegen im Millisekundenbereich, die Latenz ist damit praktisch die Summe zweier Modell-Aufrufe. Bleibt offen bis zum ersten Produktivlauf |
 | NF-5 | Logs strukturiert, ohne Mail-Inhalte und ohne PII über Absender-Domain + gehashte Message-ID hinaus. | done (WP2 + WP8) — JSON-Zeilen auf stdout, Level aus `[general] log_level`, nicht serialisierbare `extra`-Werte werden auf ihren Typnamen reduziert; Tracebacks nur bei DEBUG (ADR-046/047) |
-| NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | done (WP10) — `sanitize/` 98 %, `output/` 99 %, gesamt 97 % bei 1103 Tests; Messwerte und Restlücken in docs/TESTING.md §5. Ergänzt um Property-Based-Tests (hypothesis, Dev-only, ADR-058), Fehlerinjektion an jeder Stufe und den Findings-Log HT-1…HT-12 |
-| NF-7 | Doku-Pflicht: REQUIREMENTS/ARCHITECTURE/SECURITY/DECISIONS werden in jedem WP mitgepflegt; SPEC-CLI.md ist vollständiger CLI-Vertrag. | in-progress (WP9) — SPEC-CLI.md liegt vor und wird von `tests/unit/test_spec_cli.py` maschinell gegen argparse und das Config-Schema abgeglichen; die laufende Mitpflege endet erst mit WP12 |
-| NF-8 | Zwei unabhängige Testdurchläufe: Hot (Whitebox) und Cold (Blackbox durch Agent ohne Code-Zugriff) gemäß TESTING.md. | in-progress — Hot-Durchlauf abgeschlossen (WP10, Findings-Log in docs/TESTING.md §5); der Cold-Durchlauf folgt in WP11 |
+| NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | done (WP10, Stand WP12) — `sanitize/` 98 %, `output/` 99 %, gesamt 97 % bei 1278 Tests; Messwerte und Restlücken in docs/TESTING.md §5. Ergänzt um Property-Based-Tests (hypothesis, Dev-only, ADR-058), Fehlerinjektion an jeder Stufe und den Findings-Log HT-1…HT-12 |
+| NF-7 | Doku-Pflicht: REQUIREMENTS/ARCHITECTURE/SECURITY/DECISIONS werden in jedem WP mitgepflegt; SPEC-CLI.md ist vollständiger CLI-Vertrag. | done (WP12) — SPEC-CLI.md wird von `tests/unit/test_spec_cli.py` maschinell gegen argparse und das Config-Schema abgeglichen; in WP12 wurde die gesamte Doku gegen den Ist-Stand geprüft und SECURITY §7 ausgefüllt |
+| NF-8 | Zwei unabhängige Testdurchläufe: Hot (Whitebox) und Cold (Blackbox durch Agent ohne Code-Zugriff) gemäß TESTING.md. | **in-progress** — Hot abgeschlossen (WP10, §5), erster Cold-Durchlauf abgeschlossen (WP11, §6: 16 Befunde, alle ≥ medium gefixt und mit Regressionstest belegt). Die von TESTING §3 nach den `high`-Befunden CT-6/CT-9 verlangte **zweite** Cold-Runde steht aus — der einzige offene Punkt dieser Anforderung, benannt in README „Grenzen dieser Version" und SECURITY §7.2 |
 
 ## 4. Explizit außerhalb des Scopes (v0.1)
 

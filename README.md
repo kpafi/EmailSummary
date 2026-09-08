@@ -23,6 +23,25 @@ Echtes Postfach ──Weiterleitung──► Mirror-Postfach ──► MailDiges
 5. Geht irgendwo etwas schief, bekommst du eine Notiz „konnte nicht sicher verarbeitet
    werden" statt ungeprüften Inhalts — nichts verschwindet stillschweigend.
 
+Der Weg einer Mail — jede Stufe sieht nur, was die vorige durchgelassen hat:
+
+```
+Mirror-Postfach
+      │  IMAP (nur lesen, Gelesen-Flag, optional Verschieben)
+      ▼
+ [1] Ingest ─────► [2] Sanitizer ────► [3] Summarizer ───► [4] Kritiker ────► [5] Output- ───► [6] Messenger
+     Code               Code                LLM                 LLM               Sanitizer         Telegram/
+     Dedupe             MIME → Klartext     rechtelos           rechtelos         Code              Discord/
+                        HTML/Anhänge weg    JSON-Ausgabe        Phishing-Check    letzte Prüfung    Signal
+                             ▲                                                          │
+                             └── ab hier existiert die Rohmail nicht mehr               └── keine Links,
+                                                                                            kein Markup
+```
+
+Die beiden LLM-Stufen sind die einzigen, die fremden Text *interpretieren* — und die
+einzigen, die nichts können: kein Werkzeug, kein Netz, keine Datei, kein Zugriff auf das
+Postfach. Vor ihnen und hinter ihnen steht deterministischer Code.
+
 Details: [docs/SECURITY.md](docs/SECURITY.md). Der vollständige CLI- und Config-Vertrag
 steht in [docs/SPEC-CLI.md](docs/SPEC-CLI.md), der Betrieb als Dienst in
 [docs/BETRIEB.md](docs/BETRIEB.md).
@@ -76,8 +95,12 @@ Für Cron statt Dauerbetrieb: `maildigest run --once`.
 📧 Heizungsablesung am Donnerstag
 Von: Hausverwaltung Meier (hausverwaltung-meier[.]example) · 12.03. 09:14
 Die Hausverwaltung kündigt eine Ablesung der Heizkörper an. Zutritt zwischen 9 und 13 Uhr nötig.
-🔍 Hinweise: 1 Link entfernt
 ```
+
+Die Zeile `🔍 Hinweise: …` kommt nur dazu, wenn es etwas zu melden gibt — eine
+fehlgeschlagene Absender-Prüfung, eine Punycode-Domain, versteckter Text im HTML,
+gekürzter Text. Entfernte Links sind kein Hinweis wert: Sie stehen als
+`[Link #1: beispiel[.]de]` an ihrer Stelle im Text.
 
 Unwichtige Mails kommen nicht einzeln, sondern einmal am Tag gesammelt:
 
@@ -89,8 +112,10 @@ Und wenn etwas faul ist:
 
 ```
 ⚠️ PHISHING-VERDACHT: Absenderdomain passt nicht zum angeblichen Absender, Antwortadresse abweichend
-📧 Dringende Zahlungsaufforderung
+📧 Dringende Zahlungsaufforderung [wichtig]
 Von: Chef (mail-sicherheit[.]example) · 12.03. 03:41
+Angebliche Zahlungsaufforderung des Chefs, Überweisung noch heute.
+🔍 Hinweise: Antwortadresse weicht vom Absender ab
 ```
 
 ## Anpassen
@@ -175,19 +200,56 @@ es nicht — auch kein `EXPUNGE`, das die Löschmarkierungen anderer Programme a
 
 ## Grenzen dieser Version
 
-Kein OCR und keine Bildanalyse, keine Entschlüsselung von PGP/S-MIME, keine Antworten aus
-dem Messenger heraus, ein Postfach pro Installation, kein Zugriff auf das echte Postfach.
+Das Folgende ist keine Aufzählung von Kleinigkeiten, sondern die Liste der Stellen, an
+denen du dich auf MailDigest **nicht** verlassen solltest.
 
-Zugestellter Text trägt bewusst keine Formatierung: Aufzählungen erscheinen als `•`,
-Überschriften und Kursivschrift verschwinden. Das ist Absicht — Formatierung im Namen eines
-Absenders ist ein Vertrauenssignal, das MailDigest niemandem überlässt.
+**Noch nie gegen echte Gegenstellen gelaufen.** Version 0.1.0 ist vollständig gegen
+Attrappen getestet: kein echtes IMAP-Postfach, keine echte LLM-API, kein echter Messenger.
+Die Tests sind gründlich (1250+ Tests, ein Angriffskorpus, ein Blackbox-Durchlauf), aber
+sie prüfen das Programm gegen ein nachgebautes Gegenüber. Ob ein realer IMAP-Server sich
+so verhält wie unser Mock, ob ein reales Modell das JSON-Format hält, ob Telegram die
+Nachricht so annimmt — das ist unbelegt. Rechne beim ersten Lauf mit Überraschungen und
+fang mit `maildigest test --dry-run` an.
 
-Bei Mails, die eine Text- und eine HTML-Fassung enthalten, fasst MailDigest die Textfassung
-zusammen — dein Mailprogramm zeigt dir dagegen die HTML-Fassung. Weichen beide deutlich
-voneinander ab, steht das als Hinweis in der Nachricht; inhaltlich vergleichen kann
-MailDigest sie nicht.
+**Der zweite Blackbox-Durchlauf fehlt.** Der erste (docs/TESTING.md §6) fand zwei
+schwerwiegende Fehler; beide sind behoben und mit Regressionstests belegt. Unser eigenes
+Testprotokoll verlangt danach eine zweite, unabhängige Runde. Sie hat nicht stattgefunden.
+
+**Bild-Phishing bleibt offen.** Kein OCR, keine Bildanalyse. Wer seinen Text als Screenshot
+verschickt, bekommt eine Zusammenfassung wie „Mail ohne Text mit einem Bildanhang" — das
+ist auffällig, aber es ist keine Prüfung.
+
+**Verschlüsselte Mail wird nicht gelesen.** PGP und S/MIME werden nicht entschlüsselt; du
+bekommst nur die Metadaten-Notiz.
+
+**Signal nur als Notiz an dich selbst.** Der Signal-Adapter schreibt in „Notiz an mich" und
+setzt ein laufendes `signal-cli --daemon` voraus. Andere Empfänger sind nicht vorgesehen.
+
+**Neue Warnheuristiken sind ungeeicht.** Die Erkennung von KI-Anweisungen im Mail-Text, die
+Schwelle für „HTML-Teil weicht vom Textteil ab" und die Regel, ab wann mehrere
+Fälschungssignale zu einer Phishing-Warnung werden, sind an Testmails eingestellt, nicht an
+deinem Posteingang. Zu viele Warnungen sind wahrscheinlicher als zu wenige — und eine
+Warnung, die immer kommt, ist keine.
+
+**Verschieben kann erst im Betrieb scheitern.** `connect-mail` prüft nicht vorab, ob dein
+Server die MOVE-Erweiterung beherrscht und ob der Zielordner existiert. Beides fällt erst
+beim ersten Lauf auf; verloren geht dabei nichts — die Mail bleibt als gelesen liegen.
+
+**Ein Postfach, ein Prozess, keine Rückrichtung.** Kein Multi-Postfach-Betrieb, keine
+Antworten aus dem Messenger heraus, kein Zugriff auf dein echtes Postfach.
+
+Zwei bewusste Eigenheiten, die wie Fehler aussehen können:
+
+* Zugestellter Text trägt **keine Formatierung**: Aufzählungen erscheinen als `•`,
+  Überschriften und Kursivschrift verschwinden. Formatierung im Namen eines Absenders ist
+  ein Vertrauenssignal, das MailDigest niemandem überlässt.
+* Bei Mails mit Text- **und** HTML-Fassung fasst MailDigest die Textfassung zusammen — dein
+  Mailprogramm zeigt dir die HTML-Fassung. Weichen beide deutlich voneinander ab, steht das
+  als Hinweis in der Nachricht; inhaltlich vergleichen kann MailDigest sie nicht.
 
 ## Lizenz und Status
 
-Version 0.1, in Entwicklung. Die verbindlichen Anforderungen stehen in
-[docs/REQUIREMENTS.md](docs/REQUIREMENTS.md).
+Version 0.1.0 (siehe [CHANGELOG.md](CHANGELOG.md)) — ein erstes vollständiges Release, noch
+ohne Praxiserprobung. Die verbindlichen Anforderungen stehen in
+[docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), das Sicherheitsmodell samt Invarianten-Review
+in [docs/SECURITY.md](docs/SECURITY.md).

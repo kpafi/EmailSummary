@@ -74,6 +74,7 @@ Python ≥ 3.11, `imap-tools` (IMAP), `httpx` (API-Calls), `pydantic` (Config + 
 emailzusammenfassung/
 ├── PLAN.md                    # dieses Dokument
 ├── README.md                  # Nutzer-Doku (WP9; Feinschliff in WP12)
+├── CHANGELOG.md               # Release-Notizen (WP12, ab 0.1.0)
 ├── pyproject.toml
 ├── docs/
 │   ├── REQUIREMENTS.md        # Anforderungen (F-/NF-IDs) — Pflichtlektüre
@@ -92,12 +93,15 @@ emailzusammenfassung/
 │   ├── sanitize/              # html_to_text.py, links.py, attachments.py, extract_pdf.py, unicode_clean.py
 │   ├── llm/                   # base.py (Interface), anthropic.py, openai.py, prompts.py, schema.py
 │   ├── agents/                # summarizer.py, critic.py
-│   ├── output/sanitizer.py    # letzte deterministische Prüfung vor Versand
+│   ├── output/                # sanitizer.py (letzte Prüfung vor Versand), composer.py
+│   ├── runner.py              # Daemon-Schleife, Retries, Sammel-Digest (WP8)
+│   ├── delivery.py            # persistente Zustell-Warteschlange (WP8)
+│   ├── logging_setup.py       # JSON-Logzeilen (WP8)
 │   ├── messenger/             # base.py, telegram.py, discord.py, signal.py
 │   ├── state/db.py            # SQLite-State
 │   └── cli.py                 # init / connect-mail / connect-messenger / run / test
 └── tests/
-    ├── unit/                  # Hot-Tests (WP10)
+    ├── unit/                  # Hot-Tests (WP10) + Invarianten-Check I1–I8 (WP12)
     ├── integration/           # Hot-Tests (WP10)
     ├── cold/                  # Cold-Tests (WP11) — entsteht durch separaten Agenten
     └── corpus/                # Testmail-Korpus inkl. Angriffs-Mails (WP3/WP11)

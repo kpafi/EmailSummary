@@ -91,9 +91,22 @@ Sicherheitsbereich: zweite Cold-Runde mit frischem Agenten.
       anders gelöster Teilaspekt — beides in §6 begründet.
 - [x] Adversarial-Suite Teil der CI (`pytest` gesamt): `tests/cold/test_cold_suite.py`
       fährt den Angriffs-Korpus des Cold-Tests über `maildigest.cli.main()` (73 Tests).
-- [ ] Invarianten-Review (SECURITY.md §7) dokumentiert. → **WP12**.
-- [ ] Zweite Cold-Runde mit frischem Agenten (§3 Nachlauf verlangt sie bei
-      Sicherheits-Findings ≥ high: CT-6 und CT-9). → **WP12**.
+- [x] Invarianten-Review (SECURITY.md §7) dokumentiert (WP12): Befund je I1–I8, Methode und
+      Datum; die mechanisch prüfbaren Aussagen sind als `tests/unit/test_invarianten.py`
+      festgehalten (24 Tests, AST-basiert statt `grep` — die ausführlichsten Fundstellen für
+      `expunge`/`parse_mode` sind die Begründungen, warum es sie nicht gibt). Darin auch der
+      in SECURITY §6 angekündigte Lint-Check „kein `verify=False` irgendwo".
+- [ ] **Zweite Cold-Runde mit frischem Agenten** (§3 Nachlauf verlangt sie bei
+      Sicherheits-Findings ≥ high: CT-6 und CT-9). **Nicht erfüllt.** Sie hat nicht
+      stattgefunden; der WP12-Agent hat den Code gelesen und kann eine Blackbox-Runde nicht
+      ersetzen. Die Skripte in `tests/cold/scripts/` sind lauffähig und brauchen die
+      Arbeitsumgebung aus dem Kopf von `tests/cold/REPORT.md`. Bis dahin bleibt NF-8
+      `in-progress`; die Lücke steht als bekannte Grenze in README, CHANGELOG und
+      SECURITY §7.2.
+
+**M3 ist damit nicht vollständig erreicht.** Release 0.1.0 wird trotzdem getaggt: Alle
+Befunde ab `medium` aus beiden Durchläufen sind behoben und mit Regressionstests belegt, und
+die fehlende zweite Runde ist an vier Stellen offen benannt statt weggehakt.
 
 ## 5. Findings-Log (Hot-Testing)
 
@@ -267,13 +280,13 @@ der Fehlerinjektion, HT-8 bis HT-12 aus der gezielten Grenzfall-Suche.
 
 ### Coverage-Endstand (NF-6)
 
-Gemessen mit `.venv/bin/pytest --cov=maildigest --cov-report=term-missing` (1103 Tests):
+Gemessen mit `.venv/bin/pytest --cov=src/maildigest --cov-report=term-missing`:
 
-| Bereich | Ziel (NF-6) | vor WP10 | nach WP10 |
-|---------|-------------|----------|-----------|
-| `sanitize/` | ≥ 90 % | 92,3 % (48 offen) | **98 %** (622 Anweisungen, 10 offen) |
-| `output/` | ≥ 90 % | 98,0 % | **99 %** (308 Anweisungen, 4 offen) |
-| gesamt | ≥ 80 % | 95,5 % | **97 %** (3824 Anweisungen, 122 offen) |
+| Bereich | Ziel (NF-6) | vor WP10 | nach WP10 (1103 Tests) | Stand WP12 (1278 Tests) |
+|---------|-------------|----------|------------------------|-------------------------|
+| `sanitize/` | ≥ 90 % | 92,3 % (48 offen) | **98 %** (622 Anw., 10 offen) | **98 %** (645 Anw., 11 offen) |
+| `output/` | ≥ 90 % | 98,0 % | **99 %** (308 Anw., 4 offen) | **99 %** (341 Anw., 2 offen) |
+| gesamt | ≥ 80 % | 95,5 % | **97 %** (3824 Anw., 122 offen) | **97 %** (3986 Anw., 118 offen) |
 
 Die verbliebenen Lücken sind Verzweigungen, die nur auf anderen Plattformen erreichbar sind
 (`__main__.py`, `# pragma: no cover`-Zweige) oder HTTP-Fehlerpfade der Provider-/Messenger-
