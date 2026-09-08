@@ -93,6 +93,10 @@ class SanitizationReport(BaseModel):
     punycode_domains: list[str] = Field(default_factory=list)
     mixed_script_domains: list[str] = Field(default_factory=list)
     truncated: bool = False
+    #: `multipart/alternative` mit einem HTML-Teil, dessen Text inhaltlich deutlich vom
+    #: ausgewerteten `text/plain`-Teil abweicht (CT-15, ADR-067). Mailprogramme zeigen den
+    #: HTML-Teil — die Zusammenfassung beschriebe sonst unbemerkt einen anderen Inhalt.
+    html_divergent: bool = False
     blocked_attachments: int = Field(default=0, ge=0)
     reply_to_mismatch: bool = False
     return_path_mismatch: bool = False

@@ -8,6 +8,7 @@ from maildigest.config import LimitsConfig
 from maildigest.models import RawMail
 from maildigest.pipeline import Sanitizer, classify_failure
 from maildigest.sanitize import MailSanitizer, SanitizeError
+from maildigest.sanitize.links import FOOTNOTE_TITLE, build_footnote
 
 
 def make_raw(
@@ -104,18 +105,24 @@ class TestBodyUndLimits:
 
 
 class TestFussnote:
+    """CT-14: Die Fußnote gehört an die zugestellte Nachricht, nie in den Prompt."""
+
     MIME = plain_mail("Siehe https://ziel.example/pfad bitte.")
 
-    def test_default_keine_fussnote(self) -> None:
+    def test_ct14_body_traegt_nie_eine_fussnote(self) -> None:
+        """Der Body geht ins LLM — eine Linkliste hätte dort nur Angriffsfläche geschaffen."""
         mail = MailSanitizer().sanitize(make_raw(self.MIME))
         assert "Fußnote" not in mail.body_text
         assert mail.links_found == ["#1: hxxps[:]//ziel[.]example/pfad"]
 
-    def test_fussnote_wenn_konfiguriert(self) -> None:
-        mail = MailSanitizer(link_footnote=True).sanitize(make_raw(self.MIME))
-        assert "Link-Fußnote (defanged):" in mail.body_text
-        assert "#1: hxxps[:]//ziel[.]example/pfad" in mail.body_text
-        assert "://" not in mail.body_text  # auch die Fußnote ist defanged
+    def test_ct14_die_defangte_vollliste_steht_in_links_found(self) -> None:
+        """Der Composer baut die Fußnote aus `links_found` — die Daten liegen also bereit."""
+        mail = MailSanitizer().sanitize(make_raw(self.MIME))
+        assert mail.links_found == ["#1: hxxps[:]//ziel[.]example/pfad"]
+        assert build_footnote(mail.links_found).splitlines() == [
+            FOOTNOTE_TITLE,
+            "#1: hxxps[:]//ziel[.]example/pfad",
+        ]
 
 
 class TestReport:
@@ -198,3 +205,70 @@ class TestReport:
         mail = MailSanitizer().sanitize(make_raw(mime))
         assert len(mail.attachment_texts) == 2
         assert {info.filename_sanitized for info in mail.attachments} == {"a.txt", "a.txt (2)"}
+
+
+def alternative_mail(plain: str, html: str) -> bytes:
+    """`multipart/alternative` — Mailprogramme zeigen den HTML-Teil, MailDigest den Text."""
+    return (
+        'Content-Type: multipart/alternative; boundary="B"\r\n\r\n'
+        "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+        f"{plain}\r\n"
+        "--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+        f"{html}\r\n"
+        "--B--\r\n"
+    ).encode()
+
+
+class TestCt15DivergierendesHtml:
+    """CT-15: Bei `multipart/alternative` wird nur text/plain ausgewertet.
+
+    Ein Angreifer schickt harmlosen Klartext und bösartiges HTML; das Mailprogramm zeigt
+    das HTML, die Zusammenfassung beschreibt den Klartext. Ohne den Fix bleibt die
+    Abweichung unbemerkt **und** unerwähnt.
+    """
+
+    def test_divergierender_html_teil_wird_im_report_vermerkt(self) -> None:
+        mime = alternative_mail(
+            "Harmlose Terminbestaetigung ohne Besonderheiten.",
+            "<html><body>ANGRIFF: Ueberweisen Sie sofort 5000 Euro auf das Konto "
+            "DE99 1234 5678. Zur Freischaltung bitte umgehend anmelden.</body></html>",
+        )
+        report = MailSanitizer().sanitize(make_raw(mime)).sanitization_report
+        assert report.html_divergent is True
+
+    def test_gleichlautende_teile_sind_keine_divergenz(self) -> None:
+        text = "Ihr Termin am Dienstag ist bestaetigt. Bitte bringen Sie die Karte mit."
+        mime = alternative_mail(text, f"<html><body><p>{text}</p></body></html>")
+        report = MailSanitizer().sanitize(make_raw(mime)).sanitization_report
+        assert report.html_divergent is False
+
+    def test_html_formatierung_und_links_erzeugen_keinen_fehlalarm(self) -> None:
+        mime = alternative_mail(
+            "Newsletter September. Neue Oeffnungszeiten ab Montag. Abmelden jederzeit.",
+            "<html><body><h1>Newsletter September</h1>"
+            "<p>Neue <b>Oeffnungszeiten</b> ab Montag.</p>"
+            '<p><a href="https://beispiel.example/abmelden">Abmelden</a> jederzeit.</p>'
+            '<img src="https://beispiel.example/logo.png" alt="Logo der Firma">'
+            "</body></html>",
+        )
+        report = MailSanitizer().sanitize(make_raw(mime)).sanitization_report
+        assert report.html_divergent is False
+
+    def test_reine_html_mail_meldet_keine_divergenz(self) -> None:
+        mime = (
+            b"Content-Type: text/html; charset=utf-8\r\n\r\n"
+            b"<html><body>Nur HTML, kein Klartextteil vorhanden.</body></html>"
+        )
+        report = MailSanitizer().sanitize(make_raw(mime)).sanitization_report
+        assert report.html_divergent is False
+
+    def test_der_ausgewertete_body_bleibt_der_klartext_teil(self) -> None:
+        """Der HTML-Teil wird weiterhin nicht an das Modell gegeben (SECURITY §4)."""
+        mime = alternative_mail(
+            "Harmlose Terminbestaetigung ohne Besonderheiten.",
+            "<html><body>ANGRIFF: Ueberweisen Sie sofort 5000 Euro auf DE99 1234 5678, "
+            "sonst wird Ihr Zugang gesperrt.</body></html>",
+        )
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        assert "ANGRIFF" not in mail.body_text
+        assert mail.body_text.strip() == "Harmlose Terminbestaetigung ohne Besonderheiten."

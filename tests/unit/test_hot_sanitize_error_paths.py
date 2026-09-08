@@ -25,7 +25,7 @@ from maildigest.config import LimitsConfig
 from maildigest.models import RawMail
 from maildigest.sanitize import extract_pdf
 from maildigest.sanitize.html_to_text import html_to_text
-from maildigest.sanitize.links import LinkCollector
+from maildigest.sanitize.links import LinkCollector, build_footnote
 from maildigest.sanitize.sanitizer import (
     MailSanitizer,
     SanitizeError,
@@ -217,10 +217,12 @@ def test_sender_domain_mixed_script_is_reported() -> None:
 def test_link_footnote_is_capped() -> None:
     """Die optionale Fußnote hat ein Zeichenbudget — eine Link-Bombe sprengt sie nicht."""
     body = " ".join(f"http://ziel{index}.example/{'p' * 200}" for index in range(100))
-    sanitizer = MailSanitizer(link_footnote=True)
-    mail = sanitizer.sanitize(_mail(b"Content-Type: text/plain\r\n\r\n" + body.encode()))
-    assert "[weitere Links unterdrückt]" in mail.body_text
-    assert "://" not in mail.body_text
+    mail = MailSanitizer().sanitize(
+        _mail(b"Content-Type: text/plain\r\n\r\n" + body.encode())
+    )
+    footnote = build_footnote(mail.links_found)
+    assert "[weitere Links unterdrückt]" in footnote
+    assert "://" not in footnote
 
 
 def test_defanged_url_entry_is_length_capped() -> None:

@@ -221,3 +221,83 @@ def test_next_delivery_delay_is_capped() -> None:
     delays = [next_delivery_delay(attempt) for attempt in range(1, 8)]
     assert delays[: len(DELIVERY_BACKOFF_SECONDS)] == list(DELIVERY_BACKOFF_SECONDS)
     assert delays[-1] == DELIVERY_BACKOFF_SECONDS[-1]
+
+
+# --- CT-13: Fortsetzung mitten in einer mehrteiligen Nachricht --------------------------------
+
+
+class PartCountingMessenger:
+    """Messenger-Attrappe, die nach `die_after` Teilen abbricht (Sink-Modus `die_after_1`)."""
+
+    def __init__(self, die_after: int | None = None) -> None:
+        self.parts: list[str] = []
+        self._die_after = die_after
+
+    def send(self, message: DigestMessage) -> None:
+        for part in message.parts:
+            if self._die_after is not None and len(self.parts) >= self._die_after:
+                raise MessengerError("Verbindung abgebrochen (Attrappe)")
+            self.parts.append(part)
+
+    def heal(self) -> None:
+        self._die_after = None
+
+
+def test_ct13_retry_setzt_bei_dem_abgebrochenen_teil_fort() -> None:
+    """CT-13: Bereits bestätigte Teile werden beim Retry nicht erneut zugestellt.
+
+    Ohne den Fix sieht der Nutzer für **eine** Mail die Folge 1, 2, 1, 2, 3.
+    """
+    clock = Clock()
+    parts = ["Teil 1", "Teil 2", "Teil 3"]
+    with StateDB(":memory:") as db:
+        adapter = PartCountingMessenger(die_after=2)
+        outbox = OutboxMessenger(db, adapter, now=clock)
+        outbox.send(
+            DigestMessage(
+                parts=parts, importance="normal", is_warning=False, dedupe_key="<a@x>"
+            )
+        )
+        assert adapter.parts == ["Teil 1", "Teil 2"]
+        assert outbox.pending == 1
+
+        adapter.heal()
+        clock.advance(DELIVERY_BACKOFF_SECONDS[0])
+        stats = outbox.flush()
+
+        assert stats.delivered == 1
+        assert adapter.parts == ["Teil 1", "Teil 2", "Teil 3"]
+        assert outbox.pending == 0
+
+
+def test_ct13_gekuerzte_warteschlangenzeile_behaelt_wichtigkeit_und_warnflag() -> None:
+    """Die Nutzlast wird nur eingekürzt — Metadaten und Text bleiben unverändert."""
+    clock = Clock()
+    with StateDB(":memory:") as db:
+        outbox = OutboxMessenger(db, PartCountingMessenger(die_after=1), now=clock)
+        outbox.send(
+            DigestMessage(
+                parts=["A", "B", "C"],
+                importance="high",
+                is_warning=True,
+                dedupe_key="<a@x>",
+            )
+        )
+        item = db.outbox_due(now=START + timedelta(hours=1))[0]
+        assert item.parts == ["B", "C"]
+        assert item.importance == "high"
+        assert item.is_warning is True
+
+
+def test_ct13_fehlschlag_beim_ersten_teil_laesst_die_nachricht_vollstaendig() -> None:
+    """Ohne bestätigten Teil bleibt die Zeile unangetastet (kein stiller Teilverlust)."""
+    clock = Clock()
+    with StateDB(":memory:") as db:
+        outbox = OutboxMessenger(db, PartCountingMessenger(die_after=0), now=clock)
+        outbox.send(
+            DigestMessage(
+                parts=["A", "B"], importance="normal", is_warning=False, dedupe_key="<a@x>"
+            )
+        )
+        item = db.outbox_due(now=START + timedelta(hours=1))[0]
+        assert item.parts == ["A", "B"]

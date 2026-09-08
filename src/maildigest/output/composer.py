@@ -35,7 +35,7 @@ from maildigest.output.sanitizer import (
     scrub_plain,
     split_parts,
 )
-from maildigest.sanitize.links import LinkCollector
+from maildigest.sanitize.links import LinkCollector, build_footnote
 
 __all__ = [
     "LOW_DIGEST_DEDUPE_KEY",
@@ -136,16 +136,30 @@ class DigestComposer:
     weiterzählt.
     """
 
-    def __init__(self, *, part_limit: int = TELEGRAM_MAX_PART_CHARS) -> None:
-        """Args: part_limit: Zeichenlimit eines Nachrichtenteils (Default: Telegram)."""
+    def __init__(
+        self,
+        *,
+        part_limit: int = TELEGRAM_MAX_PART_CHARS,
+        link_footnote: bool = False,
+    ) -> None:
+        """Args:
+            part_limit: Zeichenlimit eines Nachrichtenteils (Default: Telegram).
+            link_footnote: Hängt die defangte Link-Liste an die Nachricht
+                (`[links] footnote`). Sie gehört an die **Zustellung** und nicht in den
+                Prompt — genau das war der Fehler hinter CT-14.
+        """
         if part_limit < 1:
             raise ValueError("part_limit muss mindestens 1 sein.")
         self._part_limit = part_limit
+        self._link_footnote = link_footnote
 
     @classmethod
     def from_config(cls, config: Config) -> DigestComposer:
         """Baut den Composer mit dem Limit des in `[messenger] active` gewählten Adapters."""
-        return cls(part_limit=part_limit_for(config.messenger.active))
+        return cls(
+            part_limit=part_limit_for(config.messenger.active),
+            link_footnote=config.links.footnote,
+        )
 
     @property
     def part_limit(self) -> int:
@@ -154,7 +168,10 @@ class DigestComposer:
 
     def __repr__(self) -> str:
         """Repräsentation ohne jeden Inhalt (I5)."""
-        return f"DigestComposer(part_limit={self._part_limit})"
+        return (
+            f"DigestComposer(part_limit={self._part_limit}, "
+            f"link_footnote={self._link_footnote})"
+        )
 
     # --- OutputComposer -----------------------------------------------------------
 
@@ -191,6 +208,12 @@ class DigestComposer:
         hints = self._hints_line(mail.sanitization_report, summary, verdict, collector)
         if hints:
             lines.append(hints)
+
+        if self._link_footnote and mail.links_found:
+            # Die Einträge sind bereits defanged (`hxxps[:]//…`); `_finalize` lässt diese
+            # Formen als „bereits sicher" unangetastet (ADR-059), bricht aber alles auf,
+            # was doch noch lebendig aussieht. I3 bleibt gewahrt (CT-14).
+            lines.append(build_footnote(mail.links_found))
 
         return DigestMessage(
             parts=self._finalize("\n".join(lines)),
@@ -401,6 +424,11 @@ class DigestComposer:
             hints.append(
                 "gemischte Schriftsysteme: " + ", ".join(report.mixed_script_domains[:3])
             )
+        if report.html_divergent:
+            # CT-15: Das Mailprogramm des Nutzers zeigt den HTML-Teil, zusammengefasst wurde
+            # der Klartext-Teil. Ohne diesen Hinweis wäre eine „harmlos"-Meldung zu einem
+            # Text möglich, den der Nutzer nie zu Gesicht bekommt (ADR-067).
+            hints.append("HTML-Teil weicht vom Textteil ab")
         if report.reply_to_mismatch:
             hints.append("Antwortadresse weicht vom Absender ab")
         if report.return_path_mismatch:

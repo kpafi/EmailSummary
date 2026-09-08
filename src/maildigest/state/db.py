@@ -616,14 +616,53 @@ class StateDB:
 
     @_wrap_sqlite_errors
     def outbox_defer(
-        self, item_id: int, *, next_attempt_at: datetime, error_class: str | None = None
+        self,
+        item_id: int,
+        *,
+        next_attempt_at: datetime,
+        error_class: str | None = None,
+        remaining_parts: list[str] | None = None,
+        importance: str | None = None,
+        is_warning: bool | None = None,
     ) -> None:
-        """Zählt einen Fehlversuch und verschiebt den nächsten Versuch."""
+        """Zählt einen Fehlversuch und verschiebt den nächsten Versuch.
+
+        Args:
+            remaining_parts: Wenn gesetzt, wird die gespeicherte Nutzlast auf genau diese
+                Teile eingekürzt. Damit setzt der Retry eine mehrteilige Nachricht dort
+                fort, wo sie abgebrochen ist, statt bereits zugestellte Teile erneut zu
+                schicken (CT-13, ADR-066). Es ist eine **Kürzung** der schon
+                sanitisierten `parts`-Liste — Text wird nie verändert (I3/I4).
+            importance: Wichtigkeit der Nachricht (nur zusammen mit `remaining_parts`
+                nötig, weil die Nutzlast als Ganzes neu geschrieben wird).
+            is_warning: Warn-Flag der Nachricht (dito).
+        """
+        if remaining_parts is None:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE outbox SET attempts = attempts + 1, next_attempt_at = ?, "
+                    "last_error = ? WHERE id = ?",
+                    (next_attempt_at.isoformat(), _clean_error_class(error_class), item_id),
+                )
+            return
+        payload = json.dumps(
+            {
+                "parts": list(remaining_parts),
+                "importance": importance if importance is not None else "normal",
+                "is_warning": bool(is_warning),
+            },
+            ensure_ascii=False,
+        )
         with self._conn:
             self._conn.execute(
                 "UPDATE outbox SET attempts = attempts + 1, next_attempt_at = ?, "
-                "last_error = ? WHERE id = ?",
-                (next_attempt_at.isoformat(), _clean_error_class(error_class), item_id),
+                "last_error = ?, payload = ? WHERE id = ?",
+                (
+                    next_attempt_at.isoformat(),
+                    _clean_error_class(error_class),
+                    payload,
+                    item_id,
+                ),
             )
 
     @_wrap_sqlite_errors

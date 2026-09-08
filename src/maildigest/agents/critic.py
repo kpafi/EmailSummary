@@ -188,6 +188,18 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
         signals.append(
             Signal("hidden_text", "Im HTML war versteckter Text enthalten (entfernt)")
         )
+    if report.html_divergent:
+        # Weich im Sinne von ADR-043: Die Divergenz sagt über die Echtheit des Absenders
+        # nichts, wohl aber über die Verlässlichkeit der Zusammenfassung — der Kritiker
+        # soll sie kennen (F-CRIT-3, ADR-067).
+        signals.append(
+            Signal(
+                "html_divergent",
+                "Die HTML-Fassung der Mail weicht inhaltlich vom ausgewerteten "
+                "Klartext-Teil ab — der Empfänger sieht in seinem Mailprogramm den "
+                "HTML-Teil, zusammengefasst wurde der Klartext",
+            )
+        )
     if report.control_chars_removed:
         signals.append(
             Signal(

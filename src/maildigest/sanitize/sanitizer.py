@@ -57,8 +57,18 @@ _MAX_ATTACHMENT_ENTRIES = 100
 _MAX_SUBJECT_CHARS = 300
 _MAX_DISPLAY_CHARS = 120
 
-#: Obergrenze der Link-Fußnote (nur bei `links.footnote = true`).
-_MAX_FOOTNOTE_CHARS = 5000
+#: Marker, die nur auf der HTML-Seite entstehen (sichtbar gemachte Ziele, Alt-Texte) und
+#: den Divergenz-Vergleich sonst systematisch verfälschen würden (CT-15).
+_RE_DIVERGENCE_NOISE = re.compile(r"\[(?:Link|Mail|Tel|Bild)\b[^\]]*\]")
+
+#: Wort-Token des Divergenz-Vergleichs: mindestens drei Buchstaben/Ziffern.
+_RE_CONTENT_WORD = re.compile(r"[0-9a-zà-öø-ÿ]{3,}")
+
+#: So viele im Klartext fehlende Wörter müssen im HTML-Teil mindestens stehen (CT-15).
+_DIVERGENCE_MIN_NEW_WORDS = 5
+
+#: … und zugleich diesen Anteil der HTML-Wörter ausmachen.
+_DIVERGENCE_RATIO = 0.5
 
 
 class SanitizeError(Exception):
@@ -82,19 +92,23 @@ class _WalkState:
     hidden_removed: int = 0
     control_chars_removed: int = 0
     truncated: bool = False
+    html_divergent: bool = False
 
 
 class MailSanitizer:
     """Deterministische Sanitize-Stufe (implementiert das `Sanitizer`-Protokoll der Pipeline)."""
 
-    def __init__(self, limits: LimitsConfig | None = None, *, link_footnote: bool = False) -> None:
+    def __init__(self, limits: LimitsConfig | None = None) -> None:
         self._limits = limits if limits is not None else LimitsConfig()
-        self._link_footnote = link_footnote
 
     @classmethod
     def from_config(cls, config: Config) -> MailSanitizer:
-        """Baut den Sanitizer aus der validierten Gesamt-Konfiguration."""
-        return cls(config.limits, link_footnote=config.links.footnote)
+        """Baut den Sanitizer aus der validierten Gesamt-Konfiguration.
+
+        `links.footnote` wird hier **nicht** ausgewertet: Die Fußnote gehört an die
+        zugestellte Nachricht, nicht in den Prompt — sie hängt am Composer (CT-14).
+        """
+        return cls(config.limits)
 
     # --- Öffentliche API -------------------------------------------------------------------
 
@@ -122,6 +136,10 @@ class MailSanitizer:
         # Body: text/plain bevorzugt; sonst text/html → Text (SECURITY §4).
         if state.body_plain:
             body_raw = "\n\n".join(state.body_plain)
+            # CT-15: Der Nutzer sieht in seinem Mailprogramm den HTML-Teil. Weicht der
+            # inhaltlich ab, wird das vermerkt — sonst beschreibt die Zusammenfassung
+            # unbemerkt einen anderen Text als den angezeigten.
+            state.html_divergent = self._html_diverges(body_raw, state)
         elif state.body_html:
             converted: list[str] = []
             for html in state.body_html:
@@ -162,9 +180,9 @@ class MailSanitizer:
         subject = self._sanitize_header(raw.subject_raw, links, state, _MAX_SUBJECT_CHARS)
         from_display = self._from_display(raw, links, state)
 
-        if self._link_footnote and links.links_found:
-            body_text = body_text + _footnote(links.links_found)
-
+        # Die Link-Fußnote gehört **nicht** an den Body: Der geht in den Prompt, und der
+        # Nutzer bekäme sie nie zu sehen (CT-14). Sie hängt jetzt der Composer an die
+        # zugestellte Nachricht; die defangte Vollliste steht in `links_found`.
         report = self._build_report(raw, links, state, attachments)
         return SanitizedMail(
             dedupe_key=raw.dedupe_key,
@@ -177,6 +195,38 @@ class MailSanitizer:
             attachments=attachments,
             links_found=list(links.links_found),
             sanitization_report=report,
+        )
+
+    def _html_diverges(self, body_plain: str, state: _WalkState) -> bool:
+        """Weicht der (ignorierte) HTML-Teil inhaltlich vom Klartext-Teil ab? (CT-15)
+
+        Verglichen werden Wort-Mengen, nicht Zeichen: Ein `multipart/alternative` ist
+        legitim, wenn beide Teile dasselbe *sagen*; Formatierung, Reihenfolge und
+        Link-Auszeichnung dürfen sich unterscheiden. Link-, Mail-, Tel- und Bild-Marker
+        werden vorher aus beiden Seiten entfernt — sie entstehen nur auf der HTML-Seite
+        (sichtbar gemachte `href`-Ziele, Alt-Texte) und wären sonst eine sichere Quelle
+        für Falschmeldungen.
+
+        Gemeldet wird nur ein **substanzieller** Überhang: mindestens
+        :data:`_DIVERGENCE_MIN_NEW_WORDS` Wörter, die im Klartext gar nicht vorkommen, und
+        zugleich mehr als :data:`_DIVERGENCE_RATIO` der HTML-Wörter. Der klassische
+        Angriff (harmloser Klartext, bösartiges HTML) hat einen Überhang nahe 1,0.
+        """
+        if not state.body_html:
+            return False
+        converted: list[str] = []
+        for html in state.body_html:
+            cleaned_html, _ = clean_text(html)
+            text, _ = html_to_text(cleaned_html)
+            converted.append(text)
+        html_words = _content_words("\n".join(converted))
+        if not html_words:
+            return False
+        plain_words = _content_words(body_plain)
+        new_words = html_words - plain_words
+        return (
+            len(new_words) >= _DIVERGENCE_MIN_NEW_WORDS
+            and len(new_words) / len(html_words) > _DIVERGENCE_RATIO
         )
 
     # --- MIME-Baum -------------------------------------------------------------------------
@@ -354,6 +404,7 @@ class MailSanitizer:
             punycode_domains=punycode,
             mixed_script_domains=mixed,
             truncated=state.truncated,
+            html_divergent=state.html_divergent,
             blocked_attachments=sum(1 for info in attachments if not info.processed),
             reply_to_mismatch=_reply_to_mismatch(raw),
             return_path_mismatch=_return_path_mismatch(raw),
@@ -369,6 +420,12 @@ def _strip_tag_like(text: str) -> str:
     return _RE_TAG_LIKE.sub(" ", text)
 
 
+def _content_words(text: str) -> set[str]:
+    """Wortmenge eines Textes für den Divergenz-Vergleich (CT-15)."""
+    without_markers = _RE_DIVERGENCE_NOISE.sub(" ", text)
+    return set(_RE_CONTENT_WORD.findall(without_markers.casefold()))
+
+
 def _take_budget(text: str, budget: int) -> tuple[str, int, bool]:
     """Wendet das verbleibende Gesamt-Klartext-Budget an (SECURITY §4, T10)."""
     if len(text) <= budget:
@@ -376,19 +433,6 @@ def _take_budget(text: str, budget: int) -> tuple[str, int, bool]:
     cut = text[: max(budget, 0)].rstrip()
     result = f"{cut}\n{_TRUNCATION_MARKER}" if cut else _TRUNCATION_MARKER
     return result, 0, True
-
-
-def _footnote(links_found: list[str]) -> str:
-    """Baut die optionale defangte Link-Fußnote (Config `links.footnote`, I3-konform)."""
-    lines = ["", "", "Link-Fußnote (defanged):"]
-    total = 0
-    for entry in links_found:
-        total += len(entry) + 1
-        if total > _MAX_FOOTNOTE_CHARS:
-            lines.append("[weitere Links unterdrückt]")
-            break
-        lines.append(entry)
-    return "\n".join(lines)
 
 
 def _unique_name(filename: str, state: _WalkState) -> str:

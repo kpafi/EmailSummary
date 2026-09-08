@@ -49,14 +49,57 @@ def make_message(raw: bytes, uid: str) -> MailMessage:
     return MailMessage([(f"1 (UID {uid} FLAGS ())".encode(), raw), b")"])
 
 
+class FakeRawClient:
+    """Ersatz für `imaplib.IMAP4_SSL`: protokolliert jedes rohe UID-Kommando (CT-9)."""
+
+    def __init__(self, box: FakeMailBox) -> None:
+        self._box = box
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return self._box.capabilities
+
+    def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+        decoded = [
+            arg.decode("utf-8", "replace") if isinstance(arg, bytes) else str(arg)
+            for arg in args
+        ]
+        self._box.commands.append((command.upper(), *decoded))
+        if self._box.uid_error is not None:
+            raise self._box.uid_error
+        return self._box.uid_status.get(command.upper(), "OK"), [b""]
+
+
 class FakeMailBox:
     """Postfach-Attrappe: hält Nachrichten, kennt gelesen/verschoben, kann nicht löschen."""
 
-    def __init__(self, messages: list[MailMessage] | None = None) -> None:
+    def __init__(
+        self,
+        messages: list[MailMessage] | None = None,
+        *,
+        capabilities: tuple[str, ...] = ("IMAP4REV1", "MOVE"),
+        uid_status: dict[str, str] | None = None,
+        uid_error: Exception | None = None,
+    ) -> None:
         self.messages = messages if messages is not None else []
-        self.flagged: list[tuple[str, str, bool]] = []
-        self.moved: list[tuple[str, str]] = []
+        self.commands: list[tuple[str, ...]] = []
+        self.capabilities = capabilities
+        self.uid_status = uid_status if uid_status is not None else {}
+        self.uid_error = uid_error
         self.logouts = 0
+        self.client = FakeRawClient(self)
+
+    @property
+    def flagged(self) -> list[tuple[str, str, bool]]:
+        return [
+            (cmd[1], MailMessageFlags.SEEN, True)
+            for cmd in self.commands
+            if cmd[0] == "STORE" and r"\Seen" in cmd[-1]
+        ]
+
+    @property
+    def moved(self) -> list[tuple[str, str]]:
+        return [(cmd[1], cmd[2].strip('"')) for cmd in self.commands if cmd[0] == "MOVE"]
 
     def login(self, username: str, password: str, initial_folder: str | None = "INBOX") -> None:
         return None
@@ -67,11 +110,12 @@ class FakeMailBox:
     def fetch(self, criteria: Any = "ALL", **kwargs: Any) -> list[MailMessage]:
         return list(self.messages)
 
-    def flag(self, uid_list: str, flag_set: str, value: bool) -> None:
-        self.flagged.append((uid_list, flag_set, value))
+    # F-ING-1/CT-9: Alle Komfort-Methoden von imap-tools expungen intern.
+    def flag(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailBox.flag() expunged — verboten (F-ING-1, CT-9)")
 
-    def move(self, uid_list: str, destination_folder: str) -> None:
-        self.moved.append((uid_list, destination_folder))
+    def move(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailBox.move() kann client-seitig löschen — verboten (CT-9)")
 
     def delete(self, *args: Any, **kwargs: Any) -> None:
         raise AssertionError("MailDigest darf Mails niemals löschen (F-ING-1)")
@@ -203,7 +247,7 @@ def test_duplicate_is_still_marked_seen(db: StateDB) -> None:
     box = FakeMailBox([make_message(make_mail("a"), "1")])
     client = make_client(box)
     poll_once(client, db, RecordingProcessor())
-    box.flagged.clear()
+    box.commands.clear()
     poll_once(client, db, RecordingProcessor())
     assert box.flagged == [("1", MailMessageFlags.SEEN, True)]
 
@@ -244,6 +288,48 @@ def test_two_distinct_mails_without_message_id_are_not_confused(db: StateDB) -> 
     poll_once(make_client(box), db, processor)
 
     assert len(processor.seen) == 2
+
+
+# --- CT-9/CT-12: Nachbehandlung ----------------------------------------------------------------
+
+
+def test_ct9_poll_once_setzt_nur_seen_und_expunged_nie(db: StateDB) -> None:
+    """CT-9: Über fünf Mails hinweg kein einziges EXPUNGE und kein `\\Deleted`."""
+    box = FakeMailBox(
+        [make_message(make_mail(f"m{index}"), str(index)) for index in range(1, 6)]
+    )
+    poll_once(make_client(box), db, RecordingProcessor())
+
+    assert [cmd[0] for cmd in box.commands] == ["STORE"] * 5
+    assert not any(r"\Deleted" in " ".join(cmd) for cmd in box.commands)
+
+
+def test_ct12_fehlender_zielordner_stoppt_den_zyklus_nicht(db: StateDB) -> None:
+    """CT-12: Ein abgelehntes MOVE ist kein „Postfach nicht erreichbar“.
+
+    Ohne den Fix wirft `mark_processed` bei der ersten Mail einen `ImapConnectionError`;
+    die CLI macht daraus „Fehler: Postfach nicht erreichbar“ und der Rest des Postfachs
+    bleibt unverarbeitet.
+    """
+    box = FakeMailBox(
+        [make_message(make_mail(f"m{index}"), str(index)) for index in range(1, 4)],
+        uid_status={"MOVE": "NO"},
+    )
+    processor = RecordingProcessor()
+
+    stats = poll_once(make_client(box, move_processed_to="GibtEsNicht"), db, processor)
+
+    assert len(processor.seen) == 3
+    assert stats.processed == 3
+    assert stats.failed == 0
+    assert [cmd[0] for cmd in box.commands] == ["STORE", "MOVE"] * 3
+
+
+def test_ct12_verbindungsabbruch_wird_weiterhin_hochgereicht(db: StateDB) -> None:
+    """Abgrenzung zu CT-12: Ein echter Socket-Fehler bleibt ein Verbindungsfehler."""
+    box = FakeMailBox([make_message(make_mail("a"), "1")], uid_error=OSError("socket weg"))
+    with pytest.raises(ImapConnectionError):
+        poll_once(make_client(box), db, RecordingProcessor())
 
 
 # --- I6: eine kaputte Mail stoppt den Loop nicht ----------------------------------------------

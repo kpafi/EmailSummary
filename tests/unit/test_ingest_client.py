@@ -18,7 +18,12 @@ from imap_tools import MailboxFetchError, MailboxLoginError, MailMessage, MailMe
 from pydantic import SecretStr
 
 from maildigest.config import ImapConfig
-from maildigest.ingest.imap_client import ImapClient, ImapConnectionError, IngestError
+from maildigest.ingest.imap_client import (
+    ImapClient,
+    ImapConnectionError,
+    IngestError,
+    MailboxPostProcessError,
+)
 
 MAIL = b"""\
 Message-ID: <one@example.org>
@@ -57,6 +62,36 @@ class FakeFolderManager:
         return [FakeFolderInfo(name) for name in self._folders]
 
 
+def _as_text(value: Any) -> str:
+    """Argument eines UID-Kommandos als Text (imaplib bekommt Ordnernamen als Bytes)."""
+    return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+
+
+class FakeRawClient:
+    """Ersatz für `imaplib.IMAP4_SSL` — protokolliert **jedes** rohe Kommando.
+
+    Existiert wegen CT-9: `MailBox.flag()`/`move()`/`delete()` hängen intern ein
+    unbedingtes `EXPUNGE` an. MailDigest setzt deshalb rohe UID-Kommandos ab, und dieser
+    Fake ist die Stelle, an der ein EXPUNGE sichtbar würde.
+    """
+
+    def __init__(self, box: FakeMailBox) -> None:
+        self._box = box
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return self._box.capabilities
+
+    def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+        self._box.commands.append((command.upper(), *(_as_text(arg) for arg in args)))
+        if self._box.uid_error is not None:
+            raise self._box.uid_error
+        return self._box.uid_status.get(command.upper(), "OK"), [b""]
+
+    def expunge(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailDigest darf niemals expunge aufrufen (F-ING-1, CT-9)")
+
+
 class FakeMailBox:
     """Minimaler Ersatz für `imap_tools.MailBox` — protokolliert alle Kommandos."""
 
@@ -69,18 +104,35 @@ class FakeMailBox:
         flag_error: Exception | None = None,
         folders: list[str] | None = None,
         folder_error: Exception | None = None,
+        capabilities: tuple[str, ...] = ("IMAP4REV1", "MOVE", "UIDPLUS"),
+        uid_status: dict[str, str] | None = None,
     ) -> None:
         self.messages = messages if messages is not None else []
         self.folders = folders if folders is not None else ["INBOX", "Archiv"]
         self.folder_error = folder_error
         self.login_error = login_error
         self.fetch_error = fetch_error
-        self.flag_error = flag_error
+        self.uid_error = flag_error
+        self.capabilities = capabilities
+        self.uid_status = uid_status if uid_status is not None else {}
         self.logins: list[tuple[str, str, str | None]] = []
         self.fetch_calls: list[dict[str, Any]] = []
-        self.flagged: list[tuple[str, str, bool]] = []
-        self.moved: list[tuple[str, str]] = []
+        self.commands: list[tuple[str, ...]] = []
         self.logouts = 0
+        self.client = FakeRawClient(self)
+
+    # Abgeleitete Sichten auf `commands` (die Tests von WP2 lesen sie weiter so).
+    @property
+    def flagged(self) -> list[tuple[str, str, bool]]:
+        return [
+            (cmd[1], MailMessageFlags.SEEN, True)
+            for cmd in self.commands
+            if cmd[0] == "STORE" and r"\Seen" in cmd[-1]
+        ]
+
+    @property
+    def moved(self) -> list[tuple[str, str]]:
+        return [(cmd[1], cmd[2].strip('"')) for cmd in self.commands if cmd[0] == "MOVE"]
 
     def login(self, username: str, password: str, initial_folder: str | None = "INBOX") -> None:
         if self.login_error is not None:
@@ -96,19 +148,18 @@ class FakeMailBox:
             raise self.fetch_error
         return list(self.messages)
 
-    def flag(self, uid_list: str, flag_set: str, value: bool) -> None:
-        if self.flag_error is not None:
-            raise self.flag_error
-        self.flagged.append((uid_list, flag_set, value))
-
-    def move(self, uid_list: str, destination_folder: str) -> None:
-        self.moved.append((uid_list, destination_folder))
-
     @property
     def folder(self) -> Any:
         return FakeFolderManager(self.folders, self.folder_error)
 
-    # Die folgenden Kommandos darf MailDigest niemals aufrufen (F-ING-1).
+    # Die folgenden Kommandos darf MailDigest niemals aufrufen (F-ING-1, CT-9): Alle drei
+    # Komfort-Methoden von imap-tools expungen intern nach jedem STORE.
+    def flag(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailBox.flag() expunged — verboten (F-ING-1, CT-9)")
+
+    def move(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailBox.move() kann client-seitig löschen — verboten (CT-9)")
+
     def delete(self, *args: Any, **kwargs: Any) -> None:
         raise AssertionError("MailDigest darf Mails niemals löschen (F-ING-1)")
 
@@ -264,6 +315,48 @@ def test_mark_processed_without_uid_is_skipped() -> None:
     client.mark_processed(make_message(uid=None))
     assert box.flagged == []
     assert box.moved == []
+
+
+def test_ct9_mark_processed_sendet_niemals_expunge_oder_deleted() -> None:
+    """CT-9/F-ING-1: Kein EXPUNGE, kein `\\Deleted` — auch nicht beim Verschieben.
+
+    Ohne den Fix läuft die Nachbehandlung über `MailBox.flag()`/`move()`; beide hängen
+    intern ein unbedingtes `EXPUNGE` an und löschen damit fremde, von anderen Clients als
+    `\\Deleted` markierte Mails im Spiegelpostfach endgültig.
+    """
+    box = FakeMailBox()
+    client = make_client(box, move_processed_to="Processed")
+    client.connect()
+    client.mark_processed(make_message(uid="7"))
+
+    verbs = [cmd[0] for cmd in box.commands]
+    assert verbs == ["STORE", "MOVE"]
+    assert "EXPUNGE" not in verbs
+    assert not any(r"\Deleted" in " ".join(cmd) for cmd in box.commands)
+    assert box.commands[0] == ("STORE", "7", "+FLAGS", r"(\Seen)")
+
+
+def test_ct9_ohne_move_capability_wird_nicht_client_seitig_verschoben() -> None:
+    """CT-9: Ohne MOVE-Capability kein COPY+`\\Deleted`+EXPUNGE, sondern eine Meldung."""
+    box = FakeMailBox(capabilities=("IMAP4REV1",))
+    client = make_client(box, move_processed_to="Processed")
+    client.connect()
+    with pytest.raises(MailboxPostProcessError, match="MOVE"):
+        client.mark_processed(make_message(uid="7"))
+    assert [cmd[0] for cmd in box.commands] == ["STORE"]  # nur das Gelesen-Flag
+
+
+def test_ct12_abgelehntes_move_nennt_das_config_feld() -> None:
+    """CT-12: Ein fehlender Zielordner ist kein „Postfach nicht erreichbar“."""
+    box = FakeMailBox(uid_status={"MOVE": "NO"})
+    client = make_client(box, move_processed_to="GibtEsNicht")
+    client.connect()
+    with pytest.raises(MailboxPostProcessError) as excinfo:
+        client.mark_processed(make_message(uid="7"))
+    message = str(excinfo.value)
+    assert "move_processed_to" in message
+    assert "GibtEsNicht" in message
+    assert not isinstance(excinfo.value, ImapConnectionError)
 
 
 def test_flag_error_becomes_connection_error() -> None:

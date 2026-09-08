@@ -10,9 +10,16 @@ Sicherheits-Design dieses Moduls:
   Hostname-Prüfung sind damit aktiv. Es gibt keinen Codepfad zu `MailBoxUnencrypted` oder
   `MailBoxStartTls` und keinen Schalter, der die Prüfung abschaltet. Port 143 wird
   abgelehnt.
-* **Niemals löschen (F-ING-1):** Dieses Modul ruft `delete()`/`expunge()` nicht auf. Die
-  einzigen schreibenden Operationen sind das Setzen des `\\Seen`-Flags und — falls
-  konfiguriert — `move()` in den Ordner `imap.move_processed_to`.
+* **Niemals löschen (F-ING-1, ADR-064):** Die einzigen schreibenden Operationen sind
+  `UID STORE +FLAGS (\\Seen)` und — falls konfiguriert — ein **server-seitiges**
+  `UID MOVE` in den Ordner `imap.move_processed_to`. Beide werden bewusst als rohe
+  UID-Kommandos abgesetzt (`mailbox.client.uid(...)`) statt über die Komfort-Methoden
+  `MailBox.flag()`/`MailBox.move()`/`MailBox.delete()`: Diese hängen an **jedes** STORE
+  ein unbedingtes `EXPUNGE`, und ein EXPUNGE löscht *alle* in der Mailbox als `\\Deleted`
+  markierten Nachrichten endgültig — auch fremde, die ein anderer Mailclient oder eine
+  Serverregel markiert hat. Kann der Server kein `MOVE`, wird **nicht** auf
+  copy+delete+expunge ausgewichen: Die Mail bleibt liegen (nur als gelesen markiert) und
+  der Vorgang meldet sich als :class:`MailboxPostProcessError`.
 * **Genau einmal verarbeiten (F-ING-2):** Vor der Verarbeitung wird der Dedupe-Key in der
   State-DB reserviert (:meth:`~maildigest.state.db.StateDB.claim`). Gelesen-Flag und
   Verschieben passieren erst **nach** der Verarbeitung; ein Absturz davor führt beim
@@ -40,7 +47,8 @@ from email.utils import getaddresses, parsedate_to_datetime
 from types import TracebackType
 from typing import Final, Protocol
 
-from imap_tools import AND, BaseMailBox, ImapToolsError, MailBox, MailMessage, MailMessageFlags
+from imap_tools import AND, BaseMailBox, ImapToolsError, MailBox, MailMessage
+from imap_tools.utils import encode_folder
 
 from maildigest.config import ImapConfig
 from maildigest.logging_setup import traceback_enabled
@@ -57,6 +65,7 @@ __all__ = [
     "IngestStats",
     "MailProcessor",
     "MailboxFactory",
+    "MailboxPostProcessError",
     "backoff_delay",
     "build_raw_mail",
     "poll_once",
@@ -91,6 +100,17 @@ class ImapConnectionError(IngestError):
     """Verbindung/Login zum Mirror-Postfach fehlgeschlagen oder abgerissen.
 
     Löst im Polling-Loop einen Reconnect mit Exponential Backoff aus.
+    """
+
+
+class MailboxPostProcessError(IngestError):
+    """Die Nachbehandlung **einer** Mail (Gelesen-Flag/Verschieben) ist fehlgeschlagen.
+
+    Abgegrenzt von :class:`ImapConnectionError`: Die Verbindung steht, der Server hat das
+    Kommando nur mit ``NO``/``BAD`` beantwortet (typisch: `imap.move_processed_to` zeigt
+    auf einen Ordner, den es auf dem Server nicht gibt) oder kann `MOVE` nicht. Der
+    Poll-Durchlauf läuft danach weiter — ein einzelner Nachbehandlungsfehler darf nicht
+    das ganze Postfach lahmlegen (CT-12, ADR-065).
     """
 
 
@@ -467,28 +487,81 @@ class ImapClient:
                 f"Ordnerliste konnte nicht abgerufen werden: {type(exc).__name__}"
             ) from exc
 
+    # --- Rohe UID-Kommandos (nie über MailBox.flag/move/delete — die expungen, ADR-064) ---
+
+    def _uid_command(self, command: str, uid: str, *args: bytes | str) -> None:
+        """Setzt ein rohes ``UID <command>`` ab und prüft den Status.
+
+        Raises:
+            ImapConnectionError: Socket-/Protokollfehler — die Verbindung ist hin.
+            MailboxPostProcessError: Der Server hat mit ``NO``/``BAD`` geantwortet.
+        """
+        try:
+            status, data = self.mailbox.client.uid(command, uid, *args)  # type: ignore[arg-type]
+        except (ImapToolsError, OSError) as exc:
+            raise ImapConnectionError(
+                f"IMAP-Kommando {command} fehlgeschlagen: {type(exc).__name__}"
+            ) from exc
+        except Exception as exc:  # imaplib wirft bei Protokollfehlern eigene Typen
+            raise ImapConnectionError(
+                f"IMAP-Kommando {command} fehlgeschlagen: {type(exc).__name__}"
+            ) from exc
+        if str(status).upper() != "OK":
+            raise MailboxPostProcessError(
+                f"Der Server hat das Kommando {command} mit „{status}“ beantwortet."
+            )
+        del data  # Die Serverantwort enthält Mail-Metadaten und wird nicht geloggt (I5).
+
+    def _server_supports_move(self) -> bool:
+        """True, wenn der Server die MOVE-Erweiterung (RFC 6851) ankündigt."""
+        capabilities = getattr(self.mailbox.client, "capabilities", ()) or ()
+        return any(str(item).upper() == "MOVE" for item in capabilities)
+
     def mark_processed(self, msg: MailMessage) -> None:
         """Markiert eine verarbeitete Mail als gelesen und verschiebt sie ggf. (F-ING-1).
 
-        Es wird **nie** gelöscht. Ist `imap.move_processed_to` leer, bleibt es beim
-        Gelesen-Flag. Fehlt die UID (Server ohne UID in der FETCH-Antwort), passiert nichts —
-        das ist unschön, aber ungefährlich: Die Mail wird beim nächsten Poll als Duplikat
-        erkannt und übersprungen.
+        Es wird **nie** gelöscht und **nie** expunged (ADR-064): Gesetzt wird nur
+        ``UID STORE <uid> +FLAGS (\\Seen)``; ist `imap.move_processed_to` gesetzt, folgt ein
+        server-seitiges ``UID MOVE``. Kann der Server kein `MOVE`, bleibt die Mail liegen —
+        der client-seitige Ersatz (COPY + `\\Deleted` + EXPUNGE) ist ein Löschpfad und
+        existiert hier bewusst nicht.
+
+        Fehlt die UID (Server ohne UID in der FETCH-Antwort), passiert nichts — das ist
+        unschön, aber ungefährlich: Die Mail wird beim nächsten Poll als Duplikat erkannt.
 
         Raises:
-            ImapConnectionError: Flag- oder Move-Kommando fehlgeschlagen.
+            ImapConnectionError: Die Verbindung ist abgerissen.
+            MailboxPostProcessError: Der Server hat ein Kommando abgelehnt (z. B. weil
+                `imap.move_processed_to` auf einen nicht existierenden Ordner zeigt) oder
+                kann kein server-seitiges MOVE.
         """
         uid = msg.uid
         if not uid:
             logger.warning("imap_missing_uid")
             return
         try:
-            self.mailbox.flag(uid, MailMessageFlags.SEEN, True)
-            if self.cfg.move_processed_to:
-                self.mailbox.move(uid, self.cfg.move_processed_to)
-        except (ImapToolsError, OSError) as exc:
-            raise ImapConnectionError(
-                f"Nachbehandlung der Mail fehlgeschlagen: {type(exc).__name__}"
+            self._uid_command("STORE", uid, "+FLAGS", r"(\Seen)")
+        except MailboxPostProcessError as exc:
+            raise MailboxPostProcessError(
+                f"Die Mail konnte nicht als gelesen markiert werden. {exc}"
+            ) from exc
+
+        folder = self.cfg.move_processed_to
+        if not folder:
+            return
+        if not self._server_supports_move():
+            raise MailboxPostProcessError(
+                f"Der Server kann kein server-seitiges MOVE; die Mail bleibt in "
+                f"„{self.cfg.folder}“ liegen (sie ist als gelesen markiert). MailDigest "
+                f"weicht bewusst nicht auf Kopieren+Löschen aus — [imap] "
+                f"move_processed_to leer lassen oder einen Server mit MOVE verwenden."
+            )
+        try:
+            self._uid_command("MOVE", uid, encode_folder(folder))
+        except MailboxPostProcessError as exc:
+            raise MailboxPostProcessError(
+                f"Verschieben nach „{folder}“ fehlgeschlagen. {exc} Existiert der Ordner "
+                f"auf dem Server? [imap] move_processed_to prüfen."
             ) from exc
 
 
@@ -510,8 +583,11 @@ def poll_once(
     nicht bei jedem Poll erneut auftaucht (F-ING-2).
 
     Ein Fehler in der Verarbeitung **einer** Mail beendet den Durchlauf nicht (I6): Die Mail
-    bekommt Status `failed`. Verbindungsfehler dagegen werden nach oben gereicht, damit der
-    Loop einen Reconnect mit Backoff macht.
+    bekommt Status `failed`. Ebenso wenig beendet ihn ein abgelehntes Nachbehandlungs-
+    Kommando (:class:`MailboxPostProcessError`, z. B. fehlender `move_processed_to`-Ordner):
+    Er wird als `imap_postprocess_failed` protokolliert, der Zyklus läuft weiter (CT-12).
+    Verbindungsfehler dagegen werden nach oben gereicht, damit der Loop einen Reconnect mit
+    Backoff macht.
 
     Args:
         client: Verbundener :class:`ImapClient`.
@@ -539,7 +615,7 @@ def poll_once(
         if not db.claim(raw.dedupe_key):
             stats.duplicates += 1
             logger.info("mail_duplicate", extra={"mail": key_short})
-            client.mark_processed(msg)
+            _mark_processed_best_effort(client, msg, key_short)
             continue
 
         try:
@@ -566,8 +642,28 @@ def poll_once(
                     "status": result.status,
                 },
             )
-        client.mark_processed(msg)
+        _mark_processed_best_effort(client, msg, key_short)
     return stats
+
+
+def _mark_processed_best_effort(client: ImapClient, msg: MailMessage, key_short: str) -> None:
+    """Nachbehandlung einer Mail; ein abgelehntes Kommando stoppt den Zyklus nicht (CT-12).
+
+    :class:`MailboxPostProcessError` bedeutet: Die Verbindung steht, der Server hat das
+    Kommando abgelehnt — fast immer, weil `imap.move_processed_to` auf einen nicht
+    existierenden Ordner zeigt. Die Mail ist bereits verarbeitet und in der State-DB
+    vermerkt; sie beim nächsten Poll erneut zu sehen kostet nur einen Dedupe-Treffer. Der
+    Rest des Postfachs wird weiter abgearbeitet. Verbindungsfehler
+    (:class:`ImapConnectionError`) gehen dagegen weiter nach oben — dort gehört der
+    Reconnect hin.
+    """
+    try:
+        client.mark_processed(msg)
+    except MailboxPostProcessError as exc:
+        logger.warning(
+            "imap_postprocess_failed",
+            extra={"mail": key_short, "reason": str(exc)},
+        )
 
 
 @dataclass

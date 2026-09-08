@@ -29,10 +29,16 @@ from urllib.parse import unquote
 
 from maildigest.sanitize.unicode_clean import clean_text, is_mixed_script_domain
 
-__all__ = ["LinkCollector"]
+__all__ = ["FOOTNOTE_TITLE", "LinkCollector", "build_footnote"]
 
 #: Obergrenze der in `links_found` gesammelten Einträge (Schutz vor Link-Bomben, T10).
 _MAX_LINKS_LISTED = 100
+
+#: Zeichenbudget der optionalen Link-Fußnote — eine Link-Bombe sprengt sie nicht (T10).
+_MAX_FOOTNOTE_CHARS = 5000
+
+#: Überschrift der Fußnote. Öffentlich, damit Tests und Composer denselben Wortlaut sehen.
+FOOTNOTE_TITLE = "Link-Fußnote (defanged):"
 
 #: Obergrenze der Länge einer defangten URL in `links_found`.
 _MAX_DEFANGED_CHARS = 300
@@ -269,3 +275,29 @@ class LinkCollector:
             suffix += " (Achtung: gemischte Schriftsysteme)"
 
         return f"[{kind} #{index}: {host}{suffix}]"
+
+
+def build_footnote(links_found: list[str]) -> str:
+    """Baut die defangte Link-Fußnote für die zugestellte Nachricht (`links.footnote`).
+
+    Die Einträge stammen aus :attr:`LinkCollector.links_found` und sind bereits defanged
+    (`hxxps[:]//ziel[.]example/…`) — die Fußnote enthält also kein klickbares Ziel (I3).
+    Der Composer hängt sie an; im LLM-Prompt hat sie nichts verloren (CT-14, ADR-072).
+
+    Args:
+        links_found: Die defangten Einträge in Fundreihenfolge.
+
+    Returns:
+        Der mehrzeilige Fußnotenblock ohne führende Leerzeile, oder `""` ohne Einträge.
+    """
+    if not links_found:
+        return ""
+    lines = [FOOTNOTE_TITLE]
+    total = 0
+    for entry in links_found:
+        total += len(entry) + 1
+        if total > _MAX_FOOTNOTE_CHARS:
+            lines.append("[weitere Links unterdrückt]")
+            break
+        lines.append(entry)
+    return "\n".join(lines)

@@ -83,6 +83,21 @@ class DeliveryStats:
         )
 
 
+def _single_part(message: DigestMessage, part: str) -> DigestMessage:
+    """Baut eine Ein-Teil-Nachricht aus einem Teil der Vorlage (CT-13).
+
+    Der Text wird **übernommen, nicht verändert** — `parts` ist bereits durch
+    `DigestComposer._finalize()` gelaufen (I3/I4). Der Adapter sieht damit dieselbe
+    Zustellreihenfolge wie zuvor, nur weiß der Aufrufer jetzt, wie weit er gekommen ist.
+    """
+    return DigestMessage(
+        parts=[part],
+        importance=message.importance,
+        is_warning=message.is_warning,
+        dedupe_key=message.dedupe_key,
+    )
+
+
 def next_delivery_delay(attempts: int) -> float:
     """Wartezeit bis zum nächsten Versuch nach `attempts` Fehlversuchen (in Sekunden)."""
     index = max(attempts, 1) - 1
@@ -214,11 +229,21 @@ class OutboxMessenger:
     ) -> str:
         """Ein Zustellversuch; pflegt die Warteschlange und liefert das Ergebnis.
 
+        Die Teile einer mehrteiligen Nachricht gehen **einzeln** an den Adapter, damit der
+        Fortschritt bekannt ist: Bricht die Zustellung beim Teil *n* ab, wird die
+        Warteschlangen-Zeile auf die Teile ab *n* eingekürzt und der Retry setzt dort fort
+        (CT-13, ADR-066). ADR-008 (at-least-once) bleibt unberührt — genau der eine Teil,
+        dessen Bestätigung ausblieb, kann weiterhin doppelt ankommen; die Teile davor nicht
+        mehr.
+
         Returns:
             ``"delivered"``, ``"deferred"`` oder ``"abandoned"``.
         """
+        confirmed = 0
         try:
-            self._messenger.send(message)
+            for part in message.parts:
+                self._messenger.send(_single_part(message, part))
+                confirmed += 1
         except Exception as exc:  # jeder Adapter-Fehler ist wiederholbar (ADR-048)
             return self._handle_failure(
                 item_id=item_id,
@@ -227,6 +252,8 @@ class OutboxMessenger:
                 first_queued_at=first_queued_at,
                 kind=kind,
                 exc=exc,
+                message=message,
+                confirmed_parts=confirmed,
             )
         self._db.outbox_done(item_id)
         if message_id_hash is not None:
@@ -243,6 +270,8 @@ class OutboxMessenger:
         first_queued_at: datetime,
         kind: str,
         exc: BaseException,
+        message: DigestMessage | None = None,
+        confirmed_parts: int = 0,
     ) -> str:
         """Zählt den Fehlversuch, plant den nächsten — oder gibt endgültig auf."""
         now = self._now()
@@ -265,10 +294,16 @@ class OutboxMessenger:
             )
             return "abandoned"
         delay = next_delivery_delay(used)
+        remaining: list[str] | None = None
+        if message is not None and confirmed_parts > 0:
+            remaining = list(message.parts[confirmed_parts:])
         self._db.outbox_defer(
             item_id,
             next_attempt_at=now + timedelta(seconds=delay),
             error_class=type(exc).__name__,
+            remaining_parts=remaining,
+            importance=message.importance if message is not None else None,
+            is_warning=message.is_warning if message is not None else None,
         )
         logger.warning(
             "delivery_deferred",
@@ -277,6 +312,8 @@ class OutboxMessenger:
                 "attempts": used,
                 "delay_seconds": delay,
                 "error": type(exc).__name__,
+                "confirmed_parts": confirmed_parts,
+                "remaining_parts": len(remaining) if remaining is not None else None,
             },
         )
         return "deferred"

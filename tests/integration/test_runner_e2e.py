@@ -46,6 +46,23 @@ FORBIDDEN = (
 # --- Postfach-Attrappe ---------------------------------------------------------------------
 
 
+class FakeRawClient:
+    """Ersatz für `imaplib.IMAP4_SSL` — nur `UID STORE`/`UID MOVE` werden benutzt (CT-9)."""
+
+    capabilities = ("IMAP4REV1", "MOVE")
+
+    def __init__(self, box: FakeMailBox) -> None:
+        self._box = box
+
+    def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+        if command.upper() == "STORE":
+            self._box.flagged.append(str(args[0]))
+            self._box.seen.add(str(args[0]))
+        elif command.upper() != "MOVE":  # pragma: no cover - kein weiteres Kommando erwartet
+            raise AssertionError(f"unerwartetes IMAP-Kommando: {command}")
+        return "OK", [b""]
+
+
 class FakeMailBox:
     """Postfach-Attrappe: liefert Nachrichten, merkt Flags/Moves, kann nicht löschen."""
 
@@ -53,6 +70,9 @@ class FakeMailBox:
         self.messages = messages
         self.seen: set[str] = set()
         self.flagged: list[str] = []
+        # CT-9: MailDigest setzt rohe UID-Kommandos ab, weil `MailBox.flag()`/`move()`
+        # intern expungen. Der Fake bildet deshalb `imaplib`-Ebene nach.
+        self.client = FakeRawClient(self)
 
     def login(self, username: str, password: str, initial_folder: str | None = "INBOX") -> None:
         return None
@@ -63,11 +83,10 @@ class FakeMailBox:
     def fetch(self, criteria: Any = "ALL", **kwargs: Any) -> list[MailMessage]:
         return [msg for msg in self.messages if msg.uid not in self.seen]
 
-    def flag(self, uid_list: str, flag_set: str, value: bool) -> None:
-        self.flagged.append(uid_list)
-        self.seen.add(uid_list)
+    def flag(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover
+        raise AssertionError("MailBox.flag() expunged — verboten (F-ING-1, CT-9)")
 
-    def move(self, uid_list: str, destination_folder: str) -> None:  # pragma: no cover
+    def move(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover
         raise AssertionError("move ist in diesem Test nicht konfiguriert")
 
     def delete(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover
