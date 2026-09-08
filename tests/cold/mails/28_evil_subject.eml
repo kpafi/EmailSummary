@@ -1,0 +1,9 @@
+From: Bank <info@bank-phish.example>
+To: mirror@example.org
+Subject: __WICHTIG__ Konto sperren https://phish.example/login @everyone # Achtung boese.example [Link]
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <evilsubj@ct.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Text.

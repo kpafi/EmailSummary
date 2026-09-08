@@ -1,0 +1,21 @@
+From: Kollege <kollege@buero.example>
+To: mirror@example.org
+Subject: Notiz im Anhang
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <5216048928682836595@ct.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==CTBOUNDARY=="
+
+--==CTBOUNDARY==
+Content-Type: text/plain; charset=utf-8
+
+Die Notiz haengt an.
+
+--==CTBOUNDARY==
+Content-Type: text/plain
+Content-Disposition: attachment; filename="notiz.txt"
+Content-Transfer-Encoding: base64
+
+QmVzcHJlY2h1bmcgYW0gTW9udGFnIHVtIDEwIFVoci4KUmF1bSAzLjE0LiBLb250YWt0OiBjaGVm
+QGJ1ZXJvLmV4YW1wbGU=
+--==CTBOUNDARY==--

@@ -1,0 +1,25 @@
+From: Tester <link@link-test.example>
+To: mirror@example.org
+Subject: Verschiedene Adressformen
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <6796938997184317772@ct.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hier eine Sammlung:
+1. hxxps://boese.example/pfad
+2. boese[.]example/pfad
+3. https%3A%2F%2Fboese.example%2Fpfad
+4. https://xn--80ak6aa92e.example/  (Punycode)
+5. https://аpple.example/  (kyrillisches a)
+6. boese。example  (U+3002 Ideographic Full Stop)
+7. evil.comAE und -evil.example und evil.com.123abc und evil.com-x
+8. https://sehr-lange-tld.beispielsehrlangetopleveldomain
+9. www.klick-mich.example
+10. mail@exfil.example
+11. http://192.168.178.1/admin und http://[::1]:8080/x
+12. ftp://dateien.example/geheim.zip
+13. javascript:alert(1)
+14. data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==
+15. bit.ly/3abcDEF
+

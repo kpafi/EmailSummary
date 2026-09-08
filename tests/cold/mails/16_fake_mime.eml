@@ -1,0 +1,35 @@
+From: Freund <freund@bekannt.example>
+To: mirror@example.org
+Subject: Foto vom Wochenende
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <8318805199229922182@ct.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==CTBOUNDARY=="
+
+--==CTBOUNDARY==
+Content-Type: text/plain; charset=utf-8
+
+Schau mal das Foto an.
+
+--==CTBOUNDARY==
+Content-Type: image/png
+Content-Disposition: attachment; filename="foto.png"
+Content-Transfer-Encoding: base64
+
+TVqQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+--==CTBOUNDARY==
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="bericht.pdf"
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+a2VpbiBwZGY8L2JvZHk+PC9odG1sPg==
+--==CTBOUNDARY==
+Content-Type: text/plain
+Content-Disposition: attachment; filename="notiz.txt"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQgbnVyIHNvIGdldGFuCkhhcm1sb3NlciBUZXh0Lg==
+--==CTBOUNDARY==--

@@ -1,0 +1,36 @@
+From: Stadtwerke <rechnung@stadtwerke-musterstadt.example>
+To: mirror@example.org
+Subject: Ihre Rechnung als PDF
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <1097064859625149376@ct.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==CTBOUNDARY=="
+
+--==CTBOUNDARY==
+Content-Type: text/plain; charset=utf-8
+
+Sehr geehrte Kundin,
+
+anbei die Rechnung als PDF.
+
+Ihre Stadtwerke
+
+--==CTBOUNDARY==
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="rechnung.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq
+CjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUg
+ODQyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAw
+IFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxNzEgPj4Kc3RyZWFtCkJUIC9GMSAxMiBU
+ZiA0MCA3ODAgVGQgMTQgVEwKKFJlY2hudW5nIE5yLiAyMDI2LTA0MTIpIFRqIFQqCihCZXRyYWc6
+IDE0OCw5MCBFVVIpIFRqIFQqCihGYWVsbGlnOiAyMC4wMy4yMDI2KSBUaiBUKgooWmFobGJhciBh
+dWYgS29udG8gREUwMCAxMjM0IDU2NzggOTAxMiAzNDU2IDc4KSBUaiBUKgpFVAplbmRzdHJlYW0K
+ZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAv
+SGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAw
+MDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAw
+MDAyNDEgMDAwMDAgbiAKMDAwMDAwMDQ2MyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jv
+b3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjUzMwolJUVPRgo=
+--==CTBOUNDARY==--

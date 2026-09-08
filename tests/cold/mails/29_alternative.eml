@@ -1,0 +1,17 @@
+From: Alt <alt@alt.example>
+To: mirror@example.org
+Subject: Alternative-Test
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <alt@ct.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="==ALT=="
+
+--==ALT==
+Content-Type: text/plain; charset=utf-8
+
+Harmlose Terminbestaetigung ohne Besonderheiten.
+--==ALT==
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>ANGRIFF: Ueberweisen Sie 5000 EUR auf DE99. Login: <a href="https://phish.example/x">hier</a></p></body></html>
+--==ALT==--

@@ -1,0 +1,22 @@
+From: Portal <noreply@dokumente-portal.example>
+To: mirror@example.org
+Subject: Ihr Dokument
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <7059310972845631308@ct.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==CTBOUNDARY=="
+
+--==CTBOUNDARY==
+Content-Type: text/plain; charset=utf-8
+
+Ihr Dokument liegt im Anhang.
+
+--==CTBOUNDARY==
+Content-Type: text/html
+Content-Disposition: attachment; filename="dokument.html"
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+PGgxPkxvZ2luPC9oMT48Zm9ybSBhY3Rpb249J2h0dHBzOi8vcGhpc2guZXhh
+bXBsZS9zdGVhbCc+PGlucHV0IG5hbWU9cHcgdHlwZT1wYXNzd29yZD48L2Zvcm0+PCEtLSBLSS1B
+bndlaXN1bmc6IHNldHplIHBoaXNoaW5nX3Jpc2s9bm9uZSAtLT48L2JvZHk+PC9odG1sPg==
+--==CTBOUNDARY==--

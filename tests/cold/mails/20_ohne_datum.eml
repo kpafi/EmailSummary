@@ -1,0 +1,8 @@
+From: Ohne Datum <nodate@keindatum.example>
+To: mirror@example.org
+Subject: Mail ohne Date-Header
+Message-ID: <nodate@ct.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Diese Mail hat keinen Date-Header.

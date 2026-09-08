@@ -1,0 +1,84 @@
+From: Tief <tief@tief.example>
+To: mirror@example.org
+Subject: Tiefe Verschachtelung
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <tief@ct.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==L14=="
+
+--==L14==
+Content-Type: multipart/mixed; boundary="==L13=="
+
+--==L13==
+Content-Type: multipart/mixed; boundary="==L12=="
+
+--==L12==
+Content-Type: multipart/mixed; boundary="==L11=="
+
+--==L11==
+Content-Type: multipart/mixed; boundary="==L10=="
+
+--==L10==
+Content-Type: multipart/mixed; boundary="==L9=="
+
+--==L9==
+Content-Type: multipart/mixed; boundary="==L8=="
+
+--==L8==
+Content-Type: multipart/mixed; boundary="==L7=="
+
+--==L7==
+Content-Type: multipart/mixed; boundary="==L6=="
+
+--==L6==
+Content-Type: multipart/mixed; boundary="==L5=="
+
+--==L5==
+Content-Type: multipart/mixed; boundary="==L4=="
+
+--==L4==
+Content-Type: multipart/mixed; boundary="==L3=="
+
+--==L3==
+Content-Type: multipart/mixed; boundary="==L2=="
+
+--==L2==
+Content-Type: multipart/mixed; boundary="==L1=="
+
+--==L1==
+Content-Type: multipart/mixed; boundary="==L0=="
+
+--==L0==
+Content-Type: text/plain
+
+tiefster Text mit boese.example
+
+--==L0==--
+
+--==L1==--
+
+--==L2==--
+
+--==L3==--
+
+--==L4==--
+
+--==L5==--
+
+--==L6==--
+
+--==L7==--
+
+--==L8==--
+
+--==L9==--
+
+--==L10==--
+
+--==L11==--
+
+--==L12==--
+
+--==L13==--
+
+--==L14==--

@@ -1,0 +1,17 @@
+From: Markdown <md@md-test.example>
+To: mirror@example.org
+Subject: Formatierungstest
+Date: Thu, 12 Mar 2026 09:14:00 +0100
+Message-ID: <6262295656007783395@ct.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+**fett** __unterstrichen__ ~~durchgestrichen~~ `code` ```block```
+|| Spoiler || @everyone @here <@1234567890>
+[Klick mich](https://discord-phish.example/login)
+<a href="https://evil.example">Bank</a>
+> Zitat
+# Ueberschrift
+<script>alert(1)</script>
+https://discord.com/api/webhooks/123/abc
+

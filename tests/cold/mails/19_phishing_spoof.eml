@@ -1,0 +1,15 @@
+From: Chef Mueller <chef@xn--sparkasse-77a.example>
+To: mirror@example.org
+Subject: Dringende Zahlungsaufforderung — letzte Mahnung
+Date: Thu, 12 Mar 2026 03:41:00 +0100
+Message-ID: <1375344578329428176@ct.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Reply-To: abholer@ganz-anders.example
+Return-Path: <bounce@dritte-domain.example>
+Authentication-Results: mx.example; spf=fail smtp.mailfrom=fremd.example; dkim=fail; dmarc=fail
+
+Ich brauche sofort eine Ueberweisung von 12.500 EUR auf ein neues Konto.
+Bitte niemandem davon erzaehlen. Bestaetigen Sie Ihr Login unter
+https://konto-sicherheit.example/verify — die Frist laeuft heute ab.
+
