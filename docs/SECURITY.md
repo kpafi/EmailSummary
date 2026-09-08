@@ -264,6 +264,56 @@ Eingaben (`tests/unit/test_hot_properties.py`, ADR-058).
 - Empfehlung in README: Mirror-Postfach bei separatem Anbieter mit eigenem, einmaligem
   Passwort; App-Passwort statt Hauptpasswort.
 
-## 7. Invarianten-Review (wird in WP12 ausgefüllt)
+## 7. Invarianten-Review
 
-_Platzhalter: grep-gestützte Prüfung I1–I8 über die finale Codebasis, mit Datum und Befund._
+**Datum:** 2026-09-08 · **Stand:** WP12, Release 0.1.0 · **Umfang:** `src/maildigest/`,
+41 Module.
+
+**Methode.** Drei Ebenen, jede für sich unzureichend:
+
+1. **Mechanisch.** `tests/unit/test_invarianten.py` (24 Tests) parst jedes Produktionsmodul
+   mit `ast`, entfernt Docstrings und Kommentare und sucht erst dann. Das ist der
+   entscheidende Unterschied zu `grep`: Die ausführlichsten Fundstellen für „expunge",
+   „delete" und „parse_mode" sind die Begründungen, warum es sie **nicht** gibt — eine reine
+   Textsuche bleibt daran hängen und liefert ein Ergebnis, das man nur noch glauben kann.
+   Der in §6 angekündigte Lint-Check („kein `verify=False` irgendwo") ist Teil dieser Datei.
+2. **Strukturell.** Wo eine Invariante an einer Typgrenze hängt, wird die Grenze geprüft und
+   nicht das Vorkommen eines Wortes (I1: welche Module dürfen `mime_bytes` überhaupt nennen;
+   I2: welche Schlüssel darf ein LLM-Request-Körper enthalten).
+3. **Am laufenden Programm.** Für I3/I4/I6 die vorhandenen Property- und Korpus-Tests
+   (`tests/unit/test_output_sanitizer.py`, `tests/cold/test_cold_suite.py`) plus ein
+   Rauchtest der installierten CLI (`maildigest test --dry-run` mit unerreichbarem Modell —
+   die Metadaten-Notiz erschien, kein Inhalt).
+
+**Was dieses Review nicht ist:** kein Beweis. Es prüft den Code gegen die Invarianten, nicht
+gegen einen Angreifer. Der Blackbox-Nachweis ist die Cold-Runde (docs/TESTING.md §6); die von
+§3 dort verlangte **zweite** Runde nach den `high`-Befunden CT-6/CT-9 steht aus (§7.2).
+
+### 7.1 Befund je Invariante
+
+| | Invariante | Befund | Beleg |
+|---|---|---|---|
+| **I1** | Kein LLM sieht rohe Anhänge, rohes HTML, rohe MIME-Struktur | **erfüllt** | `mime_bytes` kommt in genau drei Modulen vor: `models.py` (Felddefinition), `ingest/imap_client.py` (erzeugt `RawMail`), `sanitize/sanitizer.py` (einzige lesende Stelle). `pipeline.process_mail` gibt die `RawMail` unmittelbar nach der Sanitize-Stufe im `finally` mit `del raw` frei; alle folgenden Stufen nehmen strukturell nur `SanitizedMail` entgegen. Der HTML-Teil wird für den Divergenz-Vergleich (ADR-067) nur intern konvertiert und verlässt den Sanitizer nicht. |
+| **I2** | Text-in/Text-out, keine Tools, kein Function-Calling | **erfüllt** | Die Request-Körper beider Provider sind AST-geprüft auf den geschlossenen Feldsatz `{model, max_tokens, system, messages, temperature}`. `tools`, `tool_choice`, `functions`, `function_call`, `mcp_servers`: kein einziges Vorkommen im ausführbaren Code. `LLMProvider.complete` gibt einen String zurück; es gibt keinen Rückkanal vom Modell in das Programm außer diesem String. |
+| **I3** | Nachricht ohne klickbare Links, Anhänge, ausführbare Inhalte | **erfüllt** | `parse_mode` und `embeds`: kein Vorkommen. Jede zugestellte Nachricht entsteht ausschließlich über `DigestComposer._finalize()` — Feld-Scrub, `final_guard`, Split, danach `final_guard` je Teil (bis zu vier Runden, HT-4). Alle fünf `send()`-Aufrufstellen (`pipeline.py` ×2, `delivery.py`, `runner.py`, `cli.py`) speisen Objekte, die diesen Pfad gelaufen sind; `delivery.py` reicht nur bereits fertige Teile erneut ein. Property-Tests über zufällige Modellausgaben, dazu der Angriffskorpus aus WP11 (CT-7/7a/8). |
+| **I4** | Modellausgabe ist untrusted: Schema → Kritiker → Output-Sanitizer | **erfüllt** | `Summary`/`CriticVerdict` sind pydantic-erzwungen; eine Schema-Verletzung ist `schema_invalid` und damit fail-closed. `pipeline._process_sanitized` ruft die drei Stufen in fester Reihenfolge; es gibt keinen Pfad von `summarize` direkt zum Messenger. Der Composer scrubbt jedes Modellfeld noch einmal, auch die vom Kritiker gelieferten Gründe. |
+| **I5** | Secrets nie in Prompts, Logs, DB | **erfüllt, mit einer benannten Bandbreite** | Alle vier Secrets sind `pydantic.SecretStr`; `TelegramMessenger`, `DiscordMessenger` und beide LLM-Provider definieren `__repr__`/`__str__` ohne Secret. `ImapClient` hält das Passwort als einfaches Attribut, ist aber eine gewöhnliche Klasse ohne `__repr__` und ohne Dataclass-Dekorator — der Default-`repr` zeigt nur die Adresse. Sämtliche 21 `extra={…}`-Stellen wurden einzeln gelesen: gekürzte Hashes, Absender-Domain, Ordnername, Statuswerte, Zähler, Exception-**Klassennamen**. Der `JsonLogFormatter` verdichtet nicht-JSON-fähige Werte auf ihren Typnamen, statt `repr()` zu rufen. **Bandbreite:** `imap_postprocess_failed` loggt `str(exc)` statt nur den Klassennamen — dieser Text ist programm-formuliert und enthält höchstens den konfigurierten Ordnernamen und das IMAP-Statuswort (`NO`/`BAD`), keinen Mail-Inhalt und kein Secret. Bewusst so belassen: Ohne den Ordnernamen ist der häufigste Fehlerfall (falsch geschriebenes `move_processed_to`) nicht diagnostizierbar. |
+| **I6** | Fail-closed | **erfüllt** | Jede Stufe in `pipeline.py` liegt in einem eigenen `try`, dessen `except Exception` in `_fail_closed` mündet; die Fehlerklassen-Abbildung ist eine geschlossene Tabelle mit `<stufe>_error` als Auffangwert. Der Ingest-Loop fängt zusätzlich pro Mail ab (`mail_processing_crashed` ⇒ `failed`), damit eine kaputte Mail den Zyklus nicht stoppt. Im Rauchtest mit unerreichbarem Modell kam die fünfzeilige Metadaten-Notiz und sonst nichts. |
+| **I7** | Anhangs-Extraktion im ressourcenbegrenzten Subprozess | **erfüllt** | `pdfminer` wird ausschließlich in `sanitize/extract_pdf.py` genannt, und dort erst **im Kindprozess** importiert — der Elternprozess lädt die Bibliothek nie. Das Kind setzt `RLIMIT_AS` vor dem Import, der Elternprozess überwacht per `subprocess.run(timeout=…)` und killt danach. Input- und Output-Grenze zusätzlich im Aufrufer. |
+| **I8** | Custom-Instructions als gelabelter System-Teil, Mail strikt getrennt | **erfüllt** | `summarizer_system_prompt` baut `Rolle → Nutzer-Vorgaben → UNÜBERSCHREIBBARE SICHERHEITSREGELN`; die Reihenfolge ist als Test festgehalten. Die Mail steht in der **User**-Message zwischen Markern mit einem je Aufruf frisch gezogenen Token, dessen Nachbau im Mail-Text neutralisiert wird. `critic_system_prompt` nimmt bewusst gar keine Custom-Instructions entgegen (ADR-042) — auch das ist getestet. |
+
+### 7.2 Was dieses Review offen lässt
+
+1. **Zweite Cold-Runde.** docs/TESTING.md §3 verlangt sie nach Sicherheits-Findings ≥ high
+   (CT-6, CT-9). Sie hat nicht stattgefunden. Der Autor dieses Reviews hat den Code gelesen
+   und kann sie nicht ersetzen.
+2. **Kein Lauf gegen echte Gegenstellen.** Kein echtes IMAP-Postfach, keine echte LLM-API,
+   kein echter Messenger — alle Nachweise stammen aus Mocks bzw. aus dem Fehlerpfad. `UID
+   MOVE` ist gegen einen selbstgebauten Mock belegt, nicht gegen einen Server.
+3. **Heuristik-Kalibrierung.** Phrasenliste in `detect_injection_evidence`,
+   CT-15-Schwellen (≥ 5 Wörter / > 50 %) und `_HIGH_SIGNAL_COUNT = 3` sind ohne Felddaten
+   gesetzt. Sie können falsch alarmieren; das ist eine Nutzbarkeits-, keine Sicherheitsfrage.
+4. **`connect-mail` warnt nicht vorab**, wenn der Server kein MOVE kann oder
+   `move_processed_to` nicht existiert — der Fehler fällt erst im Betrieb auf (als
+   `imap_postprocess_failed`, ohne Datenverlust). In ADR-065 als sinnvolle Ergänzung
+   benannt, nicht umgesetzt.

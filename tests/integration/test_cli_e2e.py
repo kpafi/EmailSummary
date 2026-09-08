@@ -202,7 +202,9 @@ def test_selbsttest_mit_eigener_eml(tmp_path: Path) -> None:
         hooks=make_hooks(messenger=FakeMessenger()),
     )
     assert code == EXIT_OK
-    assert "Anhänge" in out
+    # Genau ein Anhang ⇒ deutsche Einzahlform (SPEC-CLI §4, WP12).
+    assert "1 Anhang (" in out
+    assert "1 Anhänge" not in out
 
 
 def test_selbsttest_mit_phishing_mail_zeigt_banner(tmp_path: Path) -> None:

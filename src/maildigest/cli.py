@@ -1264,10 +1264,10 @@ def _report_stages(
     report = mail.sanitization_report
     processed = sum(1 for item in mail.attachments if item.processed)
     console.out(
-        f"4/5 Sanitizer: {len(mail.body_text)} Zeichen Klartext, "
-        f"{len(mail.attachments)} Anhänge ({processed} verarbeitet), "
-        f"{report.links_removed} Links entfernt, "
-        f"{report.control_chars_removed} Steuerzeichen entfernt"
+        f"4/5 Sanitizer: {_count(len(mail.body_text), 'Zeichen', 'Zeichen')} Klartext, "
+        f"{_count(len(mail.attachments), 'Anhang', 'Anhänge')} ({processed} verarbeitet), "
+        f"{_count(report.links_removed, 'Link', 'Links')} entfernt, "
+        f"{_count(report.control_chars_removed, 'Steuerzeichen', 'Steuerzeichen')} entfernt"
     )
     summary = summarizer.result
     if summary is None:
@@ -1347,6 +1347,11 @@ def _report_test_result(
 def _parts_label(parts: Sequence[str]) -> str:
     """`1 Teil` / `3 Teile` — die Nachricht wird auf das Messenger-Limit gesplittet."""
     return "1 Teil" if len(parts) == 1 else f"{len(parts)} Teile"
+
+
+def _count(number: int, singular: str, plural: str) -> str:
+    """`1 Anhang` / `2 Anhänge` — deutsche Zählform für die Zeile 4/5 (SPEC-CLI §4)."""
+    return f"{number} {singular}" if number == 1 else f"{number} {plural}"
 
 
 def _read_test_mail(eml: str | None) -> tuple[bytes, str]:
@@ -1618,6 +1623,16 @@ def main(
             args=args,
         )
         command: Callable[[Context], int] = args.func
+        if command is not cmd_run:
+            # Ohne konfigurierten Handler landen Bibliotheks-Logs (z. B. `llm_retry` aus
+            # dem Provider) über `logging.lastResort` als **unformatierter** Text auf
+            # stderr — an JsonLogFormatter vorbei und damit an der Zusicherung
+            # „strukturierte JSON-Zeilen" (SECURITY §6) vorbei. Für alle Kommandos außer
+            # `run` geht das Protokoll deshalb als JSON auf **stderr**: stdout gehört bei
+            # `test`/`connect-*` allein der in SPEC-CLI §4 vertraglich festgelegten
+            # Schritt-Ausgabe. `cmd_run` konfiguriert danach selbst neu (stdout, Level
+            # aus der Config).
+            context.hooks.configure_logging("WARNING", stream=streams_err)
         return command(context)
     except CliError as exc:
         streams_err.write(f"Fehler: {exc}\n")

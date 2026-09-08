@@ -634,12 +634,22 @@ def poll_once(
             stats.processed += 1
             if write_result_status:
                 db.mark_status(raw.dedupe_key, MailState(result.status))
+                logged_status: str = result.status
+            else:
+                # Der Runner führt den Status selbst (ADR-050): Eine Zustellung, die noch in
+                # der Warteschlange liegt, bleibt `checked` und wird erst nach der
+                # Bestätigung `delivered`. `result.status` wäre hier trotzdem schon
+                # „delivered" — direkt nach einem `delivery_deferred` eine irreführende
+                # Zeile (Nebenbefund aus CT-13). Geloggt wird deshalb der Stand, der
+                # tatsächlich in der Datenbank steht.
+                record = db.get(raw.dedupe_key)
+                logged_status = result.status if record is None else record.status.value
             logger.info(
                 "mail_processed",
                 extra={
                     "mail": key_short,
                     "from_domain": raw.from_domain,
-                    "status": result.status,
+                    "status": logged_status,
                 },
             )
         _mark_processed_best_effort(client, msg, key_short)

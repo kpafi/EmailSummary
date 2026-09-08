@@ -129,7 +129,8 @@ nach der Fehlersuche wieder auf `INFO` stellen und die Journal-Einträge ggf. l�
 | `event` | Bedeutung |
 |---------|-----------|
 | `runner_started` / `runner_stopped` | Dauerbetrieb aufgenommen/beendet (mit Zyklen, verarbeiteten Mails, wartenden Zustellungen) |
-| `mail_processed` | Mail fertig (Feld `status`: `delivered`/`skipped_low`/`failed`) |
+| `mail_processed` | Mail fertig; Feld `status` ist der **tatsächlich gespeicherte** Stand (`delivered`/`checked`/`skipped_low`/`failed`) — `checked` heißt: verarbeitet, Zustellung liegt noch in der Warteschlange |
+| `imap_postprocess_failed` | Ein Nachbehandlungs-Kommando wurde abgelehnt (fast immer: `move_processed_to` zeigt auf einen Ordner, den es nicht gibt, oder der Server kann kein `MOVE`). Die Mail ist verarbeitet, sie bleibt nur im Ausgangsordner liegen; der Zyklus läuft weiter (ADR-065) |
 | `mail_failed_notice` | Fail-closed: Metadaten-Notiz statt Inhalt (Felder `stage`, `reason`) |
 | `mail_delivery_queued` | Zustellung liegt in der Warteschlange, Mail bleibt auf `checked` |
 | `delivery_deferred` / `delivery_abandoned` | Zustellversuch verschoben bzw. nach 5 Versuchen/1 h aufgegeben |

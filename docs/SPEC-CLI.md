@@ -36,6 +36,12 @@ Jede Fehlermeldung geht auf **stderr** und beginnt mit `Fehler: `. Fortschritts-
 Ergebnismeldungen gehen auf **stdout**. Warnungen (Hinweise, die den Ablauf nicht
 abbrechen) gehen auf stderr, ohne `Fehler: `-Präfix.
 
+Dazu kommt das **Protokoll** der inneren Schichten (etwa ein Wiederholversuch beim
+Modell-Aufruf). Es besteht immer aus JSON-Zeilen im Format aus §4 `run`. Bei `run` gehen
+sie auf **stdout** — dort liest der Dienstbetrieb mit. Bei allen anderen Kommandos gehen
+sie ab Stufe `WARNING` auf **stderr**, damit stdout ausschließlich die in §4 festgelegte
+Ausgabe enthält.
+
 Fehlermeldungen enthalten **niemals** Passwörter, API-Keys, Bot-Tokens oder Webhook-URLs.
 
 ## 3. Globale Optionen
@@ -252,7 +258,8 @@ Die Ausgabe hat fünf nummerierte Schritte:
 ```
 
 Bei genau einem Teil lautet die Klammer `(1 Teil)` — hier und ebenso in
-`5/5 Nachricht erzeugt (N Teile) — Trockenlauf, nicht gesendet:`.
+`5/5 Nachricht erzeugt (N Teile) — Trockenlauf, nicht gesendet:`. Ebenso stehen in Zeile 4/5
+die deutschen Einzahlformen, wenn der Zähler 1 ist: `1 Anhang`, `1 Link entfernt`.
 
 Weder der Mail-Text noch die Modellausgabe erscheinen dabei auf dem Terminal; nur die
 fertige, sanitisierte Nachricht bei `--dry-run`. Mit `--dry-run` steht zwischen Schritt 2

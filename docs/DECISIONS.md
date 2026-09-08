@@ -1752,3 +1752,47 @@
   F-SEC-1. Bei sehr vielen Links kann die Fußnote die Nachricht über das Teilungslimit
   treiben; das ist der normale Split-Pfad und durch das 5000-Zeichen-Budget der Fußnote
   begrenzt.
+
+## ADR-073: Das Protokoll geht bei jedem Kommando außer `run` auf stderr
+- Status: accepted
+- WP / Datum: WP12 (Doku-Abgleich), 2026-09-08
+- Kontext: Nur `cmd_run` rief `configure_logging()`. Alle anderen Kommandos liefen ohne
+  konfigurierten Handler — Python fällt dann auf `logging.lastResort` zurück und schreibt
+  `record.getMessage()` roh nach stderr. Sichtbar wurde das im WP12-Rauchtest: Ein
+  `maildigest test --dry-run` gegen ein unerreichbares Modell druckte drei nackte Zeilen
+  `llm_retry` / `llm_retry` / `llm_giving_up`. Zwei Zusagen waren damit verletzt: SECURITY §6
+  („strukturierte JSON-Zeilen") und die Formatgarantie von SPEC-CLI §4, die für `test` eine
+  genau festgelegte Ausgabe beschreibt. Ein Leck war es nicht — `lastResort` gibt nur den
+  Ereignisnamen aus, nicht die `extra`-Felder —, aber genau darauf konnte man sich nicht
+  verlassen: Die Absicherung gegen `repr()`-Lecks sitzt im `JsonLogFormatter`, und der lief
+  hier nicht.
+- Entscheidung: `main()` konfiguriert für jedes Kommando außer `run` das Logging auf
+  `WARNING` mit Ziel **stderr**, bevor es dispatcht. `cmd_run` überschreibt das danach mit
+  dem Level aus der Config und Ziel stdout (`force=True`), bleibt also unverändert. SPEC-CLI
+  §2 hält die Regel jetzt fest.
+- Alternativen: (a) Auch bei `test`/`connect-*` nach stdout loggen — mischt JSON in die
+  vertraglich festgelegte Schritt-Ausgabe und macht `--dry-run` unbrauchbar zum Prüfen der
+  Nachricht. (b) Einen `NullHandler` setzen und gar nichts protokollieren — nimmt dem
+  Nutzer die einzige Auskunft darüber, *warum* ein Testaufruf hängt (drei Wiederholversuche
+  mit Backoff sehen sonst wie ein Absturz aus). (c) Das Level aus der Config nehmen — der
+  Konfigurationsfehler-Pfad läuft, bevor eine gültige Config existiert.
+- Konsequenzen: stdout gehört bei allen Einrichtungs- und Testkommandos allein der
+  spezifizierten Ausgabe; jede Protokollzeile im Programm läuft durch den `JsonLogFormatter`.
+
+## ADR-074: `mail_processed` protokolliert den gespeicherten, nicht den erhofften Status
+- Status: accepted
+- WP / Datum: WP12 (Nebenbefund aus CT-13), 2026-09-08
+- Kontext: Der Ingest-Loop loggte `result.status` aus dem Pipeline-Ergebnis. Führt der Runner
+  den Status selbst (`write_result_status=False`, ADR-050), ist das falsch: Eine Zustellung,
+  die in der Warteschlange liegen bleibt, behält in der Datenbank `checked` — das Log meldete
+  trotzdem `"status": "delivered"`, unmittelbar nach einem `delivery_deferred`. Wer die Logs
+  liest, um einen Zustellstau zu finden, findet ihn so nicht.
+- Entscheidung: Schreibt der Loop den Status selbst, loggt er ihn auch. Führt der Runner ihn,
+  liest der Loop den tatsächlich persistierten Stand über `db.get()` zurück und protokolliert
+  diesen. `mail_processed` kann damit auch `checked` melden; docs/BETRIEB.md §5 nennt den Wert.
+- Alternativen: (a) `PipelineResult` um ein Feld „tatsächlich zugestellt" erweitern — die
+  Pipeline weiß nichts über die Warteschlange, das Feld wäre dort eine Fremdkörper-Zusage.
+  (b) Das Feld weglassen — `mail_processed` wäre ohne Status kaum noch nützlich.
+- Konsequenzen: Ein zusätzlicher, indizierter SELECT je Mail. Das Log ist dafür an dieser
+  Stelle beobachtbar wahr statt strukturell wahr — dieselbe Korrektur wie in ADR-071 für die
+  Zustell-Aussage von `maildigest test`.
