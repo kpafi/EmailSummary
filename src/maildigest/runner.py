@@ -249,6 +249,11 @@ class Runner:
     now: Callable[[], datetime] = datetime.now
     sleep: Callable[[float], None] | None = None
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
+    #: Zustellungen, die schon beim ersten Versuch durchgingen und deshalb nie in
+    #: `outbox.flush()` auftauchen (siehe :meth:`take_direct_delivery_stats`).
+    _direct: DeliveryStats = field(
+        default_factory=DeliveryStats, init=False, repr=False
+    )
 
     # --- Shutdown -------------------------------------------------------------------
 
@@ -277,11 +282,39 @@ class Runner:
         self._record_result(result)
         return result
 
+    def take_direct_delivery_stats(self) -> DeliveryStats:
+        """Liefert die seit dem letzten Aufruf **sofort** zugestellten Nachrichten.
+
+        `OutboxMessenger.send` reiht jede Nachricht ein und versucht sie unmittelbar
+        zuzustellen; klappt das, ist der Eintrag weg, bevor ein `flush()` ihn sehen
+        könnte. Die Bilanzzeile von `run --once` zählte deshalb nur Nachrichten aus der
+        Warteschlange — im Normalfall also dauerhaft null (CT-10).
+
+        Der Zähler wird beim Lesen zurückgesetzt, damit ein Lauf nur seine eigenen
+        Zustellungen meldet.
+        """
+        stats = self._direct
+        self._direct = DeliveryStats()
+        return stats
+
+    def _note_direct_delivery(self, dedupe_key: str) -> bool:
+        """Bucht eine Zustellung, die die Warteschlange nicht mehr enthält.
+
+        Returns:
+            ``True``, wenn zu `dedupe_key` noch etwas aussteht (also **nicht** gezählt
+            wurde). Deferrals bleiben Sache von :meth:`OutboxMessenger.flush` — sonst
+            zählte derselbe Fehlversuch zweimal.
+        """
+        if self.db.outbox_pending(dedupe_key):
+            return True
+        self._direct.delivered += 1
+        return False
+
     def _record_result(self, result: PipelineResult) -> None:
         """Schreibt den Endstatus einer Mail (ADR-050)."""
         key_short = dedupe_hash(result.dedupe_key)[:12]
         if isinstance(result, Delivered):
-            if self.db.outbox_pending(result.dedupe_key):
+            if self._note_direct_delivery(result.dedupe_key):
                 # Zustellung liegt in der Warteschlange: Status bleibt `checked`, bis die
                 # Bestätigung da ist (ADR-008/ADR-048).
                 logger.warning("mail_delivery_queued", extra={"mail": key_short})
@@ -292,6 +325,9 @@ class Runner:
             self._queue_low(result)
             self.db.mark_status(result.dedupe_key, MailState.SKIPPED_LOW)
             return
+        if result.notice_delivered:
+            # Auch die Metadaten-Notiz ist eine zugestellte Nachricht (F-OPS-3).
+            self._note_direct_delivery(result.dedupe_key)
         self.db.mark_status(
             result.dedupe_key, MailState.FAILED, error_class=result.notice.reason_class
         )
@@ -360,6 +396,7 @@ class Runner:
             ]
         )
         self.outbox.send(message)
+        self._note_direct_delivery(message.dedupe_key)
         # Die Nachricht liegt jetzt (mindestens) in der Zustell-Warteschlange und trägt
         # den Inhalt weiter; die Quell-Einträge dürfen weg, sonst entstünde morgen ein
         # Duplikat.
@@ -388,6 +425,8 @@ class Runner:
             stats.delivery = stats.delivery + self.outbox.flush()
         if self.maybe_send_low_digest():
             stats.low_digests += 1
+        # Zum Schluss, damit alles zählt: Poll, zweiter Flush und Sammel-Digest.
+        stats.delivery = stats.delivery + self.take_direct_delivery_stats()
         return stats
 
     def run_forever(self, *, handle_signals: bool = True) -> RunStats:
@@ -428,6 +467,7 @@ class Runner:
                 failures = 0
                 if self.maybe_send_low_digest():
                     total.low_digests += 1
+                total.delivery = total.delivery + self.take_direct_delivery_stats()
                 self._wait(float(self.config.imap.poll_interval_seconds))
             logger.info(
                 "runner_stopped",

@@ -174,12 +174,21 @@ class Console:
     # --- Eingabe -------------------------------------------------------------------
 
     def _readline(self, prompt: str) -> str:
-        """Liest genau eine Zeile; EOF ist ein Abbruch, kein leerer Wert."""
+        """Liest genau eine Zeile; EOF ist ein Abbruch, kein leerer Wert.
+
+        EOF bedeutet: Es wurde eine Eingabe erwartet und keine geliefert — also ein
+        Bedienfehler (Exit-Code 2, SPEC-CLI.md §2 „fehlende Pflichtangabe"), nicht ein
+        Laufzeitfehler. Wer nicht interaktiv arbeiten kann, nimmt `--non-interactive`.
+        """
         self.stdout.write(prompt)
         self.stdout.flush()
         line = self.stdin.readline()
         if line == "":
-            raise CliError("Eingabe abgebrochen (Ende der Eingabe erreicht).", EXIT_ERROR)
+            raise CliError(
+                "Eingabe abgebrochen (Ende der Eingabe erreicht). Für Läufe ohne "
+                "Terminal --non-interactive verwenden und die Werte als Optionen setzen.",
+                EXIT_USAGE,
+            )
         return line.strip()
 
     def ask(
@@ -393,7 +402,14 @@ _PLACEHOLDERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("model", '"…"   # Pflichtfeld, es gibt bewusst keinen Default'),
         ("api_key", f'"…"   # oder Umgebungsvariable {ENV_LLM_API_KEY}'),
     ),
-    "llm.critic": (("model", '"…"'),),
+    # Der Kritiker erbt alles von `[llm]`; die Datei zeigt trotzdem den vollständigen
+    # Feldsatz aus SPEC-CLI.md §5, damit ein Override nicht nachgeschlagen werden muss.
+    "llm.critic": (
+        ("provider", '"openai_compatible"   # leer/fehlend = erbt von [llm]'),
+        ("model", '"…"   # leer/fehlend = erbt von [llm]'),
+        ("base_url", '"http://localhost:11434/v1"   # leer/fehlend = erbt von [llm]'),
+        ("max_tokens", "1024   # leer/fehlend = erbt von [llm]"),
+    ),
     "messenger.telegram": (
         ("token", f'"…"   # oder Umgebungsvariable {ENV_TELEGRAM_TOKEN}'),
     ),
@@ -630,10 +646,12 @@ def cmd_init(ctx: Context) -> int:
     if args.instructions is not None:
         instructions = args.instructions
     else:
-        console.out(
-            "Custom-Instructions: eine Zeile dazu, was für dich wichtig ist "
-            "(leer lassen = keine)."
-        )
+        if console.interactive:
+            # Nur als Erläuterung der Frage — ohne Frage keine Erläuterung (CT-3).
+            console.out(
+                "Custom-Instructions: eine Zeile dazu, was für dich wichtig ist "
+                "(leer lassen = keine)."
+            )
         instructions = console.ask("Custom-Instructions", flag="--instructions")
     instructions = instructions[:_MAX_INSTRUCTIONS_CHARS]
 
@@ -1281,9 +1299,26 @@ def _report_test_result(
         console.out(
             f"5/5 Fail-closed: Stufe {result.notice.stage}, Grund {result.notice.reason_class}."
         )
+        if collector is not None:
+            # Trockenlauf: Es ging nichts an den Messenger — und die Notiz ist genau
+            # das, was der Nutzer hier sehen will (SPEC-CLI.md §4 `test --dry-run`).
+            console.out("    Metadaten-Notiz erzeugt — Trockenlauf, nicht gesendet:")
+            console.out("")
+            for message in collector.messages:
+                for part in message.parts:
+                    console.out(part)
+            console.out("")
+            console.err(
+                "Selbsttest fehlgeschlagen — es wurde nur die Metadaten-Notiz erzeugt "
+                "(zugestellt: nein — Trockenlauf)."
+            )
+            return EXIT_ERROR
+        # `notice_delivered` sagt nur, dass die Warteschlange die Notiz angenommen hat.
+        # Zugestellt ist sie erst, wenn danach nichts mehr wartet (CT-4).
+        delivered = result.notice_delivered and not pending
         console.err(
             "Selbsttest fehlgeschlagen — es wurde nur die Metadaten-Notiz erzeugt "
-            f"(zugestellt: {'ja' if result.notice_delivered else 'nein'})."
+            f"(zugestellt: {'ja' if delivered else 'nein'})."
         )
         return EXIT_ERROR
     if isinstance(result, QueuedLow):  # pragma: no cover - Schwelle ist auf `low` gesetzt
@@ -1395,8 +1430,12 @@ def _load_full_config(path: Path) -> Config:
 
 
 def _resolve_config_path(args: argparse.Namespace) -> Path:
-    """Bestimmt den Pfad der Konfigurationsdatei: `--config` → Env → `./config.toml`."""
-    explicit = getattr(args, "config", None) or getattr(args, "config_global", None)
+    """Bestimmt den Pfad der Konfigurationsdatei: `--config` → Env → `./config.toml`.
+
+    `--config` darf vor oder nach dem Kommandonamen stehen (SPEC-CLI.md §3); beide
+    Schreibweisen landen im selben Namespace-Schlüssel (siehe `build_parser`).
+    """
+    explicit = getattr(args, "config", None)
     if explicit:
         return Path(str(explicit)).expanduser()
     from_env = os.environ.get(ENV_CONFIG, "")
@@ -1416,13 +1455,54 @@ class _ArgumentParser(argparse.ArgumentParser):
         raise CliError(f"{self.prog}: {message}", EXIT_USAGE)
 
 
+#: Erlaubter Bereich eines TCP-Ports (SPEC-CLI.md §4 `connect-mail`, §5 `[imap] port`).
+_PORT_MIN = 1
+_PORT_MAX = 65535
+
+
+def _port_value(raw: str) -> int:
+    """Prüft `--port` schon im Parser, damit ein Bereichsfehler Exit-Code 2 ergibt.
+
+    Ohne diese Prüfung fiele `--port 0` erst der Schema-Validierung zur Last und
+    endete als Konfigurationsfehler (Exit 1). Ein unerlaubter **Optionswert** ist
+    laut SPEC-CLI.md §2 aber ein Bedienfehler — genauso wie `--language klingon`.
+
+    Raises:
+        argparse.ArgumentTypeError: Keine Zahl oder außerhalb von 1..65535.
+    """
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"'{raw}' ist keine ganze Zahl (erlaubt: {_PORT_MIN} bis {_PORT_MAX})"
+        ) from None
+    if not _PORT_MIN <= value <= _PORT_MAX:
+        raise argparse.ArgumentTypeError(
+            f"{value} liegt außerhalb des erlaubten Bereichs {_PORT_MIN} bis {_PORT_MAX}"
+        )
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Baut den vollständigen Argumentparser (Vertrag: docs/SPEC-CLI.md, Abschnitte 3 und 4)."""
+    # `default=argparse.SUPPRESS` ist hier der ganze Trick (SPEC-CLI.md §3): Der
+    # Subparser schreibt seine Ergebnisse in **dieselbe** Namespace-Instanz wie der
+    # Hauptparser. Mit einem gewöhnlichen Default (None/False) überschriebe er damit
+    # jeden Wert, der vor dem Kommandonamen stand — `maildigest --config x init`
+    # arbeitete dann still auf `config.toml`. Mit SUPPRESS taucht der Schlüssel nur
+    # auf, wenn die Option tatsächlich angegeben wurde; beide Schreibweisen sind
+    # dadurch gleichwertig, und eine doppelte Angabe gewinnt hinten.
     common = _ArgumentParser(add_help=False)
-    common.add_argument("--config", metavar="PFAD", help="Pfad der Konfigurationsdatei")
+    common.add_argument(
+        "--config",
+        metavar="PFAD",
+        default=argparse.SUPPRESS,
+        help="Pfad der Konfigurationsdatei",
+    )
     common.add_argument(
         "--non-interactive",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Keine Rückfragen stellen; Defaults und Optionen verwenden",
     )
 
@@ -1455,7 +1535,9 @@ def build_parser() -> argparse.ArgumentParser:
         "connect-mail", parents=[common], help="Mirror-Postfach verbinden und testen"
     )
     mail.add_argument("--host", metavar="HOST", help="IMAP-Host")
-    mail.add_argument("--port", type=int, metavar="PORT", help="IMAP-Port (Default 993)")
+    mail.add_argument(
+        "--port", type=_port_value, metavar="PORT", help="IMAP-Port (Default 993)"
+    )
     mail.add_argument("--username", metavar="NAME", help="IMAP-Benutzername")
     mail.add_argument("--folder", metavar="ORDNER", help="Zu lesender Ordner")
     mail.add_argument(
@@ -1521,8 +1603,13 @@ def main(
         if getattr(args, "command", None) is None:
             parser.print_help(streams_out)
             return EXIT_USAGE
+        # `--non-interactive` ist mit `SUPPRESS` belegt (siehe `build_parser`) und fehlt
+        # im Namespace, wenn es nicht angegeben wurde.
         console = Console(
-            streams_in, streams_out, streams_err, interactive=not args.non_interactive
+            streams_in,
+            streams_out,
+            streams_err,
+            interactive=not getattr(args, "non_interactive", False),
         )
         context = Context(
             console=console,

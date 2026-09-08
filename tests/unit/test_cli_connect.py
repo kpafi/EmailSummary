@@ -240,6 +240,7 @@ def _err_text(out: str, err: str) -> str:
 
 
 def test_connect_mail_lehnt_klartext_port_ab(config_path: Path) -> None:
+    """Port 143 ist Klartext-IMAP: Konfigurationsfehler, also Exit 1 (SPEC-CLI §4)."""
     code, _out, err = run(
         [
             "connect-mail",
@@ -252,11 +253,11 @@ def test_connect_mail_lehnt_klartext_port_ab(config_path: Path) -> None:
             "--username",
             "m@example.org",
             "--port",
-            "0",
+            "143",
         ]
     )
     assert code == EXIT_ERROR
-    assert "port" in err
+    assert "143" in err
 
 
 def test_connect_mail_faellt_bei_fehlender_ordnerliste_auf_vorgabe_zurueck(

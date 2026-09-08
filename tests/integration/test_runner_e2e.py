@@ -400,7 +400,10 @@ def test_crash_between_commit_and_delivery_loses_nothing(mailbox: FakeMailBox) -
         )
         stats = restarted.run_once()
 
-        assert stats.delivery.delivered == 1  # genau die abgestürzte Nachricht
+        # Die abgestürzte Nachricht aus der Warteschlange **plus** die im selben Lauf frisch
+        # verarbeiteten Mails. Bis zum CT-10-Fix zählte die Bilanz nur die Warteschlangen-
+        # Zustellungen (also „1"); die direkt zugestellten fehlten dauerhaft.
+        assert stats.delivery.delivered == 1 + stats.ingest.processed
         assert db.count_by_status(MailState.CHECKED) == 0
         assert db.outbox_size() == 0
         # Die bereits verarbeiteten Mails werden nicht erneut durch die LLM-Stufen geschickt:

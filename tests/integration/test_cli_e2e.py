@@ -459,3 +459,124 @@ webhook_url = "https://discord.example/api/webhooks/1/x"
     code, _out, err = run(["test", "--config", str(path)], hooks=hooks)
     assert code == EXIT_ERROR
     assert "api_key" in err
+
+
+# --- Regressionen aus dem Cold-Test (tests/cold/REPORT.md) ---------------------------------
+
+
+def test_ct4_trockenlauf_meldet_keine_zustellung_und_zeigt_die_notiz(tmp_path: Path) -> None:
+    """CT-4: Im Trockenlauf wird nichts zugestellt — das muss die Ausgabe auch sagen.
+
+    Vorher meldete `test --dry-run` bei fail-closed „zugestellt: ja", obwohl nichts
+    hinausging, und die Metadaten-Notiz selbst war nirgends zu sehen.
+    """
+    messenger = FakeMessenger()
+    code, out, err = run(
+        ["test", "--config", str(write_config(tmp_path)), "--dry-run"],
+        hooks=make_hooks(messenger=messenger, summarizer_error=LLMTimeout("Zeitlimit")),
+    )
+    assert code == EXIT_ERROR
+    assert messenger.sent == []
+    assert "Fail-closed" in out
+    # Die Notiz steht auf stdout — genau dafür ist --dry-run da.
+    assert "nicht sicher verarbeitet" in out
+    assert "Betreff:" in out
+    # Und die Bilanz behauptet keine Zustellung mehr.
+    assert "zugestellt: ja" not in err
+    assert "zugestellt: nein" in err
+    assert "Trockenlauf" in err
+
+
+def test_ct4_ohne_trockenlauf_bleibt_die_zustellmeldung_ehrlich(tmp_path: Path) -> None:
+    """Gegenprobe zu CT-4: Kommt die Notiz nicht durch, steht dort „nein"."""
+    code, _out, err = run(
+        ["test", "--config", str(write_config(tmp_path))],
+        hooks=make_hooks(
+            messenger=FakeMessenger(fail=True), summarizer_error=LLMTimeout("Zeitlimit")
+        ),
+    )
+    assert code == EXIT_ERROR
+    assert "zugestellt: nein" in err
+
+
+@dataclass
+class DeliveringImapClient:
+    """IMAP-Attrappe, die ein Postfach mit `count` identischen Mails vorspielt."""
+
+    count: int = 3
+    polls: int = 0
+
+    def connect(self) -> None:
+        return None
+
+    def fetch_unseen(self) -> list[Any]:
+        from imap_tools import MailMessage as _MailMessage
+
+        self.polls += 1
+        if self.polls > 1:
+            return []
+        messages = []
+        for index in range(1, self.count + 1):
+            raw = (
+                f"From: Absender {index} <a{index}@beispiel-fuer-tests.example>\r\n"
+                f"To: mirror@example.org\r\n"
+                f"Subject: Testmail {index}\r\n"
+                f"Message-ID: <ct10-{index}@beispiel-fuer-tests.example>\r\n"
+                f"Date: Thu, 12 Mar 2026 09:14:00 +0100\r\n"
+                f"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+                f"Kurzer harmloser Text Nummer {index}.\r\n"
+            ).encode()
+            messages.append(
+                _MailMessage([(f"1 (UID {index} FLAGS ())".encode(), raw), b")"])
+            )
+        return messages
+
+    def mark_processed(self, msg: Any) -> None:
+        return None
+
+    def disconnect(self) -> None:
+        return None
+
+
+def test_ct10_bilanz_zaehlt_direkt_zugestellte_nachrichten(tmp_path: Path) -> None:
+    """CT-10: Sofort zugestellte Nachrichten tauchen nie in `flush()` auf — trotzdem zählen.
+
+    Vorher meldete die Bilanzzeile im Normalbetrieb dauerhaft „0 Nachrichten zugestellt".
+    """
+    messenger = FakeMessenger()
+    client = DeliveringImapClient(count=3)
+    code, _out, err = run(
+        ["run", "--once", "--config", str(write_config(tmp_path, min_importance="low"))],
+        hooks=make_hooks(messenger=messenger, client_factory=lambda: client),
+    )
+    assert code == EXIT_OK
+    assert len(messenger.sent) == 3
+    assert "3 Mails geholt, 3 verarbeitet" in err
+    assert "3 Nachrichten zugestellt" in err
+    assert "0 in der Warteschlange" in err
+
+
+def test_ct10_leeres_postfach_meldet_weiterhin_null(tmp_path: Path) -> None:
+    """Gegenprobe zu CT-10: Ohne Mail wird auch nichts gezählt."""
+    code, _out, err = run(
+        ["run", "--once", "--config", str(write_config(tmp_path))],
+        hooks=make_hooks(messenger=FakeMessenger(), client_factory=lambda: FakeImapClient()),
+    )
+    assert code == EXIT_OK
+    assert "0 Nachrichten zugestellt" in err
+
+
+def test_ct10_gescheiterte_zustellung_wird_nicht_als_zugestellt_gezaehlt(
+    tmp_path: Path,
+) -> None:
+    """Gegenprobe zu CT-10: Was in der Warteschlange landet, ist nicht zugestellt."""
+    code, _out, err = run(
+        ["run", "--once", "--config", str(write_config(tmp_path, min_importance="low"))],
+        hooks=make_hooks(
+            messenger=FakeMessenger(fail=True),
+            client_factory=lambda: DeliveringImapClient(count=2),
+        ),
+    )
+    assert code == EXIT_OK
+    assert "0 Nachrichten zugestellt" in err
+    assert "2 in der Warteschlange" in err

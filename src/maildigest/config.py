@@ -312,7 +312,9 @@ def _validation_error_message(exc: ValidationError, source: str) -> str:
         for error in exc.errors()
     ]
     lines.append(
-        "Referenz aller Felder: docs/ARCHITECTURE.md §5. "
+        # Die Feldreferenz steht in SPEC-CLI.md §5 — dorthin verweist auch der Kopf der
+        # von `init` erzeugten config.toml. ARCHITECTURE §5 war schlicht falsch (CT-2).
+        "Referenz aller Felder: docs/SPEC-CLI.md §5. "
         "Secrets können alternativ über die Umgebungsvariablen "
         f"{ENV_IMAP_PASSWORD}, {ENV_LLM_API_KEY}, {ENV_TELEGRAM_TOKEN} gesetzt werden."
     )

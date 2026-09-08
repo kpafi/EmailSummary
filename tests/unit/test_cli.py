@@ -456,3 +456,115 @@ def test_netzwerkfehler_erzeugt_keinen_traceback(tmp_path: Path, monkeypatch: An
     )
     assert code == EXIT_ERROR
     assert "Traceback" not in err
+
+
+# --- Regressionen aus dem Cold-Test (tests/cold/REPORT.md) -------------------------------
+
+
+def test_ct1_config_vor_dem_kommandonamen_wirkt(tmp_path: Path, monkeypatch: Any) -> None:
+    """CT-1: `maildigest --config X init` darf nicht still auf `config.toml` arbeiten."""
+    arbeitsverzeichnis = tmp_path / "cwd"
+    arbeitsverzeichnis.mkdir()
+    monkeypatch.chdir(arbeitsverzeichnis)
+    target = tmp_path / "c1.toml"
+    code, out, _err = run(["--config", str(target), "--non-interactive", "init"])
+    assert code == EXIT_OK
+    assert target.exists()
+    assert str(target) in out
+    assert not (arbeitsverzeichnis / "config.toml").exists()
+
+
+def test_ct1_non_interactive_vor_dem_kommandonamen_wirkt(tmp_path: Path) -> None:
+    """CT-1: `--non-interactive` vor dem Kommando muss die Rückfragen abschalten."""
+    target = tmp_path / "c4.toml"
+    # Leeres stdin: Würde noch gefragt, endete das Kommando am EOF (Exit 2).
+    code, _out, _err = run(["--non-interactive", "init", "--config", str(target)], stdin="")
+    assert code == EXIT_OK
+    assert target.exists()
+
+
+def test_ct1_hintere_angabe_gewinnt_bei_doppeltem_config(tmp_path: Path) -> None:
+    """CT-1: Beide Schreibweisen sind gleichwertig; die spätere Angabe gewinnt."""
+    vorne, hinten = tmp_path / "vorne.toml", tmp_path / "hinten.toml"
+    code, _out, _err = run(
+        ["--config", str(vorne), "init", "--config", str(hinten), "--non-interactive"]
+    )
+    assert code == EXIT_OK
+    assert hinten.exists()
+    assert not vorne.exists()
+
+
+def test_ct1_config_vor_dem_kommando_schlaegt_die_umgebungsvariable(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """CT-1: Auch gegenüber MAILDIGEST_CONFIG muss die vordere Option greifen."""
+    monkeypatch.setenv("MAILDIGEST_CONFIG", str(tmp_path / "aus-env.toml"))
+    target = tmp_path / "explizit.toml"
+    code, _out, _err = run(["--config", str(target), "--non-interactive", "init"])
+    assert code == EXIT_OK
+    assert target.exists()
+    assert not (tmp_path / "aus-env.toml").exists()
+
+
+def test_ct3_init_schreibt_den_vollstaendigen_critic_feldsatz(tmp_path: Path) -> None:
+    """CT-3: `[llm.critic]` muss alle vier Felder aus SPEC-CLI §5 zeigen."""
+    target = tmp_path / "config.toml"
+    code, _out, _err = run(["init", "--config", str(target), "--non-interactive"])
+    assert code == EXIT_OK
+    text = target.read_text(encoding="utf-8")
+    kopf = text.index("[llm.critic]")
+    abschnitt = text[kopf : text.index("[summarizer]")]
+    for feld in ("provider", "model", "base_url", "max_tokens"):
+        assert f"# {feld} = " in abschnitt, f"{feld} fehlt in [llm.critic]"
+    # Die Datei bleibt gültiges TOML und der Kritiker erbt weiterhin.
+    assert tomllib.loads(text)["llm"]["critic"] == {}
+
+
+def test_ct3_init_nicht_interaktiv_druckt_keinen_fragehinweis(tmp_path: Path) -> None:
+    """CT-3: Ohne Frage kein Frage-Hinweis (die Spec kennt die Zeile nicht)."""
+    code, out, _err = run(
+        ["init", "--config", str(tmp_path / "config.toml"), "--non-interactive"]
+    )
+    assert code == EXIT_OK
+    assert "leer lassen = keine" not in out
+
+
+def test_ct3_init_interaktiv_erklaert_die_custom_instructions(tmp_path: Path) -> None:
+    """Gegenprobe: Interaktiv bleibt die Erläuterung erhalten."""
+    code, out, _err = run(
+        ["init", "--config", str(tmp_path / "config.toml")],
+        stdin="\n\n\n\n\n",
+    )
+    assert code == EXIT_OK
+    assert "leer lassen = keine" in out
+
+
+@pytest.mark.parametrize("port", ["0", "99999", "-1", "keinezahl"])
+def test_ct5_unerlaubter_portwert_ist_bedienfehler(tmp_path: Path, port: str) -> None:
+    """CT-5: Ein Wert außerhalb 1..65535 ist ein Bedienfehler (Exit 2), kein Config-Fehler."""
+    target = tmp_path / "config.toml"
+    run(["init", "--config", str(target), "--non-interactive"])
+    code, _out, err = run(
+        [
+            "connect-mail",
+            "--config",
+            str(target),
+            "--non-interactive",
+            "--no-test",
+            "--host",
+            "imap.example.org",
+            "--username",
+            "m@example.org",
+            "--port",
+            port,
+        ]
+    )
+    assert code == EXIT_USAGE
+    assert "--port" in err
+
+
+def test_ct16_eof_auf_stdin_ist_bedienfehler(tmp_path: Path) -> None:
+    """CT-16b: Fehlende Eingabe ist Exit 2, nicht Exit 1 (SPEC-CLI §2)."""
+    code, _out, err = run(["init", "--config", str(tmp_path / "config.toml")], stdin="")
+    assert code == EXIT_USAGE
+    assert "--non-interactive" in err

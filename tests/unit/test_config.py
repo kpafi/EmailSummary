@@ -311,6 +311,23 @@ def test_unknown_field_is_rejected(tmp_path: Path) -> None:
     assert "Unbekanntes Feld" in message
 
 
+def test_ct2_fehlermeldung_verweist_auf_die_feldreferenz(tmp_path: Path) -> None:
+    """Die Meldung schickt den Nutzer nach SPEC-CLI §5 — dort steht die Feldreferenz.
+
+    Bis CT-2 stand dort `docs/ARCHITECTURE.md §5`; die von `init` erzeugte config.toml
+    verweist in ihrem eigenen Kopf aber nach SPEC-CLI. Der Nutzer wurde also an die
+    falsche Datei geschickt.
+    """
+    path = _write(tmp_path, MINIMAL_TOML + "\n[general]\nsprache = \"de\"\n")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(path, env={})
+
+    message = str(excinfo.value)
+    assert "docs/SPEC-CLI.md §5" in message
+    assert "ARCHITECTURE" not in message
+
+
 def test_error_message_mentions_env_vars() -> None:
     """Die Fehlermeldung weist auf die Secret-Env-Variablen hin."""
     with pytest.raises(ConfigError) as excinfo:
