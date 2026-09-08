@@ -48,6 +48,13 @@ src = ["src", "tests"]
 "tests/**" = ["RUF001", "RUF002", "RUF003"]
 # Der Korpus-Generator baut Mails bewusst als lesbare Listen-Konkatenation auf.
 "tests/corpus/_make_corpus.py" = ["RUF005"]
+# Die Blackbox-Skripte aus WP11 sind Beweismittel, nicht Produktionscode: Sie stehen
+# **wörtlich so** im Repo, wie der Cold-Tester sie gegen das installierte Wheel laufen
+# ließ (docs/TESTING.md §6). Sie umzuformatieren hieße, das Protokoll nachträglich zu
+# ändern; sie werden nicht importiert (tests/cold/conftest.py) und laufen in keiner CI.
+# Was von ihnen automatisiert ist, steht in tests/cold/test_cold_suite.py und unterliegt
+# dem vollen Regelsatz.
+"tests/cold/scripts/*" = ["ALL"]
 
 [tool.ruff.lint]
 select = [

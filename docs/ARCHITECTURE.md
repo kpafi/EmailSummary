@@ -36,10 +36,21 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   Aktion (s. u.).
 - **Reihenfolge je Mail (F-ING-2, ADR-019):**
   1. `RawMail` bauen, 2. `StateDB.claim(dedupe_key)` (`INSERT OR IGNORE`, committet **vor**
-  der Verarbeitung), 3. Pipeline-Callback, 4. Endstatus schreiben, 5. `\Seen` setzen und ggf.
-  `move()` nach `[imap] move_processed_to`. Ein bereits bekannter Key wird übersprungen, aber
-  trotzdem als gelesen markiert/verschoben, damit er die Unseen-Menge verlässt.
-- **Löschen: nie** (F-ING-1). `delete()`/`expunge()` kommen im Modul nicht vor.
+  der Verarbeitung), 3. Pipeline-Callback, 4. Endstatus schreiben, 5. `UID STORE +FLAGS
+  (\Seen)` setzen und ggf. `UID MOVE` nach `[imap] move_processed_to`. Ein bereits bekannter
+  Key wird übersprungen, aber trotzdem als gelesen markiert/verschoben, damit er die
+  Unseen-Menge verlässt.
+- **Löschen: nie** (F-ING-1, ADR-064). Die Nachbehandlung setzt **rohe UID-Kommandos** über
+  `mailbox.client.uid(...)` ab, nicht die Komfort-Methoden von imap-tools: `MailBox.flag()`
+  und `MailBox.delete()` hängen an jedes STORE ein unbedingtes `EXPUNGE`, und
+  `MailBox.move()` weicht ohne MOVE-Capability auf `copy()` + `delete()` aus. `\Deleted` und
+  `EXPUNGE` kommen im Modul in keinem Pfad vor. Verschoben wird ausschließlich server-seitig
+  (`UID MOVE`, RFC 6851); kann der Server das nicht, bleibt die Mail als gelesen markiert
+  liegen und der Vorgang meldet `MailboxPostProcessError`.
+- **Nachbehandlungsfehler (ADR-065):** `MailboxPostProcessError` (Verbindung steht, Server
+  antwortet `NO` — typisch: `move_processed_to` zeigt auf einen nicht existierenden Ordner)
+  wird in `poll_once` je Mail abgefangen, als `imap_postprocess_failed` protokolliert und
+  stoppt den Zyklus nicht. Nur `ImapConnectionError` löst Reconnect/Backoff aus.
 - **Dedupe-Key:** `Message-ID`, sonst `sha256:` + Hash über From + Date + Subject +
   Body-Präfix (512 Zeichen), Felder `\x00`-getrennt. Das Präfix macht Fallback-Keys von
   echten Message-IDs unterscheidbar.
@@ -637,8 +648,21 @@ erweitert.
   `LLMRateLimited`/`LLMTransportError`/`LLMTimeout`, und die Stufen-Retry-Politik von WP8
   entscheidet über weitere Versuche, am Ende `FailureNotice` (ADR-023).
 - Schema-Invalidität: 1 Reparatur-Retry (in `llm/schema.py`), dann `FailureNotice`.
+- **Drei Retry-Ebenen, multiplikativ** (Klarstellung WP11, CT-16c): (1) Transport
+  (`llm/_http.py`, `MAX_ATTEMPTS = 3`) — aber **nur** bei HTTP 429 und 5xx. (2) Schema
+  (`llm/schema.py`) — genau ein zusätzlicher Reparaturaufruf, wenn die Antwort kein
+  schemakonformes JSON ist. (3) Stufe (`runner.py`, ADR-050) — 3 Versuche je LLM-Stufe, aber
+  nur bei Timeout, Rate-Limit und Transportfehler; `LLMInvalidResponse` wird hier bewusst
+  **nicht** wiederholt. Daraus ergeben sich die beobachtbaren Zahlen: dauerhafter HTTP 500 →
+  3 × 3 = 9 Requests; gültige HTTP-Antwort mit Nicht-JSON-Inhalt → 2 Requests (Erstaufruf +
+  Reparatur, danach kein Stufen-Retry); Transportfehler ohne HTTP-Status → 3 Requests. Der
+  in F-SEC-7 genannte Wert „3 Versuche" meint die **Stufen**-Ebene.
 - Messenger-Fehler: 5 Versuche über max. 1 h (Nachricht ist fertig sanitisiert und darf
-  aus der DB-Queue erneut versendet werden), dann `failed` + Log.
+  aus der DB-Queue erneut versendet werden), dann `failed` + Log. Die Teile einer
+  mehrteiligen Nachricht gehen einzeln an den Adapter; bricht die Zustellung beim Teil *n*
+  ab, wird die Warteschlangen-Zeile auf die Teile ab *n* eingekürzt und der Retry setzt dort
+  fort (ADR-066). At-least-once nach ADR-008 bleibt: genau der Teil, dessen Bestätigung
+  ausblieb, kann doppelt ankommen — die Teile davor nicht.
 - Prozess-Crash: State in SQLite so, dass Wiederanlauf idempotent ist (Status vor Versand
   committen ⇒ schlimmstenfalls eine Doppelzustellung, nie Verlust — ADR-008).
 
@@ -664,8 +688,15 @@ Von: <from_display> (<from_domain>) · <TT.MM. HH:MM>            ← ohne Anzeig
 — <datei>: <1–2 Sätze je verarbeitetem Anhang>
 📎 Nicht verarbeitet: <datei (größe)>, … [und N weitere]        ← alle AttachmentInfo mit processed = false
 🔍 Hinweise: <Injection-Flag; Auth-Fails; Punycode; gemischte Schriftsysteme;
+              versteckter Text im HTML entfernt; HTML-Teil weicht vom Textteil ab;
               Reply-To-/Return-Path-Abweichung; Text gekürzt; Kritiker-Gründe bei risk = low>
+<Link-Fußnote (defanged)>                                       ← nur bei [links] footnote = true
 ```
+
+Die **Präfixe dieses Formats sind reserviert**: Der Composer fügt sie nach dem Feld-Scrub an,
+und `output/sanitizer.neutralize_markup()` verhindert, dass modellgelieferter Text sie am
+Zeilenanfang nachbaut (ADR-062, CT-8). Die Link-Fußnote hängt ebenfalls der Composer an — sie
+gehört an die Zustellung und nicht in den Prompt (ADR-072, CT-14).
 
 Verbindliche Zusatzregeln (WP7):
 

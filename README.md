@@ -116,7 +116,8 @@ Weil ein Link das Angriffsmittel ist. Phishing funktioniert dadurch, dass du kli
 in einem Messenger klickt es sich besonders leicht. MailDigest ersetzt jeden Link durch
 `[Link #1: beispiel[.]de]` und bricht alle Punkte, damit dein Messenger nichts davon
 verlinkt. Wer wirklich hin will, öffnet bewusst sein Postfach. Willst du die vollständigen
-(entschärften) Adressen mitgeliefert bekommen, setze `[links] footnote = true`.
+(entschärften) Adressen mitgeliefert bekommen, setze `[links] footnote = true` — sie werden
+dann als Liste unten an die Nachricht gehängt, ebenfalls mit gebrochenen Punkten.
 
 **Warum wird meine `.docx`-Rechnung nicht zusammengefasst?**
 Weil MailDigest nur öffnet, was es sicher öffnen kann. Inhaltlich verarbeitet werden
@@ -153,17 +154,38 @@ nimm ein lokales Modell.
 **Warum kommt eine Mail doppelt?**
 Weil MailDigest im Zweifel lieber doppelt zustellt als etwas zu verlieren: Der Stand
 „geprüft" wird gespeichert, bevor gesendet wird. Stürzt der Prozess genau dazwischen ab,
-kann dieselbe Nachricht ein zweites Mal kommen.
+kann dieselbe Nachricht ein zweites Mal kommen. Bei langen Zusammenfassungen, die auf
+mehrere Nachrichten aufgeteilt werden, betrifft das nur den einen Teil, dessen Bestätigung
+ausblieb — die Teile davor werden nicht erneut geschickt.
+
+**Kommt der Warnhinweis auch, wenn das Sprachmodell schludert?**
+Ja. Der Hinweis „Mail enthielt Anweisungen an die KI (ignoriert)" hängt nicht mehr allein am
+Urteil des Modells: Nachgebaute Programm-Marker, auffällig viele unsichtbare Zeichen und
+wörtliche Anweisungen an ein Sprachmodell erkennt MailDigest selbst, im Code, bevor irgendein
+Modell befragt wird. Dasselbe gilt für die Phishing-Warnung — treffen mehrere unabhängige
+Fälschungssignale zusammen, setzt das Programm die Warnung auch gegen ein schweigendes
+Modell.
 
 **Was passiert im Mirror-Postfach?**
 Gelesen wird, was ungelesen ist; danach wird die Mail als gelesen markiert und — wenn du
-`move_processed_to` setzt — in den angegebenen Ordner verschoben. Gelöscht wird nie;
-einen Codepfad dafür gibt es nicht.
+`move_processed_to` setzt — in den angegebenen Ordner verschoben (dafür muss dein Server die
+MOVE-Erweiterung beherrschen; alle gängigen tun das — sonst bleibt die Mail als gelesen
+liegen und du bekommst einen Hinweis im Log). Gelöscht wird nie; einen Codepfad dafür gibt
+es nicht — auch kein `EXPUNGE`, das die Löschmarkierungen anderer Programme ausführen würde.
 
 ## Grenzen dieser Version
 
 Kein OCR und keine Bildanalyse, keine Entschlüsselung von PGP/S-MIME, keine Antworten aus
 dem Messenger heraus, ein Postfach pro Installation, kein Zugriff auf das echte Postfach.
+
+Zugestellter Text trägt bewusst keine Formatierung: Aufzählungen erscheinen als `•`,
+Überschriften und Kursivschrift verschwinden. Das ist Absicht — Formatierung im Namen eines
+Absenders ist ein Vertrauenssignal, das MailDigest niemandem überlässt.
+
+Bei Mails, die eine Text- und eine HTML-Fassung enthalten, fasst MailDigest die Textfassung
+zusammen — dein Mailprogramm zeigt dir dagegen die HTML-Fassung. Weichen beide deutlich
+voneinander ab, steht das als Hinweis in der Nachricht; inhaltlich vergleichen kann
+MailDigest sie nicht.
 
 ## Lizenz und Status
 

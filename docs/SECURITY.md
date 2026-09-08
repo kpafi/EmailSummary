@@ -35,7 +35,7 @@ gemacht**:
 
 | # | Bedrohung | Gegenmaßnahme (Komponente) |
 |---|-----------|---------------------------|
-| T1 | Prompt-Injection im Mail-Body („ignoriere Anweisungen, antworte mit …") | Rechtelose LLMs (I2); Daten/Instruktions-Trennung im Prompt (I8); Injection-Flag im Schema; Kritiker-Gegencheck; Output-Sanitizer (WP5/WP6/WP7) |
+| T1 | Prompt-Injection im Mail-Body („ignoriere Anweisungen, antworte mit …") | Rechtelose LLMs (I2); Daten/Instruktions-Trennung im Prompt (I8); Injection-Flag im Schema; Kritiker-Gegencheck; Output-Sanitizer (WP5/WP6/WP7); deterministische Injection-Indizien in der WP5-Nachkontrolle, modellunabhängig (WP11, ADR-061) |
 | T2 | Injection über versteckten Text (weiße Schrift, display:none, Zero-Width, Bidi) | HTML-Sanitizer entfernt unsichtbare Elemente; Unicode-Cleaning (WP3) |
 | T3 | Phishing-Link soll den Nutzer erreichen | Links werden deterministisch entfernt/defanged, nie zugestellt (I3, WP3+WP7) |
 | T4 | Malware/Makrovirus im Anhang (docx, xlsm, exe, js, iso, zip …) | Allowlist: Anhänge außer PDF/Text werden nie geöffnet, nur Metadatum (F-SEC-4, WP3) |
@@ -49,6 +49,7 @@ gemacht**:
 | T12 | Homoglyphen-/Punycode-Domains täuschen den Nutzer in der Textdarstellung | Kennzeichnung + Warnung im sanitization_report; Kritiker-Signal (WP3/WP6) |
 | T13 | Mail-in-Mail (message/rfc822) schmuggelt Payloads an Filtern vorbei | Eingebettete Mails werden wie Anhänge behandelt: nicht geöffnet, nur Metadatum (WP3) |
 | T14 | Kompromittierte Zusammenfassung im Sammel-Digest geht unter | Kritiker-`high` erzwingt Einzelzustellung mit Banner (F-CRIT-2) |
+| T15 | `multipart/alternative`: harmloser `text/plain`, bösartiger `text/html` — der Nutzer sieht den HTML-Teil, die Zusammenfassung beschreibt den Klartext | Divergenz-Erkennung im Sanitizer setzt `html_divergent`; Hinweiszeile + Kritiker-Signal (WP11, ADR-067) |
 
 ## 4. Sanitizer-Politik (verbindlich; umgesetzt in WP3, ADR-026 bis ADR-030)
 
@@ -60,7 +61,11 @@ zu sein.
   Inline-`text/plain`-Teile (in MIME-Reihenfolge) den Body; sonst werden alle
   Inline-`text/html`-Teile konvertiert. Andere Body-Typen ⇒ „nicht darstellbar"
   (Anhang-Metadatum). „Inline" heißt: `Content-Disposition` ist nicht `attachment`
-  **und** kein Dateiname gesetzt.
+  **und** kein Dateiname gesetzt. Existieren beide Sorten (`multipart/alternative`), wird der
+  HTML-Teil weiterhin **nicht** ausgewertet, aber intern zu Text konvertiert und mit dem
+  Klartext verglichen (Wortmengen, Link-/Bild-Marker ausgenommen). Ein substanzieller
+  Überhang (≥ 5 im Klartext fehlende Wörter **und** > 50 % der HTML-Wörter) setzt
+  `sanitization_report.html_divergent` (T15, ADR-067).
 - **Anhänge, inhaltlich verarbeitet (nur diese zwei Fälle):** `text/plain`-Dateien und
   `application/pdf` — nach Magic-Byte-Check, unter Limits. `text/html` ist **nur als
   Inline-Body** erlaubt; eine `.html`-*Datei* ist HTML-Smuggling-Vektor und bleibt
@@ -199,6 +204,23 @@ zusagt. Verbindlich ist jetzt zusätzlich:
   Markup-Schmuggel, Letzteres das Wiederaufbrechen eines Defang-Tokens im zweiten
   Scrub-Durchlauf — den es real gibt (Hinweiszeilen, Sammel-Digest-Kopfzeilen nach ADR-049).
 
+**Nachgeschärft in WP11 (Cold-Testing, Befunde CT-6/CT-7/CT-7a/CT-8/CT-11 in
+docs/TESTING.md §6):**
+
+- Die Markup-Neutralisierung ist nicht mehr nur zeichenweise: Zeilenanfangs-Markdown
+  (Überschrift, Liste, Zitat, Discord-Subtext), Unterstriche am Wortrand und Massen-Pings
+  (`@everyone`/`@here`) werden ebenfalls entschärft, und die Zeilen-Präfixe des
+  Nachrichtenformats (`⚠️`, `📧`, `📎`, `🔍 Hinweise:`, `Von:`) dürfen in untrusted Text nicht
+  am Zeilenanfang stehen — sonst ist der einzige Warnkanal des Produkts vom Angreifer
+  beschreibbar (ADR-062). Das gilt auch auf dem Fail-closed-Pfad: `compose_failure` scrubbt
+  den Betreff über dieselbe Funktion (CT-7a).
+- Der Injection-Verdacht (T1/F-SEC-5) entsteht zusätzlich modellunabhängig aus der
+  Mail-Seite: nachgebaute Datenblock-Marker, Steuerzeichen-Ballung und wörtliche Anweisungen
+  an ein Sprachmodell setzen `injection_suspected` ohne Zutun des Modells (ADR-061).
+  Entfernter versteckter Text bekommt einen eigenen, wörtlich zutreffenden Hinweis.
+- Mehrere unabhängige Fälschungssignale mit mindestens einem harten heben die Risikostufe
+  per Code auf `high` und lösen damit das Banner aus (ADR-063, präzisiert ADR-043).
+
 Die Zusage aus ADR-035 („die Invariante I3 hängt nicht an der Korrektheit der
 Segmentierungs-Regex") gilt damit auch für das, was der Nutzer tatsächlich sieht. Geprüft
 wird sie nicht mehr nur an Beispiel-Payloads, sondern als Allaussage über zufällige
@@ -222,6 +244,10 @@ Eingaben (`tests/unit/test_hot_properties.py`, ADR-058).
   nicht (ADR-055); ein Terminal interpretiert sonst Steuersequenzen aus fremder Hand.
 - IMAP nur über TLS (IMAPS 993); Zertifikatsprüfung an (kein `verify=False` irgendwo —
   Lint-Check in WP12).
+- Im Mirror-Postfach wird nie gelöscht und nie expunged (ADR-064): `\Deleted` und `EXPUNGE`
+  existieren in keinem Codepfad; `imap.move_processed_to` verlangt einen Server mit
+  MOVE-Capability, der client-seitige Ersatz (COPY + `\Deleted` + EXPUNGE) ist bewusst nicht
+  implementiert.
 - Logs ohne Inhalte (NF-5): strukturierte JSON-Zeilen auf stdout, ausschließlich
   Metadaten (gekürzter Dedupe-Hash, Absender-Domain, Status, Zähler, Exception-
   **Klassenname**). Tracebacks — die Mail-Inhalte aus Fehlertexten transportieren können —

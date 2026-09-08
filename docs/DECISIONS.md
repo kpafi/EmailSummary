@@ -908,7 +908,7 @@
   Die Sprache der Verdict-Texte folgt weiterhin `[general] language`.
 
 ## ADR-043: Harte Code-Signale heben die Risikostufe an, senken sie nie
-- Status: accepted
+- Status: accepted, präzisiert durch ADR-063
 - WP / Datum: WP6, 2026-09-02
 - Kontext: T9 verlangt, dass die deterministischen Signale (F-CRIT-3) vom Mail-Inhalt nicht
   beeinflussbar sind. Sie landen aber im Prompt — ein übernommenes oder schlicht
@@ -937,6 +937,12 @@
   „Kritiker: …", auch wenn das Modell schweigt. Ein `low` ohne Modellgrund bekommt einen
   neutralen Platzhalter, damit kein leeres Banner entsteht. Die Liste der harten Signale ist
   bewusst kurz und in WP12 erneut zu prüfen.
+- **Nachtrag (WP11, CT-11 → ADR-063):** Die Sätze „Hart ist derzeit ausschließlich
+  `mixed_script`" und „nie per Code auf `high` gesetzt" gelten nicht mehr unverändert.
+  `punycode` ist ebenfalls hart (eine Weiterleitung bricht Authentifizierung, sie schreibt
+  aber keine Domain in IDN-Schreibweise um), und drei unabhängige Fälschungssignale mit
+  mindestens einem harten heben auf `high`. Der Kern von ADR-043 — ein einzelnes
+  weiterleitungs-erklärbares Signal löst nie ein Banner aus — bleibt bestehen.
 
 ## ADR-044: Verdict-Nachkontrolle nutzt die Summarizer-Politik plus NFKC
 - Status: accepted
@@ -1355,3 +1361,394 @@
 - Konsequenzen: Der Fehlertyp der State-Schicht ist jetzt an einer Stelle definiert. Eine
   unbrauchbare Datenbank beendet den Daemon weiterhin — das ist beabsichtigt (ohne Dedupe
   keine Verarbeitung, fail-closed), aber nun mit einer lesbaren Meldung und Exit-Code 1.
+
+## ADR-061: Der Injection-Verdacht entsteht auch ohne Modell — in der Summarizer-Nachkontrolle
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fix CT-6), 2026-09-08
+- Kontext: F-SEC-5 verlangt, dass ein Injection-Verdacht geflaggt und dem Nutzer angezeigt
+  wird. Gesetzt wurde `injection_suspected` bisher nur (a) vom Modell selbst und (b) von der
+  Textsäuberung der Modellausgabe. Der Cold-Test CT-6 zeigt: Ein schema-konformes, braves
+  Modell mit `injection_suspected: false` — genau das Verhalten eines schwachen lokalen
+  Modells, das die README ausdrücklich unterstützt — unterdrückt die Warnung vollständig.
+  Dabei kennt der Code die Angriffsmerkmale nachweislich selbst: Die Cold-Mail 10 baut die
+  Datenblock-Marker nach, Mail 11 kommt mit 31 entfernten Steuerzeichen und verstecktem
+  Text. F-SEC-5 hing damit an der Kooperation genau des Modells, das angegriffen wird.
+- Entscheidung: `agents/summarizer.detect_injection_evidence(mail)` berechnet den Verdacht
+  deterministisch aus der `SanitizedMail` und wird aus `enforce_output_policy()` heraus
+  aufgerufen — der Funktion, die die Mail als Quelle aller Ersatzwerte ohnehin schon
+  bekommt. Ein Fund setzt `injection_suspected = true`, unabhängig von der Modellantwort.
+  Gemeldet werden drei Klassen: nachgebaute Datenblock-Marker (toleranter Regex, weil der
+  WP3-Sanitizer die Winkelklammern bereits entfernt), Ballung entfernter
+  Steuer-/Unsichtbarzeichen (ab 8) und wörtliche Anweisungen an ein Sprachmodell in Mail-
+  oder Anhangstext. Bewusst **nicht** enthalten ist `hidden_text_removed`: Unsichtbarer Text
+  ist in Newslettern der Regelfall (Preheader), die Hinweiszeile „Mail enthielt Anweisungen
+  an die KI" wäre dort falsch. Dieses Signal bekommt stattdessen einen eigenen, wörtlich
+  zutreffenden Hinweis in `output/composer._hints_line()`.
+- Alternativen: (a) Ein neues Feld im `SanitizationReport` (etwa `forged_markers`) — hieße,
+  das in ARCHITECTURE §3 festgeschriebene Schema und den WP3-Sanitizer zu ändern, obwohl die
+  Marker-Fälschung erst in der Prompt-Schicht überhaupt eine Bedeutung hat. (b) Das Faktum
+  aus `llm/prompts._neutralize_markers` zurückgeben — dreht die Abhängigkeit um (der
+  Prompt-Bau ist reine Textproduktion und soll keinen Zustand melden) und deckt nur den
+  unwahrscheinlichen Fall ab, dass der Angreifer den echten Zufalls-Token trifft. (c) Die
+  Erkennung im Composer — dort liegt die Mail nur noch als `SanitizedMail` neben Summary und
+  Verdict; die Nachkontrolle der Modellausgabe ist die vertraglich dafür vorgesehene Stelle
+  (SECURITY §5 Punkt 4). (d) Nichts tun und auf den Kritiker hoffen — auch der ist ein Modell.
+- Konsequenzen: Die Hinweiszeile erscheint jetzt auch bei einem übernommenen oder schwachen
+  Modell. Der Preis sind mögliche Fehlalarme bei Mails, die wörtlich über Prompt-Injection
+  schreiben; die Folge ist eine zusätzliche Hinweiszeile, keine Blockade und keine
+  Risikostufe. Die Phrasenliste ist bewusst kurz, wörtlich und um ein Objekt herum gebaut
+  („du bist jetzt **ein Sprachmodell**", „nenne mir deinen **Systemprompt**") — sie soll
+  offene Übernahmeversuche fangen, nicht Alltagsdeutsch wie „du bist jetzt dran".
+
+## ADR-062: Der Output-Sanitizer neutralisiert Zeilenanfangs-Markdown, Rand-Unterstriche und die Struktur-Präfixe des Nachrichtenformats
+- Status: accepted (ersetzt die Unterstrich-Ausnahme aus ADR-037)
+- WP / Datum: WP11 (Cold-Test-Fixes CT-7, CT-7a, CT-8), 2026-09-08
+- Kontext: Die Markup-Neutralisierung war zeichenweise definiert. Der Cold-Test zeigt, dass
+  Discord im `content`-Feld deutlich mehr rendert, als eine Zeichenliste erfassen kann:
+  `__unterstrichen__` und `_kursiv_` (ADR-037 hielt `_` für harmlos, weil es kein klickbares
+  Ziel erzeugt), Überschriften `#`/`##`/`###`, Listen `-`/`+`/`1.`, Zitate und den
+  Discord-Subtext `-#` — Konstrukte, die ausschließlich am Zeilenanfang wirken und deren
+  Zeichen mitten im Satz harmlos sind. Dazu `@everyone`/`@here`, die zwar dank
+  `allowed_mentions` nicht pingen, aber als Text ankamen. CT-7a zeigt, dass dafür kein
+  kooperierendes Modell nötig ist: Ein präparierter Betreff plus ein selbst ausgelöster
+  Fail-closed-Lauf genügt. CT-8 ist derselbe Mangel auf der Strukturebene: Die Präfixe aus
+  ARCHITECTURE §7 (`⚠️`, `📧`, `📎`, `🔍 Hinweise:`, `Von:`) waren nur eine Konvention des
+  Composers, im Modelltext also frei nachbaubar — der einzige Warnkanal des Produkts war
+  damit vom Angreifer beschreibbar.
+- Entscheidung: Eine neue Funktion `neutralize_markup()` in `output/sanitizer.py` läuft in
+  `scrub_field` **und** `scrub_plain` über jedes untrusted Feld: Unterstrich-Läufe werden
+  zusammengezogen und Unterstriche am Wortrand entfernt (im Wortinneren bleiben sie —
+  `rechnung_2024.pdf` rendert nirgends und soll lesbar bleiben); Zeilenanfangs-Markdown wird
+  ersetzt (Überschrift/Zitat/Subtext ersatzlos, Aufzählung zu `• `, nummerierte Präfixe
+  behalten die Zahl und verlieren nur das Satzzeichen, damit `12. März` nicht zur Aufzählung
+  verstümmelt wird); Massen-Pings werden zu `(at)everyone`. Die Struktur-Präfixe des
+  Nachrichtenformats werden am Zeilenanfang entfernt bzw. ihr Doppelpunkt zum Trennpunkt:
+  Vertrauenswürdige Zeilen erzeugt allein der Composer, der seine Präfixe nach dem Scrub
+  anfügt. Die Ersetzung läuft bis zum Fixpunkt (höchstens drei Runden), damit auch
+  Verschachtelungen wie `## 📧 Fake` vollständig zerfallen. In `final_guard` laufen
+  zusätzlich die Unterstrich- und die Massen-Ping-Regel (Defense in Depth über jeden
+  Nachrichtenteil, auch über `compose_plain`) — die Zeilenanfangs-Regeln dort bewusst
+  **nicht**: Sie würden die Präfixe des Composers selbst auffressen.
+- Alternativen: (a) `_`, `#` und `-` in die Zeichenliste aufnehmen — zerstört Dateinamen,
+  Datumsangaben und jeden Bindestrich im Fließtext; die Über-Entfernung aus ADR-027 ist hier
+  zu grob, weil es um Lesbarkeit von Klartext geht. (b) Struktur-Präfixe einrücken statt
+  entfernen — eine eingerückte `🔍 Hinweise: geprueft und sicher`-Zeile bleibt im Messenger
+  überzeugend genug, um zu täuschen. (c) Die Struktur maschinenlesbar trennen (etwa je Feld
+  eine eigene Nachricht) — bricht das in SPEC-CLI §6 zugesagte Format. (d) Auf
+  `allowed_mentions` und die Harmlosigkeit von Formatierung vertrauen — F-SEC-3 sagt „nie
+  HTML oder Markdown" zu, und großformatige Überschriften im Namen des Angreifers sind genau
+  der Vertrauensbruch, den das Produkt ausschließt.
+- Konsequenzen: Zugestellter Text verliert bewusst Formatierung: Aufzählungspunkte werden zu
+  `•`, Nummerierungen zu `12 ·`, führende Rauten verschwinden. Modelltext, der zufällig mit
+  `Von:` beginnt, liest sich als `Von · …`. Die Eigenschaft wird nicht nur an Beispielen,
+  sondern als Allaussage geprüft (`test_hot_properties.py`, eigene Markdown-/Struktur-Strategie).
+
+## ADR-063: Mehrere unabhängige Fälschungssignale heben auf `high` — Präzisierung von ADR-043
+- Status: accepted (präzisiert ADR-043, hebt ihn nicht auf)
+- WP / Datum: WP11 (Cold-Test-Fix CT-11), 2026-09-08
+- Kontext: ADR-043 verwirft die Regel „Signal ⇒ high" mit einem guten Argument: Die
+  Weiterleitung ins Spiegelpostfach bricht SPF und DKIM systematisch und schreibt den
+  Return-Path um; ein Banner bei jeder weitergeleiteten Mail wäre Warnmüdigkeit, der
+  teuerste aller Fehler. Der Cold-Test CT-11 zeigt die Kehrseite: Eine Mail mit
+  Punycode-Absenderdomain, SPF/DKIM/DMARC=fail, abweichendem Reply-To und abweichendem
+  Return-Path wurde ohne Banner und mit Wichtigkeit `normal` zugestellt, weil der Kritiker
+  `none` sagte — F-CRIT-3 („harte Signale heben die Risikostufe auch ohne Modell an") war
+  damit auf `low` beschränkt und der auffälligste Fall optisch gleichwertig zu einer
+  harmlosen Mail.
+- Entscheidung: Zwei getrennte Regeln statt einer Schwelle. (1) `punycode` gilt jetzt als
+  hartes Signal (Mindeststufe `low`). Die Begründung von ADR-043 trägt hier nicht: Eine
+  Weiterleitung bricht Authentifizierung, aber sie schreibt keine Absender-Domain in
+  IDN-Schreibweise um. (2) Neu ist eine Kombinationsregel: Treffen mindestens drei
+  unabhängige Fälschungssignale aus `{auth_failed, reply_to_mismatch, return_path_mismatch,
+  punycode, mixed_script}` zusammen **und** ist mindestens eines davon hart, hebt der Code
+  auf `high` und formuliert selbst den ersten `risk_reasons`-Eintrag, damit das Warn-Banner
+  nie leer ist. Anhangs-, Link-, Kürzungs- und Versteckt-Text-Signale sind ausgeschlossen:
+  Sie sagen über die Echtheit des Absenders nichts. Der von ADR-043 geschützte Fall bleibt
+  unangetastet — SPF/DKIM/DMARC=fail plus Return-Path-Abweichung sind zwei
+  weiterleitungs-erklärbare Signale ohne hartes darunter und bleiben bei `none`. Ergänzend
+  trägt `Signal` jetzt ein Feld `label`: Im Banner steht die Kurzform, nicht der für den
+  Prompt formulierte Langtext (der defangte Domains enthält, die in einem Banner nichts zu
+  suchen haben — sie stehen ohnehin in der Hinweiszeile).
+- Alternativen: (a) ADR-043 umdrehen und jedes harte Signal auf `high` heben — genau der
+  Fehlalarm-Generator, den ADR-043 zu Recht verwirft. (b) Eine Punktetabelle mit Gewichten je
+  Signal — mehr Mechanik und Kalibrierbedarf, ohne Felddaten nicht begründbar; die Zählregel
+  „drei unabhängige, mindestens eines nicht wegzuerklären" ist die einfachste Form derselben
+  Idee. (c) Nur `mixed_script` hart lassen und auf den Kritiker hoffen — der Cold-Test zeigt,
+  dass genau das nicht trägt. (d) Die Wichtigkeit statt der Risikostufe anheben — das Banner
+  hängt laut F-CRIT-2 an `phishing_risk == high`, eine zweite Wahrheit wäre schlechter als
+  die Anpassung an der einen Stelle.
+- Konsequenzen: Eine weitergeleitete Mail mit gebrochener Authentifizierung bleibt
+  unauffällig, solange kein nicht-erklärbares Signal dazukommt. Eine legitime IDN-Domain
+  führt ab jetzt zu Risiko `low` und damit zu einer Kritiker-Zeile in den Hinweisen (kein
+  Banner). Für ADR-043 gilt: Der Satz „nie per Code auf `high`" ist durch diese
+  Kombinationsregel ersetzt; hart ist nicht mehr nur `mixed_script`, sondern auch `punycode`.
+
+## ADR-064: Nachbehandlung im Mirror-Postfach nur über rohe UID-Kommandos — nie EXPUNGE
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fix CT-9), 2026-09-08
+- Kontext: README („Gelöscht wird nie; einen Codepfad dafür gibt es nicht."), SPEC-CLI §7.1
+  und F-ING-1 sagen zu, dass MailDigest im Mirror-Postfach nichts löscht. Der
+  Blackbox-Cold-Test hat das Gegenteil gemessen (CT-9): je verarbeiteter Mail ein
+  `UID STORE +FLAGS (\Seen)` **gefolgt von `EXPUNGE`**, auch ohne `move_processed_to`. Die
+  Ursache liegt in der Bibliothek: `imap_tools.BaseMailBox.flag()` hängt an jedes STORE ein
+  unbedingtes `self.expunge()`; `delete()` genauso; `move()` fällt ohne `MOVE`-Capability des
+  Servers auf `copy()` + `delete()` zurück. Ein EXPUNGE löscht **alle** als `\Deleted`
+  markierten Nachrichten der Mailbox endgültig — auch solche, die MailDigest nie angefasst
+  hat (anderer Mailclient, Serverregel). Das ist echter, stiller Datenverlust im Postfach
+  eines Nutzers, der dem Produkt genau das Gegenteil geglaubt hat.
+- Entscheidung: `ImapClient` benutzt für die Nachbehandlung **keine** Komfort-Methode von
+  imap-tools mehr, sondern setzt rohe Kommandos über `self.mailbox.client.uid(...)` ab und
+  prüft den Status selbst (`_uid_command`): `UID STORE <uid> +FLAGS (\Seen)` und — nur wenn
+  konfiguriert — `UID MOVE <uid> <folder>`. `UID MOVE` wird ausschließlich server-seitig
+  benutzt und nur, wenn der Server die MOVE-Erweiterung (RFC 6851) ankündigt
+  (`_server_supports_move`). Kann er es nicht, bleibt die Mail liegen — als gelesen markiert —
+  und der Vorgang meldet einen `MailboxPostProcessError` mit Handlungsanweisung. `\Deleted`
+  und `EXPUNGE` kommen im gesamten Modul nicht mehr vor, in keinem Pfad.
+- Alternativen: (a) Weiter `MailBox.flag()` und danach ein zusätzliches
+  `UID STORE -FLAGS (\Deleted)` — repariert nichts, das EXPUNGE ist längst gelaufen. (b) Vor
+  dem EXPUNGE alle fremden `\Deleted`-Flags merken und danach wiederherstellen — eine
+  Race-Condition gegen jeden anderen Client am selben Postfach und rekonstruiert nichts, was
+  der Server schon entfernt hat. (c) Ohne `MOVE`-Capability auf COPY + `\Deleted` + EXPUNGE
+  ausweichen (das Verhalten von imap-tools) — genau der Löschpfad, den es laut README nicht
+  geben darf; ein Serverfehler zwischen COPY und EXPUNGE kostet die Mail. (d) COPY ohne
+  anschließendes Löschen — legt ohne Vorwarnung Dubletten an und erfüllt „verschoben" nicht.
+  (e) Die Bibliothek forken oder monkeypatchen — dieselbe Logik an schlechterer Stelle.
+- Konsequenzen: MailDigest hat jetzt tatsächlich keinen Codepfad, der eine Nachricht löschen
+  kann; F-ING-1 ist erstmals belegbar. Preis: `[imap] move_processed_to` verlangt einen
+  Server mit MOVE-Capability (alle verbreiteten IMAP-Server ab ca. 2013 haben sie); fehlt
+  sie, sammeln sich die verarbeiteten Mails als gelesen im Quellordner an, und jede Mail
+  erzeugt eine Warnung im Log. Der Client hängt an einem Implementierungsdetail von
+  imap-tools (`MailBox.client` ist die `imaplib`-Instanz); die Test-Attrappen bilden deshalb
+  jetzt die `imaplib`-Ebene nach und lassen `flag()`/`move()`/`delete()`/`expunge()` hart
+  auffliegen, sobald sie überhaupt gerufen werden.
+
+## ADR-065: Ein abgelehntes Nachbehandlungs-Kommando ist kein Verbindungsfehler
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fix CT-12), 2026-09-08
+- Kontext: `mark_processed()` übersetzte jeden `ImapToolsError` in `ImapConnectionError`.
+  Zeigt `[imap] move_processed_to` auf einen Ordner, den es auf dem Server nicht gibt,
+  antwortet der Server auf COPY/MOVE mit `NO`; imap-tools macht daraus einen
+  `MailboxCopyError`, MailDigest daraus einen Verbindungsfehler — und die CLI daraus die
+  Meldung „Fehler: Postfach nicht erreichbar: … MailboxCopyError" mit Exit 1 (CT-12). Beide
+  Aussagen sind falsch: Das Postfach ist erreichbar, und der Rest des Postfachs hätte
+  problemlos verarbeitet werden können. Im Dauerbetrieb löste derselbe Fehler außerdem einen
+  sinnlosen Reconnect-Backoff aus, der bei der nächsten Mail sofort wieder zuschlug.
+- Entscheidung: Neue Fehlerklasse `MailboxPostProcessError(IngestError)` für „Verbindung
+  steht, Kommando abgelehnt". Sie trägt eine feldbezogene deutsche Meldung, die den Ordner
+  und das Config-Feld nennt („Verschieben nach „X" fehlgeschlagen … Existiert der Ordner auf
+  dem Server? [imap] move_processed_to prüfen."). `poll_once()` fängt sie je Mail ab
+  (`_mark_processed_best_effort`), protokolliert `imap_postprocess_failed` und arbeitet
+  weiter. Socket-, TLS- und Protokollfehler bleiben `ImapConnectionError` und lösen
+  unverändert Reconnect mit Backoff aus.
+- Alternativen: (a) Den Zielordner beim Verbindungsaufbau einmalig gegen `LIST` prüfen und
+  bei Fehlen sofort abbrechen — meldet den Fehler früher, aber ein Ordner kann jederzeit
+  verschwinden, und ein harter Abbruch ist für ein Ablage-Detail die falsche Antwort. Als
+  *zusätzliche* Frühwarnung in `connect-mail` sinnvoll, ersetzt diese ADR aber nicht.
+  (b) Den Ordner automatisch anlegen — schreibt ungefragt in ein fremdes Postfach. (c) Den
+  Fehler still schlucken — die Fehlkonfiguration bliebe unsichtbar.
+- Konsequenzen: Ein einzelner Nachbehandlungsfehler kostet nur einen Logeintrag. Die Mail ist
+  bereits verarbeitet und in der State-DB vermerkt; taucht sie beim nächsten Poll erneut auf,
+  wird sie als Duplikat erkannt (F-ING-2) — bei dauerhaft fehlendem Ordner wächst also die
+  Unseen-Menge und mit ihr die Duplikat-Zahl jedes Laufs. Das ist gewollt: sichtbar, aber
+  nicht schädlich. `IngestError` bleibt die gemeinsame Oberklasse, damit die bestehenden
+  `except IngestError`-Stellen in `cli.py` und `runner.py` nichts durchlassen.
+
+## ADR-066: Die Warteschlange führt den Fortschritt innerhalb einer mehrteiligen Nachricht
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fix CT-13), 2026-09-08
+- Kontext: `OutboxMessenger._attempt()` übergab die ganze `DigestMessage` an den Adapter; der
+  Adapter schickt die `parts` nacheinander als eigene Nachrichten. Brach die Verbindung
+  mitten drin ab, wusste die Warteschlange nur „fehlgeschlagen" und legte beim Retry die
+  komplette Nachricht erneut vor. Der Cold-Test hat für **eine** Mail fünf
+  Discord-Nachrichten gemessen: Teil 1, Teil 2, Teil 1, Teil 2, Teil 3 (CT-13). Das ist kein
+  Absturzfall, sondern ein gewöhnlicher Messenger-Ausfall — bei Zusammenfassungen über dem
+  Teilungslimit also der Regelfall, und mit jedem Retry-Versuch wächst der Schaden.
+- Entscheidung: `_attempt()` schickt die Teile **einzeln** (`_single_part()` baut je Teil
+  eine Ein-Teil-`DigestMessage`, Text zeichengleich übernommen) und zählt die bestätigten
+  mit. Beim Fehlschlag kürzt `StateDB.outbox_defer(..., remaining_parts=...)` die
+  gespeicherte Nutzlast auf die noch offenen Teile ein. Kein Schema-Wechsel: die Spalte
+  `payload` existiert, es wird nur eine kürzere Liste hineingeschrieben. Ohne einen einzigen
+  bestätigten Teil bleibt die Zeile unangetastet.
+- Alternativen: (a) Einen Fortschritts-Index als neue Spalte — verlangt einen
+  Schema-Versionssprung samt Migration für dieselbe Information. (b) Nichts tun und die Teile
+  nummerieren („Teil 2/3") — macht die Dublette erklärbar, aber nicht seltener, und ändert
+  das in SPEC-CLI §6 festgeschriebene Nachrichtenformat. (c) Exactly-once über
+  Idempotenz-Schlüssel des Messengers — Discord-Webhooks und `signal-cli` bieten keinen;
+  ADR-008 hat at-least-once genau deshalb gewählt.
+- Konsequenzen: ADR-008 gilt unverändert — genau der eine Teil, dessen Bestätigung ausblieb,
+  kann weiterhin doppelt ankommen (er ist eventuell zugestellt und nur die Antwort ging
+  verloren). Die Teile davor nicht mehr. `parts` wird ausschließlich **gekürzt**, nie
+  verändert: I3/I4 bleiben, es entsteht kein zweiter Weg zum Messenger neben
+  `DigestComposer._finalize()`. Der Adapter bekommt jetzt je Teil einen eigenen
+  `send()`-Aufruf; da alle drei Adapter ohnehin über `parts` schleifen, ist das Verhalten am
+  Draht identisch (nur die adapterinterne 429/5xx-Wiederholung greift jetzt sauber pro Teil).
+  `delivery_deferred` protokolliert zusätzlich `confirmed_parts` und `remaining_parts` — zwei
+  Zahlen, kein Inhalt (NF-5).
+
+## ADR-067: Ein divergierender HTML-Teil wird gemeldet, nicht ausgewertet
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fix CT-15), 2026-09-08
+- Kontext: SECURITY §4 legt fest: Existiert mindestens ein Inline-`text/plain`-Teil, bilden
+  die Klartext-Teile den Body; HTML-Teile werden dann gar nicht betrachtet. Das ist
+  sicherheitstechnisch richtig, macht aber einen Angriff ohne jede Prompt-Injection möglich
+  (CT-15): Ein `multipart/alternative` mit harmlosem `text/plain` und bösartigem `text/html` —
+  Mailprogramme bevorzugen den HTML-Teil, MailDigest fasst den Klartext zusammen. Der Nutzer
+  liest eine verlässlich wirkende „harmlos"-Meldung zu einem Text, den er nie zu sehen
+  bekommt. Der Report enthielt dazu kein einziges Signal.
+- Entscheidung: Der Sanitizer konvertiert die ignorierten Inline-HTML-Teile intern zu Text
+  und vergleicht Wortmengen mit dem ausgewerteten Klartext (`_html_diverges`). Link-, Mail-,
+  Tel- und Bild-Marker werden vorher aus beiden Seiten entfernt — sie entstehen systematisch
+  nur auf der HTML-Seite (sichtbar gemachte `href`-Ziele, Alt-Texte) und wären sonst eine
+  sichere Quelle für Fehlalarme. Gemeldet wird nur ein substanzieller Überhang: mindestens
+  fünf Wörter, die im Klartext gar nicht vorkommen, **und** mehr als die Hälfte aller
+  HTML-Wörter. Ergebnis: `SanitizationReport.html_divergent`. Der ausgewertete Body bleibt
+  unverändert der Klartext-Teil; der HTML-Text verlässt den Sanitizer nicht.
+- Alternativen: (a) Beide Teile an das Modell geben — verdoppelt Länge und Rauschen, sprengt
+  bei Newslettern regelmäßig das 30 000-Zeichen-Budget, liefert dem Angreifer einen zweiten
+  Injection-Kanal und kippt die klare Regel „genau ein Body" aus SECURITY §4. (b) Bei
+  Divergenz den HTML-Teil statt des Klartexts nehmen — kehrt die Regel um und macht die
+  fehleranfälligere HTML→Text-Konvertierung zum Normalfall; ein Angreifer erzwingt sie dann
+  durch bloße Divergenz. (c) Bei Divergenz fail-closed abbrechen — verlöre legitime Mails,
+  deren Teile technisch stark abweichen, und macht die Zustellung von einer Heuristik
+  abhängig. (d) Zeichen- statt Wortvergleich — jede Formatierung ergäbe eine Meldung.
+- Konsequenzen: Das Signal ist deterministisch, im Code berechnet und vom Absender nicht
+  abschaltbar (T9-Klasse) — es hängt nicht am Wohlwollen des Modells. Die Schwellen sind
+  bewusst konservativ: Ein sehr knapper Klartext-Teil („Diese Mail benötigt einen
+  HTML-fähigen Client") wird als divergent gemeldet, was korrekt ist. Kosten: eine
+  zusätzliche HTML→Text-Konvertierung je `multipart/alternative`-Mail. Damit das Signal beim
+  Nutzer ankommt, nimmt `output/composer._hints_line` es auf und `agents/critic.collect_signals`
+  wertet es als Signal — beides ist Teil dieser Entscheidung.
+
+## ADR-068: Globale CLI-Optionen mit `argparse.SUPPRESS` statt eigener Vor-Parser
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fix CT-1), 2026-09-08
+- Kontext: SPEC-CLI.md §3 verspricht, dass `--config` und `--non-interactive` vor **und** nach
+  dem Kommandonamen stehen dürfen und beide Schreibweisen gleichwertig sind. Umgesetzt war
+  das über einen gemeinsamen Eltern-Parser (`parents=[common]`) am Hauptparser und an jedem
+  Subparser. Argparse parst ein Unterkommando aber in eine eigene Namespace-Instanz und
+  kopiert danach *alle* Schlüssel in den Haupt-Namespace zurück; die Subparser-Defaults
+  (`None`/`False`) überschrieben damit still jeden Wert, der vor dem Kommandonamen stand. Der
+  Cold-Test hat das als CT-1 (high) gefunden: `maildigest --config /etc/maildigest.toml run`
+  arbeitete auf `./config.toml`, `--non-interactive` griff im Cron-Betrieb nicht.
+- Entscheidung: Beide globalen Optionen werden mit `default=argparse.SUPPRESS` deklariert.
+  Der Namespace-Schlüssel entsteht nur, wenn die Option tatsächlich angegeben wurde — der
+  Subparser kann nichts mehr überschreiben. Die Leser greifen defensiv zu
+  (`getattr(args, "config", None)`, `getattr(args, "non_interactive", False)`). Bei doppelter
+  Angabe gewinnt die hintere, weil der Subparser zuletzt schreibt.
+- Alternativen: (a) Ein eigener Vor-Parser mit `parse_known_args()`, der die globalen
+  Optionen abschneidet: bricht `--help` je Kommando und verdoppelt die Optionsdefinition.
+  (b) Nur der Hauptparser trägt die globalen Optionen: verböte die dokumentierte hintere
+  Schreibweise. (c) Callback-Merge nach dem Parsen: fragil, weil er nicht unterscheiden kann,
+  ob `None` „nicht angegeben" oder „ausdrücklich leer" heißt — genau die Verwechslung, die
+  den Bug erzeugt hat.
+- Konsequenzen: Kein stilles Verschlucken mehr; die Vertragszusage aus §3 ist maschinell
+  belegt (`tests/unit/test_cli.py::test_ct1_*`). Jeder Leser eines mit `SUPPRESS` belegten
+  Feldes muss `getattr` mit Default benutzen — das ist im Code an beiden Stellen kommentiert.
+
+## ADR-069: Bereichsprüfung von Optionswerten gehört in den Parser, nicht ins Config-Schema
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fixes CT-5, CT-16b), 2026-09-08
+- Kontext: SPEC-CLI.md §2 trennt Exit-Code 1 (Laufzeit-/Konfigurationsfehler) von Exit-Code 2
+  (Bedienfehler, ausdrücklich inkl. „unerlaubter Optionswert"). `--port 0` und `--port 99999`
+  fielen erst der Pydantic-Validierung von `ImapConfig` zur Last und endeten damit als Exit 1,
+  während `--language klingon` (argparse `choices`) korrekt Exit 2 lieferte — dieselbe
+  Fehlerklasse, zwei Exit-Codes (CT-5). Ebenso endete ein EOF auf stdin mit Exit 1, obwohl die
+  Spec für fehlende Eingaben nur Exit 2 kennt (CT-16b).
+- Entscheidung: Wertebereiche, die ausschließlich aus einer Kommandozeilen-Option stammen
+  können, werden im argparse-Schritt geprüft: `--port` bekommt den Typ `_port_value()`, der
+  1..65535 erzwingt und über `ArgumentTypeError` → `_ArgumentParser.error()` in `EXIT_USAGE`
+  mündet. `Console._readline()` behandelt EOF als fehlende Pflichtangabe (`EXIT_USAGE`) und
+  nennt in der Meldung `--non-interactive` als Ausweg. Die Validierung im Config-Schema bleibt
+  unverändert bestehen — sie ist weiterhin die Instanz für Werte, die aus der **Datei** kommen.
+- Alternativen: Port 143 bleibt bewusst Exit 1: Der Wert liegt im erlaubten Bereich,
+  unzulässig ist die *Konfiguration* (Klartext-IMAP, SECURITY §6). Genauso bleibt
+  `--low-digest-time 25:99` bei Exit 1, weil das Format erst durch das Schema definiert wird.
+  Verworfen: den Exit-Code aus dem Aufrufkontext der Validierung ableiten — das verlangte, den
+  Ursprung jedes Feldwertes durch die Config-Schicht zu schleifen.
+- Konsequenzen: Die Bereichsgrenze steht an zwei Stellen (Parser und Schema). Das ist bewusst
+  in Kauf genommen — die doppelte Prüfung ist billig und die beiden Stellen antworten auf
+  verschiedene Fragen.
+
+## ADR-070: Der Runner zählt Direktzustellungen selbst
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fix CT-10), 2026-09-08
+- Kontext: `OutboxMessenger.send()` reiht eine Nachricht ein und versucht sie sofort
+  zuzustellen (ADR-048). Klappt das, ist der Warteschlangen-Eintrag weg, bevor ein `flush()`
+  ihn sehen könnte. `RunStats.delivery` wurde aber ausschließlich aus `flush()` gespeist — die
+  in SPEC-CLI §4 zugesagte Bilanzzeile von `run --once` meldete deshalb im Normalbetrieb
+  dauerhaft „0 Nachrichten zugestellt" und war als Monitoring-Signal für den Cron-Betrieb
+  unbrauchbar (CT-10, bestätigt in CT-13).
+- Entscheidung: Die Zählung passiert im Runner, nicht in `delivery.py`.
+  `Runner._note_direct_delivery(dedupe_key)` fragt nach jedem Sendeversuch
+  `StateDB.outbox_pending(key)`: Steht nichts mehr aus, war es eine Direktzustellung. Gebucht
+  wird an den drei Stellen, an denen der Runner einen Versand auslöst — Erfolgsfall
+  (`Delivered`), zugestellte Metadaten-Notiz (`FailedNotice.notice_delivered`; auch die Notiz
+  ist laut F-OPS-3 eine zugestellte Nachricht) und Sammel-Digest.
+  `take_direct_delivery_stats()` liest den Zähler leerend aus; `run_once()` addiert ihn am
+  Ende, `run_forever()` je Zyklus. Bewusst **nicht** gezählt werden Deferrals: Ein direkt
+  fehlgeschlagener Versuch bleibt in der Warteschlange und wird von einem späteren `flush()`
+  gebucht — eine zusätzliche Buchung im Runner ergäbe eine Doppelzählung über Zyklusgrenzen.
+- Alternativen: `OutboxMessenger.send()` einen `DeliveryStats`-Rückgabewert geben. Sauberer an
+  der Quelle, aber `send()` erfüllt das schmale `pipeline.Messenger`-Protokoll (Rückgabe
+  `None`) und wird aus der Pipeline heraus aufgerufen; eine Signaturänderung zöge sich durch
+  `pipeline.py`, `composer` und alle Messenger-Attrappen. Der Zähler im Runner ist die
+  kleinere Naht.
+- Konsequenzen: Die Bilanzzeile ist wieder ein brauchbares Cron-Signal.
+  `RunStats.delivery.delivered` eines Wiederanlauf-Laufs enthält jetzt korrekterweise auch die
+  frisch verarbeiteten Mails, nicht nur die aus der Warteschlange nachgelieferten — der Test
+  `test_crash_between_commit_and_delivery_loses_nothing` erwartet deshalb
+  `1 + stats.ingest.processed` statt `1`.
+
+## ADR-071: `maildigest test --dry-run` sagt, was tatsächlich passiert ist
+- Status: accepted
+- WP / Datum: WP11 (Cold-Test-Fix CT-4), 2026-09-08
+- Kontext: Im Trockenlauf meldete `test` bei fail-closed „Selbsttest fehlgeschlagen — es wurde
+  nur die Metadaten-Notiz erzeugt (zugestellt: ja)", obwohl per Definition nichts an den
+  Messenger ging; gleichzeitig war die Notiz selbst nirgends zu sehen, obwohl `--dry-run` laut
+  SPEC-CLI §4 genau die Nachricht auf stdout ausgeben soll (CT-4). Ursache war die Auswertung
+  von `FailureNotice.notice_delivered`: Das Flag sagt nur, dass `OutboxMessenger.send()` nicht
+  geworfen hat — die Warteschlange nimmt jede Nachricht an, auch wenn der Messenger sie
+  ablehnt.
+- Entscheidung: Zwei Regeln. (1) Im Trockenlauf gibt der Fail-closed-Zweig die im
+  `_CollectingMessenger` gesammelten Teile auf stdout aus und meldet auf stderr
+  `(zugestellt: nein — Trockenlauf)`. (2) Im Normalbetrieb gilt eine Zustellung nur dann als
+  erfolgt, wenn `notice_delivered` **und** die Warteschlange danach leer ist (`pending == 0`).
+- Alternativen: Die Zustell-Aussage ganz weglassen — nimmt dem Nutzer die einzige Auskunft
+  darüber, ob die Notiz angekommen ist. Oder `notice_delivered` in `delivery.py` schärfer
+  definieren — das Flag hat dort seinen berechtigten, engeren Sinn („die Warteschlange hat
+  angenommen"); die Interpretation gehört an die Ausgabestelle.
+- Konsequenzen: Die Zustell-Aussage von `test` ist jetzt beobachtbar wahr statt strukturell
+  wahr. Der Nutzer sieht im Trockenlauf auch im Fehlerfall den Text, den sein Messenger
+  bekommen hätte — das ist der einzige Weg, die Metadaten-Notiz vor dem Produktivlauf zu
+  begutachten (relevant für CT-7a: Der Betreff in der Notiz ist angreifergesteuert).
+  Ausgegeben wird ausschließlich `DigestMessage.parts`, also Text, der `compose_failure()` und
+  `final_guard()` bereits passiert hat — I3/I4 bleiben gewahrt.
+
+## ADR-072: Die Link-Fußnote hängt am Composer, nicht am Body
+- Status: accepted (korrigiert die Verortung aus ADR-028)
+- WP / Datum: WP11 (Cold-Test-Fix CT-14), 2026-09-08
+- Kontext: `[links] footnote = true` war implementiert — die Fußnote wurde nur an
+  `SanitizedMail.body_text` gehängt. Das ist der Text, der in den **LLM-Prompt** geht, nicht
+  die zugestellte Nachricht. Der Cold-Test hat deshalb zeichengleiche Zustellungen mit und
+  ohne Option gemessen (CT-14): SPEC-CLI §5 und die README-FAQ versprechen dem *Nutzer* die
+  vollständigen entschärften Adressen, und er bekam sie nie. Die Wirkung war doppelt
+  schlecht: Der Nutzer bekam nichts, und das Modell bekam bis zu 100 angreiferkontrollierte
+  defangte URLs zusätzlich in den Kontext — nach der Budget-Kürzung angehängt, also am
+  30 000-Zeichen-Limit vorbei.
+- Entscheidung: Der Sanitizer hängt gar nichts mehr an den Body; `MailSanitizer` kennt die
+  Option nicht mehr. Der Fußnoten-Bau zieht als `build_footnote()` nach
+  `sanitize/links.py` — dorthin, wo `links_found` entsteht — und `DigestComposer` hängt die
+  Fußnote nach der Hinweiszeile an, gesteuert über `link_footnote` aus `[links] footnote`.
+  Die Einträge sind bereits defanged; `_finalize()` (final_guard + Split) läuft wie über
+  jeden anderen Teil darüber, I3 bleibt gewahrt.
+- Alternativen: (a) Die Fußnote im Sanitizer lassen und den Composer aus `body_text`
+  herausschneiden — eine Textsuche als Schnittstelle, und der Prompt trüge die Liste
+  weiterhin. (b) Die Option ersatzlos streichen und die Doku anpassen — möglich, aber die
+  Zusage ist alt, sinnvoll und billig einzuhalten; ein entferntes Feature wäre die größere
+  Änderung am Vertrag. (c) Die Fußnote als eigene Nachricht schicken — bricht das
+  Nachrichtenformat aus SPEC-CLI §6.
+- Konsequenzen: `links.footnote` wirkt endlich dort, wo es dokumentiert ist. Der Prompt wird
+  bei gesetzter Option kürzer, nicht länger — der Nebeneffekt ist eine echte Verbesserung von
+  F-SEC-1. Bei sehr vielen Links kann die Fußnote die Nachricht über das Teilungslimit
+  treiben; das ist der normale Split-Pfad und durch das 5000-Zeichen-Budget der Fußnote
+  begrenzt.

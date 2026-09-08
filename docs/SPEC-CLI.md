@@ -26,7 +26,11 @@ Exit-Code 0.
 |------|-----------|
 | 0 | Erfolg |
 | 1 | Laufzeit- oder Konfigurationsfehler (Verbindung fehlgeschlagen, Datei fehlt, Konfiguration ungültig, Selbsttest fail-closed) |
-| 2 | Bedienfehler (unbekanntes Kommando, unbekannte Option, unerlaubter Optionswert, fehlende Pflichtangabe im nicht-interaktiven Modus, zu viele ungültige Eingaben) |
+| 2 | Bedienfehler (unbekanntes Kommando, unbekannte Option, unerlaubter Optionswert — auch ein Zahlenwert außerhalb des erlaubten Bereichs, z. B. `--port 0` / `--port 99999` —, fehlende Pflichtangabe im nicht-interaktiven Modus, zu viele ungültige Eingaben, abgebrochene Eingabe/EOF auf stdin) |
+
+Ein Wert, der als Zahl im erlaubten Bereich liegt, aber als **Konfiguration** unzulässig ist,
+bleibt Exit-Code 1 — etwa `--port 143` (Klartext-IMAP) oder `--low-digest-time 25:99`
+(ADR-069).
 
 Jede Fehlermeldung geht auf **stderr** und beginnt mit `Fehler: `. Fortschritts- und
 Ergebnismeldungen gehen auf **stdout**. Warnungen (Hinweise, die den Ablauf nicht
@@ -65,9 +69,11 @@ Eine unerlaubte Eingabe bei 1–3 wird abgelehnt (`Ungültiger Wert. Erlaubt: �
 und erneut gefragt; nach drei Fehlversuchen endet das Kommando mit Exit-Code 2.
 
 Danach entsteht die Datei mit **Dateirechten 0600** und dem vollständigen Feldsatz aus
-Abschnitt 5. Pflichtfelder ohne Default (`[imap] host`, `[imap] username`, `[llm] model`)
-und alle Secrets stehen als auskommentierte Beispielzeilen darin — die Datei ist nach
-`init` also gültiges TOML, aber noch keine vollständige Konfiguration. Die Ausgabe endet
+Abschnitt 5. Pflichtfelder ohne Default (`[imap] host`, `[imap] username`, `[llm] model`),
+alle Secrets und alle Felder ohne Default — dazu gehören alle vier Overrides in
+`[llm.critic]` — stehen als auskommentierte Beispielzeilen darin; die Datei ist nach `init`
+also gültiges TOML, aber noch keine vollständige Konfiguration. Die Frage-Erläuterung zu den
+Custom-Instructions erscheint nur im interaktiven Modus. Die Ausgabe endet
 mit der Liste der nächsten Schritte.
 
 Ein unzulässiger Wert (z. B. `--low-digest-time 25:99`) führt zu Exit-Code 1 mit einer
@@ -245,6 +251,9 @@ Die Ausgabe hat fünf nummerierte Schritte:
 5/5 Zugestellt (N Teile). Schau in deinen Messenger.
 ```
 
+Bei genau einem Teil lautet die Klammer `(1 Teil)` — hier und ebenso in
+`5/5 Nachricht erzeugt (N Teile) — Trockenlauf, nicht gesendet:`.
+
 Weder der Mail-Text noch die Modellausgabe erscheinen dabei auf dem Terminal; nur die
 fertige, sanitisierte Nachricht bei `--dry-run`. Mit `--dry-run` steht zwischen Schritt 2
 und 3 zusätzlich die Zeile `    Trockenlauf: es wird nichts an den Messenger geschickt
@@ -257,6 +266,19 @@ erzeugt und ausgegeben). 1, wenn die Pipeline fail-closed endete (dann steht in 
 `Fail-closed: Stufe <stufe>, Grund <grund>`, und der Messenger bekommt die Metadaten-Notiz
 aus Abschnitt 6) oder wenn die Zustellung nicht bestätigt wurde. 1 auch bei fehlender,
 unlesbarer oder unvollständiger Konfiguration und bei nicht lesbarer `--eml`-Datei.
+
+Endet die Pipeline mit `--dry-run` fail-closed, geht **nichts** an den Messenger. Schritt 5
+lautet dann
+
+```
+5/5 Fail-closed: Stufe <stufe>, Grund <grund>.
+    Metadaten-Notiz erzeugt — Trockenlauf, nicht gesendet:
+```
+
+gefolgt von der Notiz selbst auf stdout; auf stderr steht `Selbsttest fehlgeschlagen — es
+wurde nur die Metadaten-Notiz erzeugt (zugestellt: nein — Trockenlauf).` Ohne `--dry-run`
+steht dort `(zugestellt: ja)` nur, wenn die Notiz den Messenger tatsächlich erreicht hat;
+blieb sie in der Warteschlange liegen, steht dort `(zugestellt: nein)` (ADR-071).
 
 **Optionen**
 
@@ -285,9 +307,17 @@ eine deutsche Bilanzzeile auf **stderr**:
 Lauf beendet: N Mails geholt, N verarbeitet, N Duplikate, N Fehler, N Nachrichten zugestellt, N in der Warteschlange.
 ```
 
+`N Nachrichten zugestellt` zählt **alle** in diesem Lauf zugestellten Nachrichten: direkt
+zugestellte Einzelnachrichten, zugestellte Metadaten-Notizen, den Sammel-Digest und aus der
+Warteschlange nachgelieferte Nachrichten (ADR-070). Nachrichten, die in der Warteschlange
+verbleiben, zählen erst in dem Lauf, in dem sie durchgehen; bis dahin erscheinen sie unter
+`N in der Warteschlange`.
+
 Exit-Codes: 0 bei sauberem Ende, 1 bei unvollständiger Konfiguration, unbenutzbarer
 State-Datenbank oder — nur bei `--once` — nicht erreichbarem Postfach
-(`Fehler: Postfach nicht erreichbar: …`). Im Dauerbetrieb ist ein Postfach-Ausfall kein
+(`Fehler: Postfach nicht erreichbar: …`). Ein fehlgeschlagenes Verschieben ist **kein**
+solcher Fall: Es betrifft eine einzelne Mail, wird als `imap_postprocess_failed`
+protokolliert und bricht den Lauf nicht ab (ADR-065). Im Dauerbetrieb ist ein Postfach-Ausfall kein
 Abbruch: Es wird mit wachsendem Abstand (5 s, 10 s, 20 s … maximal 10 Minuten) neu
 verbunden.
 
@@ -319,7 +349,7 @@ Alle Felder mit ihren Defaults:
 | `[imap] password` | Text | — | Alternativ `MAILDIGEST_IMAP_PASSWORD` |
 | `[imap] folder` | Text | `"INBOX"` | Gelesener Ordner |
 | `[imap] poll_interval_seconds` | ≥ 5 | `120` | Abrufintervall im Dauerbetrieb |
-| `[imap] move_processed_to` | Text | `""` | Leer = nur Gelesen-Flag setzen. Der Ordner muss auf dem Server existieren |
+| `[imap] move_processed_to` | Text | `""` | Leer = nur Gelesen-Flag setzen. Der Ordner muss auf dem Server existieren, und der Server muss die MOVE-Erweiterung beherrschen. Fehlt eines von beidem, bleibt die Mail als gelesen im Quellordner liegen und der Lauf protokolliert `imap_postprocess_failed` mit dem Grund — der Zyklus läuft weiter (ADR-064/ADR-065) |
 | `[llm] provider` | `anthropic`/`openai_compatible` | `"anthropic"` | Anbieter |
 | `[llm] model` | Text | — | **Pflicht.** Exakte Modell-ID; bewusst kein Default |
 | `[llm] api_key` | Text | — | Alternativ `MAILDIGEST_LLM_API_KEY`. Für `anthropic` erforderlich, für lokale Server meist nicht |
@@ -359,7 +389,12 @@ Eine gesetzte Variable schlägt immer den Dateiwert; ein leerer Wert wird ignori
 ## 6. Nachrichtenformat
 
 Jede Zustellung ist **reiner Text**. Sie enthält nie einen klickbaren Link, nie einen
-Anhang, nie HTML oder Markdown. Alle Domains und Dateinamen erscheinen mit gebrochenem
+Anhang, nie HTML oder Markdown. Markdown-Konstrukte werden neutralisiert, auch die nur am
+Zeilenanfang wirkenden (Überschriften, Listen, Zitate, Discord-Subtext) und Unterstriche am
+Wortrand; Aufzählungen erscheinen als `•`, nummerierte Zeilen als `12 · …`. `@everyone` und
+`@here` erscheinen als `(at)everyone`/`(at)here`. Die strukturgebenden Zeilenanfänge (`⚠️`,
+`📧`, `📎`, `🔍 Hinweise:`, `Von:`) erzeugt ausschließlich das Programm; identische Anfänge in
+Modelltext werden neutralisiert (ADR-062). Alle Domains und Dateinamen erscheinen mit gebrochenem
 Punkt (`beispiel[.]de`, `rechnung[.]pdf`), weil Messenger nackte Domains automatisch
 verlinken. Ist die Nachricht länger als das Limit des Zielsystems (Telegram 4096, Discord
 2000, Signal 2000 Zeichen), wird sie an Zeilengrenzen auf mehrere Nachrichten aufgeteilt.
@@ -374,7 +409,9 @@ Von: <Anzeigename> (<domain>) · <TT.MM. HH:MM>            ← ohne Date-Header:
 — <datei>: <1–2 Sätze je verarbeitetem Anhang>
 📎 Nicht verarbeitet: <datei (größe)>, … [und N weitere]
 🔍 Hinweise: <Injection-Verdacht; Auth-Fehler; Punycode; gemischte Schriftsysteme;
+              versteckter Text im HTML entfernt; HTML-Teil weicht vom Textteil ab;
               Reply-To-/Return-Path-Abweichung; Text gekürzt; Kritiker-Gründe bei Risiko low>
+<Link-Fußnote (defanged), eine Adresse je Zeile>          ← nur bei [links] footnote = true
 ```
 
 Zeilen ohne Inhalt entfallen. Einzellimits: Kopfzeile 120, Zusammenfassung 3000,
@@ -414,7 +451,10 @@ newsletter (8):
 Diese Punkte sind Teil des Vertrags und in REQUIREMENTS.md als F-SEC-* nachlesbar:
 
 1. Im Mirror-Postfach wird **nichts gelöscht**. Geschrieben werden nur das Gelesen-Flag und
-   — falls konfiguriert — das Verschieben in `move_processed_to`.
+   — falls konfiguriert — das Verschieben in `move_processed_to`. Technisch sind das genau
+   zwei IMAP-Kommandos: `UID STORE +FLAGS (\Seen)` und `UID MOVE`. Ein `EXPUNGE` wird nie
+   gesendet — es würde auch fremde, von anderen Programmen als `\Deleted` markierte
+   Nachrichten endgültig löschen (ADR-064).
 2. Kein Sprachmodell sieht rohes HTML, rohe MIME-Teile oder Anhangs-Binärdaten.
 3. Anhänge werden nie zugestellt. Inhaltlich verarbeitet werden nur `text/plain`-Dateien
    und PDFs (nach Prüfung der Magic-Bytes); alles andere erscheint nur als Zeile

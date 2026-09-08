@@ -86,9 +86,14 @@ Sicherheitsbereich: zweite Cold-Runde mit frischem Agenten.
 ## 4. Abnahmekriterien M3 (Release)
 
 - [x] Hot: Coverage-Ziele erreicht, Property-Tests grün, Findings-Log geführt (WP10, §5).
-- [ ] Cold: Report liegt vor, alle Findings ≥ medium gefixt + Regressionstest.
-- [ ] Adversarial-Suite Teil der CI (`pytest` gesamt).
-- [ ] Invarianten-Review (SECURITY.md §7) dokumentiert.
+- [x] Cold: Report liegt vor (`tests/cold/REPORT.md`), alle Findings ≥ medium gefixt +
+      Regressionstest (WP11, §6). Offen sind ausschließlich `info`-Befunde und ein bewusst
+      anders gelöster Teilaspekt — beides in §6 begründet.
+- [x] Adversarial-Suite Teil der CI (`pytest` gesamt): `tests/cold/test_cold_suite.py`
+      fährt den Angriffs-Korpus des Cold-Tests über `maildigest.cli.main()` (73 Tests).
+- [ ] Invarianten-Review (SECURITY.md §7) dokumentiert. → **WP12**.
+- [ ] Zweite Cold-Runde mit frischem Agenten (§3 Nachlauf verlangt sie bei
+      Sicherheits-Findings ≥ high: CT-6 und CT-9). → **WP12**.
 
 ## 5. Findings-Log (Hot-Testing)
 
@@ -288,4 +293,92 @@ Adapter, die bereits über `httpx.MockTransport` in ihren eigenen Tests abgedeck
 
 ## 6. Findings-Log (Cold-Testing)
 
-_Verweis auf tests/cold/REPORT.md nach WP11_
+Durchlauf WP11, 2026-09-08. Der vollständige Blackbox-Report mit Repro-Schritten,
+Abdeckungstabelle und Gesamturteil steht in **`tests/cold/REPORT.md`**; er wird nicht
+nachträglich geändert — er ist das Protokoll dessen, was ein Agent ohne Code-Kenntnis
+gemessen hat. Diese Tabelle führt den Nachlauf (§3): Triage, Fix und Regressionstest.
+
+Severity-Maßstab wie in §5 (Wirkung beim Nutzer). Die Fixes liefen in drei parallelen
+Läufen (Ausgabe/Kritiker, Ingest/Zustellung, CLI); die Finalisierung hat sie
+zusammengeführt, gegengeprüft und die vier offen gebliebenen Punkte nachgezogen.
+
+| CT | Severity | Titel (Kurzform) | Status |
+|----|----------|------------------|--------|
+| CT-1 | high | Globale Optionen vor dem Kommandonamen wirkungslos | **gefixt** (ADR-068) — `test_cli.py::test_ct1_*`, `test_cold_suite.py::test_ct1_*` |
+| CT-2 | low | Fehlermeldung verweist auf ARCHITECTURE statt SPEC-CLI | **gefixt** — `test_config.py::test_ct2_*`, `test_cold_suite.py::test_ct2_*` |
+| CT-3 | info | `[llm.critic]` unvollständig; Frage-Hinweis ohne Frage | **gefixt** — `test_cli.py::test_ct3_*`, `test_cold_suite.py::test_ct3_*` |
+| CT-4 | medium | `test --dry-run` behauptet eine Zustellung, zeigt die Notiz nicht | **gefixt** (ADR-071) — `test_cli_e2e.py::test_ct4_*`, `test_cold_suite.py::test_ct4_*` |
+| CT-5 | low | Out-of-range-Portwert endet mit Exit 1 statt 2 | **gefixt** (ADR-069) — `test_cli.py::test_ct5_*`, `test_cold_suite.py::test_ct5_*` |
+| CT-6 | high | Injection-Verdacht hängt allein am LLM (F-SEC-5) | **gefixt** (ADR-061) — `test_summarizer.py::test_ct6_*`, `test_cold_suite.py::test_ct6_*` |
+| CT-7 | medium | Markdown erreicht den Messenger (F-SEC-3) | **gefixt** (ADR-062) — `test_output_sanitizer.py::test_ct7_*`, Property-Tests, `test_cold_suite.py` |
+| CT-7a | medium | Derselbe Leak ohne Modell, über die Betreffzeile der Notiz | **gefixt** (ADR-062) — `test_ct7a_*`, `test_cold_suite.py::test_ct7a_*` |
+| CT-8 | medium | Nachrichtenstruktur ist fälschbar (Fake-Hinweiszeile) | **gefixt** (ADR-062) — `test_ct8_*`, `test_cold_suite.py::test_der_angreifer_kann_keine_programmzeile_faelschen` |
+| CT-9 | high | Unbedingtes EXPUNGE nach jedem Gelesen-Flag (F-ING-1) | **gefixt** (ADR-064) — `test_ingest_client.py::test_ct9_*`, `test_ingest_poll.py::test_ct9_*` |
+| CT-10 | medium | Bilanzzeile zählt zugestellte Nachrichten immer als 0 | **gefixt** (ADR-070) — `test_cli_e2e.py::test_ct10_*` |
+| CT-11 | medium | Harte Signale heben nie auf `high`, kein Banner (F-CRIT-3) | **gefixt** (ADR-063) — `test_critic_signals.py::test_ct11_*`, `test_cold_suite.py::test_ct11_*` |
+| CT-12 | low | „Postfach nicht erreichbar" bei fehlendem Zielordner | **gefixt** (ADR-065) — `test_ingest_client.py::test_ct12_*`, `test_ingest_poll.py::test_ct12_*` |
+| CT-13 | medium | Retry stellt bereits gesendete Teile erneut zu | **gefixt** (ADR-066) — `test_delivery.py::test_ct13_*` |
+| CT-14 | medium | `[links] footnote = true` ohne Wirkung | **gefixt** (ADR-072) — `test_output_composer.py::test_ct14_*`, `test_cold_suite.py::test_ct14_*` |
+| CT-15 | medium | Divergierender HTML-Teil bei `multipart/alternative` | **gefixt** (ADR-067) — `test_sanitize_mail.py::TestCt15*`, `test_output_composer.py::test_ct15_*`, `test_cold_suite.py::test_ct15_*` |
+| CT-16a | info | `(1 Teil)` statt des wörtlichen `(N Teile)` der Spec | **offen, bewusst** — der Code hat recht (deutsche Grammatik), der Vertrag war unpräzise. Klarstellung in SPEC-CLI §4 `test`. Kein Code-Fix. |
+| CT-16b | info | EOF auf stdin endet mit Exit 1 statt 2 | **gefixt** (ADR-069) — `test_cli.py::test_ct16_*`, `test_cold_suite.py::test_ct16b_*` |
+| CT-16c | info | LLM-Versuchszahlen schwanken (9/3/2) | **offen, bewusst** — drei multiplikative Retry-Ebenen, jede mit eigener Begründung. Kein Bug; aufgeschlüsselt in ARCHITECTURE §6, Verweis aus F-SEC-7. |
+| CT-16d | info | REQUIREMENTS F-SEC-4 nennt fälschlich `text/html` | **gefixt (Doku)** — REQUIREMENTS F-SEC-4 korrigiert; das Verhalten war richtig, die Anforderung falsch. |
+| CT-16e | info | Positivbefund: `log_level=INFO` unterdrückt Tracebacks | **kein Befund** — nichts zu tun. |
+
+**Bewusste Abweichung bei CT-6.** Ein Teilaspekt des Befunds („entfernter versteckter Text
+setzt `injection_suspected`") ist absichtlich anders gelöst: `hidden_text_removed` setzt das
+Flag **nicht**. Unsichtbarer Text ist in Newslettern der Regelfall (Preheader mit
+`display:none`); die Zeile „Mail enthielt Anweisungen an die KI (ignoriert)" wäre dort
+schlicht falsch und würde die Warnung entwerten — Warnmüdigkeit statt Warnung. Das Signal
+erreicht den Nutzer stattdessen als eigener, wörtlich zutreffender Hinweis „versteckter Text
+im HTML entfernt" (ADR-061). Der Kern des Befunds — deterministische Signale erreichen den
+Nutzer nie — ist damit behoben.
+
+### Befunde der Finalisierung (Review der drei Fix-Läufe)
+
+Die Zusammenführung hat vier Lücken gefunden, die keiner der drei Läufe schließen konnte
+oder wollte; sie sind in dieser Fassung mit erledigt:
+
+- **CT-2 und CT-14 lagen zwischen den Zuständigkeiten.** Beide Fixes liegen in Dateien, die
+  einem jeweils anderen Parallel-Agenten zugewiesen waren; beide wurden mit exaktem
+  Patchvorschlag als „nicht gefixt" gemeldet. Nachgezogen.
+- **Das CT-15-Signal erreichte den Nutzer nicht.** Der Sanitizer berechnete
+  `html_divergent`, aber weder `output/composer._hints_line` noch
+  `agents/critic.collect_signals` werteten es aus — das Feld war folgenlos. Nachgezogen.
+- **Ein Fremdtest kodierte den CT-10-Bug.**
+  `test_runner_e2e.py::test_crash_between_commit_and_delivery_loses_nothing` erwartete
+  `delivery.delivered == 1` und fixierte damit die alte, fehlerhafte Buchführung. Auf
+  `1 + stats.ingest.processed` korrigiert (ADR-070).
+- **Die CT-6-Phrasenliste war zu breit.** `du bist jetzt …` und `system prompt` allein
+  hätten Alltagsdeutsch getroffen („du bist jetzt dran", „wir besprechen den System-Prompt
+  im Meeting") — derselbe Fehlalarm-Mechanismus, wegen dessen `hidden_text_removed`
+  ausgeschlossen wurde. Die Muster verlangen jetzt ein Objekt (`… ein Sprachmodell`,
+  `nenne mir deinen Systemprompt`).
+
+### Was automatisiert ist — und was Skript bleibt
+
+`tests/cold/test_cold_suite.py` (73 Tests, Teil von `pytest`) fährt den Angriffs-Korpus
+`tests/cold/mails/*.eml` über dieselbe Eintrittstür wie der Cold-Tester
+(`maildigest.cli.main()`). Ersetzt sind nur die drei Außenkontakte, für die er Mocks
+gestartet hatte: LLM-**Provider** (nicht der Agent — sonst wäre die deterministische
+Nachkontrolle aus CT-6/CT-11 umgangen und der Test wertlos), Messenger und IMAP.
+Automatisiert sind: die Kern-Property über den gesamten Korpus gegen ein vollständig
+übernommenes Modell, die Struktur-Fälschung (CT-8), CT-4, CT-6, CT-7/7a, CT-11, CT-14,
+CT-15 sowie die reinen CLI-Befunde CT-1, CT-2, CT-3, CT-5, CT-16b und eine F-SEC-8-Probe
+mit den markierten Fake-Secrets des Cold-Tests.
+
+**Nicht automatisiert, bleibt dokumentiertes manuelles Skript** (`tests/cold/scripts/`,
+wörtlich so im Repo, wie der Cold-Tester sie laufen ließ; von pytest ausgenommen über
+`tests/cold/conftest.py` und im Lint über `pyproject.toml`):
+
+| Skript | Warum nicht in pytest |
+|--------|------------------------|
+| `imap_server.py` | Echter IMAP4rev1-Server über TLS-Socket. CT-9/CT-12 sind stattdessen über die Postfach-Attrappen in `test_ingest_client.py`/`test_ingest_poll.py` abgedeckt, die jedes rohe Kommando protokollieren und bei `flag()`/`move()`/`delete()`/`expunge()` hart auffliegen. |
+| `sink_server.py` | HTTP-Sink mit Abbruchmodi (`die_after_1`, `http500`). Der Verbindungsabbruch mitten in einer mehrteiligen Nachricht (CT-13) ist in `test_delivery.py` ohne Socket nachgebaut. |
+| `mock_llm.py` | OpenAI-kompatibler HTTP-Endpunkt. In der Suite als `FakeProvider` auf der Provider-Schnittstelle nachgebaut — dieselben Modi (`nice`, `raw`, `broken`), ohne Port und ohne Wartezeit. |
+| `split_test.py` | 210 Läufe × Prozessstart über 28 Offsets (Minuten Laufzeit). Die Eigenschaft ist als Property-Test in `test_hot_properties.py` abgedeckt (ADR-059). |
+| `check_sink.py`, `mocks.sh`, `run_mails.sh`, `make_mails.py` | Auswertungs- und Setup-Helfer der Blackbox-Umgebung; ohne diese Umgebung gegenstandslos. `make_mails.py` hat den Korpus unter `tests/cold/mails/` erzeugt. |
+
+Für eine zweite Cold-Runde (§3 Nachlauf) sind die Skripte damit weiterhin lauffähig; sie
+brauchen die Arbeitsumgebung aus dem Report-Kopf und absolute Pfade darin.
