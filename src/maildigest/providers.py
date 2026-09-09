@@ -541,7 +541,18 @@ LLM_PRESETS: tuple[LlmPreset, ...] = (
         detail=(
             "Sign up at openrouter.ai and create a key. Models whose ID ends in \":free\" "
             "cost nothing — openrouter.ai/models lists which ones currently do. Enter the "
-            "full ID including the \":free\" suffix."
+            "full ID including the \":free\" suffix.\n"
+            "\n"
+            "Two things to know before you pick this:\n"
+            "  * Budget: MailDigest makes TWO calls per mail (summary + critic). The free "
+            "quota is 50 requests per day until you have ever bought 10 dollars of credit, "
+            "which works out at roughly 25 mails a day. Above that it becomes 1000 per day. "
+            "A busy mailbox will hit the lower cap.\n"
+            "  * Privacy: free endpoints may be served under terms that allow the content "
+            "to be used for model improvement — and mail content is exactly what you would "
+            "be sending. OpenRouter has an account setting to refuse providers that train "
+            "on data; turn it on before you point this at a real mailbox. If that matters "
+            "to you, the local model option keeps everything on your machine."
         ),
     ),
     LlmPreset(
