@@ -51,16 +51,84 @@ steht in [docs/SPEC-CLI.md](docs/SPEC-CLI.md), der Betrieb als Dienst in
 * Python ≥ 3.11 (läuft auf einem kleinen VPS oder einem Raspberry Pi)
 * ein zweites, leeres IMAP-Postfach (das „Mirror-Postfach") — am besten bei einem anderen
   Anbieter als dein Hauptpostfach, mit eigenem, einmaligem Passwort oder App-Passwort
+  (welcher Anbieter sich eignet: siehe [Das Spiegel-Postfach](#das-spiegel-postfach))
 * ein Zugang zu einem Sprachmodell: Anthropic-API oder ein OpenAI-kompatibler Endpunkt
   (damit auch lokale Modelle über Ollama, vLLM oder LM Studio)
 * ein Telegram-Bot, ein Discord-Webhook oder ein laufendes `signal-cli`
 
+## Das Spiegel-Postfach
+
+MailDigest liest **nie** dein echtes Postfach. Es liest ein zweites, leeres Postfach, in
+das du deine Mails weiterleitest. Dieses Postfach ist ein reines Ablagefach: Du liest es
+nie selbst, es braucht keinen schönen Namen, und ein frisch angelegtes Konto ist besser
+als ein bestehendes.
+
+### Welcher Anbieter?
+
+Entscheidend ist, ob sich IMAP mit einem Passwort nutzen lässt. Die folgende Übersicht
+wurde am 2026-09-09 gegen die echten Server geprüft:
+
+| Anbieter | IMAP-Host | Aufwand |
+|---|---|---|
+| **Posteo** | `posteo.de` | ~1 €/Monat, **am einfachsten** — IMAP ab Werk offen, Kontopasswort genügt |
+| **mailbox.org** | `imap.mailbox.org` | ~1 €/Monat, ebenso unkompliziert |
+| GMX | `imap.gmx.net` | kostenlos, aber IMAP muss erst in den Einstellungen freigeschaltet werden |
+| WEB.DE | `imap.web.de` | wie GMX (gleicher Konzern) |
+| Gmail | `imap.gmail.com` | App-Passwort nötig, dafür zwingend Zwei-Faktor-Anmeldung |
+| iCloud | `imap.mail.me.com` | app-spezifisches Passwort, Zwei-Faktor-Anmeldung Pflicht |
+| Yahoo | `imap.mail.yahoo.com` | App-Passwort nötig |
+| Telekom/T-Online | `secureimap.t-online.de` | eigenes „Passwort für E-Mail-Programme" nötig |
+| IONOS/1&1 | `imap.ionos.de` | Postfachpasswort genügt |
+| **Outlook.com / Hotmail** | — | **funktioniert nicht.** Microsoft hat die Passwort-Anmeldung für IMAP abgeschaltet (der Server meldet `LOGINDISABLED`) und verlangt OAuth2, das MailDigest nicht kann |
+| **Proton Mail** | — | **funktioniert nicht.** Kein offenes IMAP; die Proton-Bridge spricht unverschlüsseltes STARTTLS auf einem lokalen Port, MailDigest verbindet nur per IMAPS |
+
+Ein Outlook- oder Proton-Konto ist trotzdem kein Ausschlusskriterium: Leg das
+Spiegel-Postfach bei einem der anderen Anbieter an und lass Outlook bzw. Proton **dorthin
+weiterleiten**. Dein Hauptkonto bleibt unangetastet.
+
+`maildigest connect-mail` kennt diese Tabelle. Trägst du einen Host ein, nennt es dir die
+passende Anleitung; trägst du einen Anbieter ein, der nicht funktionieren kann, sagt es das
+sofort, statt dich in Anmeldefehler laufen zu lassen. Du kannst dort auch einfach die
+Mailadresse eintippen — der Host wird daraus abgeleitet.
+
+### Warum das Kontopasswort meist nicht reicht
+
+Fast alle großen Anbieter lehnen das normale Kontopasswort für IMAP ab und verlangen ein
+eigens erzeugtes **App-Passwort** — eine lange Zeichenkette, die nur für dieses eine
+Programm gilt und sich einzeln widerrufen lässt. Das ist der mit Abstand häufigste Grund
+für „Anmeldung fehlgeschlagen", obwohl Host, Benutzername und Passwort scheinbar stimmen.
+Der Benutzername ist dabei fast immer die **vollständige Mailadresse**, nicht nur der Teil
+davor.
+
 ## Installation
+
+**Empfohlen — mit `pipx`.** So landet der Befehl `maildigest` im Suchpfad und ist aus
+jedem Verzeichnis heraus aufrufbar:
+
+```bash
+pipx install .
+```
+
+Fehlt `pipx`, installiert `sudo apt install pipx` es (Debian/Ubuntu/Kali); unter macOS
+`brew install pipx`. Danach einmalig `pipx ensurepath` und ein neues Terminal öffnen.
+
+**Alternative — im virtuellen Umfeld.** Praktisch zum Entwickeln, aber der Befehl liegt
+dann nur in `.venv/bin` und steht außerhalb nicht zur Verfügung:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install .
+pip install -e .
+```
+
+Ohne aktiviertes venv ist der Befehl dann `.venv/bin/maildigest`.
+
+**`maildigest: command not found`?** Dann wurde ins virtuelle Umfeld installiert, nicht in
+den Suchpfad. Entweder `pipx install .` nachholen oder — unabhängig von der Installations­art
+— das Paket direkt als Modul aufrufen, das funktioniert immer:
+
+```bash
+python3 -m maildigest --help
 ```
 
 ## Quickstart

@@ -48,6 +48,7 @@ import httpx
 from imap_tools import MailMessage
 from pydantic import BaseModel, SecretStr
 
+from maildigest import providers
 from maildigest.agents.critic import CriticAgent
 from maildigest.agents.summarizer import SummarizerAgent
 from maildigest.config import (
@@ -730,6 +731,53 @@ ergibt eine Schleife.
 """.strip()
 
 
+_HOST_EXPLANATION = """
+Der IMAP-Host ist die Serveradresse, unter der dein Anbieter die Mails zum Abruf
+bereitstellt — nicht deine Mailadresse. Bei den großen Anbietern lautet er:
+
+{examples}
+
+Du kannst auch einfach die Mailadresse des Spiegel-Postfachs eintippen; der passende
+Host wird dann daraus abgeleitet.
+""".strip()
+
+
+def _resolve_host(console: Console, entered: str) -> str:
+    """Macht aus einer Mailadresse oder blanken Domain den richtigen IMAP-Host.
+
+    Eine Mailadresse statt des Hosts ist an dieser Stelle die häufigste Fehleingabe. Ist
+    der Anbieter bekannt, wird sie in den Host übersetzt und die Übersetzung angezeigt;
+    sonst bleibt die Eingabe unverändert — geraten wird nicht.
+    """
+    provider = providers.find_by_host(entered)
+    if provider is None and "@" in entered:
+        provider = providers.find_by_address(entered)
+    if provider is None or not provider.supported:
+        return entered
+    host = provider.imap_host
+    if entered.strip().lower() != host.lower():
+        console.out(f"  → IMAP-Host für {provider.name}: {host}")
+    return host
+
+
+def _username_example(provider: providers.Provider | None) -> str:
+    """Beispiel-Benutzername — macht sichtbar, dass die volle Mailadresse gemeint ist."""
+    domain = provider.domains[0] if provider and provider.domains else "example.org"
+    return f"volle Mailadresse des Spiegel-Postfachs, z. B. spiegel@{domain}"
+
+
+def _reject_unsupported(provider: providers.Provider) -> None:
+    """Bricht ab, wenn der Anbieter Passwort-Anmeldung serverseitig verweigert.
+
+    Raises:
+        CliError: Immer — der Aufruf erfolgt nur für nicht unterstützte Anbieter.
+    """
+    text = f"{provider.name} kann MailDigest nicht lesen. {provider.unsupported_reason}"
+    if provider.note:
+        text = f"{text}\n\n{provider.note}"
+    raise CliError(text, EXIT_USAGE)
+
+
 def cmd_connect_mail(ctx: Context) -> int:
     """Fragt die IMAP-Zugangsdaten ab, testet sie und wählt den Ordner (F-ING-3)."""
     console, args = ctx.console, ctx.args
@@ -737,14 +785,33 @@ def cmd_connect_mail(ctx: Context) -> int:
     imap = config_file.section("imap")
 
     console.out("Mirror-Postfach verbinden (nur IMAPS, Zertifikatsprüfung immer aktiv)")
-    host = args.host or console.ask(
-        "IMAP-Host", default=str(imap.get("host", "")), flag="--host", required=True
+    configured_host = str(imap.get("host", ""))
+    if console.interactive and not configured_host and not args.host:
+        console.out("")
+        console.out(providers.MIRROR_RECOMMENDATION)
+    console.out("")
+    console.out(_HOST_EXPLANATION.format(examples=providers.host_examples()))
+    console.out("")
+    host = _resolve_host(
+        console,
+        args.host
+        or console.ask("IMAP-Host", default=configured_host, flag="--host", required=True),
     )
+    provider = providers.find_by_host(host)
+    if provider is not None and not provider.supported:
+        _reject_unsupported(provider)
+    if provider is not None:
+        console.out("")
+        console.out(providers.setup_guide(provider))
+        console.out("")
+
+    fallback_port = provider.imap_port if provider is not None else 993
     port = (
         args.port
         if args.port is not None
-        else console.ask_int("Port", default=int(imap.get("port", 993)))
+        else console.ask_int("Port", default=int(imap.get("port", fallback_port)))
     )
+    console.out(f"Benutzername = {_username_example(provider)}")
     username = args.username or console.ask(
         "Benutzername",
         default=str(imap.get("username", "")),
@@ -775,6 +842,8 @@ def cmd_connect_mail(ctx: Context) -> int:
         imap.pop("password", None)
         password = env_password
     else:
+        if provider is not None:
+            console.out(f"Passwort = {provider.password_kind}.")
         entered = console.ask_secret(
             f"Passwort (leer lassen, wenn {ENV_IMAP_PASSWORD} gesetzt werden soll)"
         )
@@ -820,9 +889,10 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
         client = ctx.hooks.imap_client(section)
         client.connect()
     except IngestError as exc:
+        hint = providers.auth_failure_hint(section.host)
         raise CliError(
-            f"{exc}\nZugangsdaten prüfen; mit --no-test lassen sich die Angaben auch "
-            "ungetestet speichern.",
+            f"{exc}\n\n{hint}\n\nMit --no-test lassen sich die Angaben auch ungetestet "
+            "speichern.",
             EXIT_ERROR,
         ) from exc
     try:
@@ -861,6 +931,12 @@ def cmd_connect_llm(ctx: Context) -> int:
         flag="--provider",
     )
     llm["provider"] = provider
+
+    console.out("")
+    console.out(
+        providers.LLM_ANTHROPIC_GUIDE if provider == "anthropic" else providers.LLM_LOCAL_GUIDE
+    )
+    console.out("")
 
     model = args.model or console.ask(
         "Modellname (exakte Modell-ID des Anbieters)",
@@ -1011,10 +1087,8 @@ def _setup_telegram(ctx: Context, config_file: ConfigFile) -> None:
         telegram.pop("token", None)
         token = env_token
     else:
-        console.out(
-            "Bot anlegen: In Telegram @BotFather anschreiben, /newbot senden, Namen "
-            "vergeben — BotFather antwortet mit dem Token."
-        )
+        console.out(providers.TELEGRAM_GUIDE)
+        console.out("")
         entered = console.ask_secret(
             f"Bot-Token (leer lassen, wenn {ENV_TELEGRAM_TOKEN} gesetzt werden soll)"
         )
@@ -1079,10 +1153,8 @@ def _setup_discord(ctx: Context, config_file: ConfigFile) -> None:
     """Webhook-URL abfragen (sie ist selbst das Secret)."""
     console, args = ctx.console, ctx.args
     discord = config_file.section("messenger.discord")
-    console.out(
-        "Webhook anlegen: Discord > Kanal > Bearbeiten > Integrationen > Webhooks > "
-        "Neuer Webhook > Webhook-URL kopieren."
-    )
+    console.out(providers.DISCORD_GUIDE)
+    console.out("")
     url = args.webhook_url or console.ask_secret("Webhook-URL")
     if url:
         discord["webhook_url"] = url
@@ -1098,10 +1170,9 @@ def _setup_signal(ctx: Context, config_file: ConfigFile) -> None:
     """signal-cli-Socket abfragen und den Adapter freischalten."""
     console, args = ctx.console, ctx.args
     signal_section = config_file.section("messenger.signal")
-    console.out(
-        "Voraussetzung: `signal-cli --daemon --socket <pfad>` läuft bereits und die "
-        "Nummer ist dort registriert. Zugestellt wird an „Notiz an mich“."
-    )
+    console.out(providers.SIGNAL_GUIDE)
+    console.out("")
+    console.out("Voraussetzung: `signal-cli --daemon --socket <pfad>` läuft bereits.")
     socket_path = args.signal_socket or console.ask(
         "Pfad des signal-cli-Sockets",
         default=str(signal_section.get("signal_cli_socket", "")),

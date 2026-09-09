@@ -1796,3 +1796,36 @@
 - Konsequenzen: Ein zusätzlicher, indizierter SELECT je Mail. Das Log ist dafür an dieser
   Stelle beobachtbar wahr statt strukturell wahr — dieselbe Korrektur wie in ADR-071 für die
   Zustell-Aussage von `maildigest test`.
+
+## ADR-075: Anbieter-Wissensbasis statt allgemeiner Fehlermeldungen
+- Status: accepted
+- WP / Datum: Nachlauf zum Feldtest, 2026-09-09
+- Kontext: Beim ersten echten Einrichtungsversuch scheiterte die Anmeldung an Gmail — mit
+  korrektem Host, korrektem Benutzernamen und dem Google-Kontopasswort, das Gmail für IMAP
+  seit Abschaltung der „weniger sicheren Apps" grundsätzlich ablehnt. Das Werkzeug reichte
+  die Serverantwort durch und ließ den Nutzer im Dunkeln. Die Fehlersuche kostete eine
+  Sitzung; die eigentliche Ursache ist bei fast allen großen Anbietern dieselbe und
+  vorhersagbar.
+- Entscheidung: `src/maildigest/providers.py` führt eine Wissensbasis der großen Anbieter
+  (Host, Port, Art des Passworts, Schritt-für-Schritt-Anleitung, typische Stolperfalle).
+  `connect-mail` erklärt vor der ersten Frage, was ein IMAP-Host ist, übersetzt eine
+  eingetippte Mailadresse in den Host, druckt die Anleitung des erkannten Anbieters und
+  hängt bei fehlgeschlagener Anmeldung den passenden Hinweis an. Anbieter, bei denen
+  Passwort-Anmeldung serverseitig abgeschaltet ist, brechen die Einrichtung **vor** der
+  Passwortfrage mit Exit-Code 2 ab. Dieselbe Wissensbasis trägt die Anleitungen für
+  `connect-llm` (Key-Beschaffung, Modell-IDs mit Preisen) und `connect-messenger`
+  (BotFather-Ablauf einschließlich des Schrittes, dem Bot zuerst selbst zu schreiben).
+- Datengrundlage: Die Angaben wurden am 2026-09-09 nicht aus Dokumentation übernommen,
+  sondern gegen die echten Server geprüft (TLS auf Port 993, `CAPABILITY`-Abfrage). Dabei
+  zeigte sich, dass Outlook.com ausdrücklich `LOGINDISABLED` meldet — mit MailDigest also
+  grundsätzlich unerreichbar ist, was vorher niemand wusste und was jetzt sofort gesagt wird.
+- Alternativen: (a) Nur die Fehlermeldung des Servers durchreichen — der bisherige Zustand,
+  der den Nutzer die Ursache raten lässt. (b) OAuth2 nachrüsten, um Outlook.com zu
+  unterstützen — verworfen: ein Browser-Flow gehört nicht in ein Werkzeug, das
+  unbeaufsichtigt auf einem Server läuft, und würde die Angriffsfläche erheblich vergrößern.
+  (c) Die Anbieterdaten zur Laufzeit aus dem Netz holen — verworfen, das wäre eine
+  Netzabhängigkeit für eine Handvoll selten wechselnder Zeilen.
+- Konsequenzen: Die Tabelle veraltet und muss gepflegt werden; sie trägt ihren Prüfstand als
+  Datum. Ein unbekannter Anbieter verhält sich wie bisher — es wird nichts geraten. Der
+  Anbieter wird ausschließlich für Text und Vorbelegungen benutzt: Kein Sicherheitsverhalten
+  hängt daran (IMAPS bleibt Pflicht, die Zertifikatsprüfung bleibt aktiv, I5 unberührt).

@@ -6,8 +6,13 @@
 
 ## 1. Installation und Aufruf
 
-MailDigest braucht Python ≥ 3.11. Nach der Installation des Pakets gibt es zwei
-gleichwertige Aufrufformen:
+MailDigest braucht Python ≥ 3.11. Empfohlen ist die Installation mit `pipx install .` —
+nur so liegt der Befehl `maildigest` im Suchpfad. Eine Installation in ein virtuelles Umfeld
+(`pip install -e .`) legt ihn dagegen nur unter `.venv/bin/maildigest` ab; ohne aktiviertes
+venv meldet die Shell dann `command not found`. Der Modulaufruf funktioniert in beiden
+Fällen.
+
+Nach der Installation des Pakets gibt es zwei gleichwertige Aufrufformen:
 
 ```
 maildigest <KOMMANDO> [OPTIONEN]
@@ -102,6 +107,31 @@ Trägt die Zugangsdaten des Mirror-Postfachs ein, testet die Verbindung, lässt 
 wählen und druckt am Ende die Anleitung zur Weiterleitung im echten Postfach. Setzt eine
 vorhandene Konfigurationsdatei voraus (sonst Exit-Code 1 mit Hinweis auf `maildigest init`).
 
+Vor der ersten Frage druckt das Kommando eine Erklärung, was ein IMAP-Host ist, samt
+Beispielliste der großen Anbieter. Ist in der Konfiguration noch kein Host hinterlegt und
+läuft das Kommando interaktiv, geht dem eine Empfehlung voraus, bei welchem Anbieter sich
+ein Spiegel-Postfach mit dem geringsten Aufwand anlegen lässt.
+
+**Anbietererkennung.** Nach Frage 1 wird der eingetragene Wert gegen eine eingebaute
+Anbieterliste geprüft (Datenstand 2026-09-09):
+
+* Eine **Mailadresse oder blanke Domain** eines bekannten Anbieters wird in dessen
+  IMAP-Host übersetzt; die Übersetzung wird als Zeile `  → IMAP-Host für <Anbieter>: <Host>`
+  angezeigt. Ein unbekannter Wert bleibt unverändert — geraten wird nicht.
+* Für einen **erkannten Anbieter** folgt eine Anleitung: welche Art Passwort der Server
+  verlangt (Konto- oder App-Passwort), die nötigen Schritte, gegebenenfalls ein Direktlink
+  und ein Hinweis auf die häufigste Stolperfalle.
+* Für einen Anbieter, bei dem Passwort-Anmeldung serverseitig **abgeschaltet** ist —
+  derzeit Outlook.com/Hotmail/Live (OAuth2-Pflicht, `LOGINDISABLED`) und Proton Mail
+  (kein offenes IMAP) —, endet das Kommando **vor** der Passwortfrage mit Exit-Code 2,
+  nennt den Grund und den Ausweg (Spiegel-Postfach woanders anlegen und dorthin
+  weiterleiten). Es wird nichts gespeichert.
+
+Der Vorgabewert für Frage 2 ist der Port des erkannten Anbieters (bei allen bekannten
+Anbietern 993), sofern die Konfiguration noch keinen Port enthält. Vor Frage 3 wird ein
+Beispiel gedruckt, das die vollständige Mailadresse als Benutzernamen zeigt; vor Frage 4
+steht bei erkanntem Anbieter, welche Art Passwort erwartet wird.
+
 Abfragen in dieser Reihenfolge:
 
 1. `IMAP-Host [<bisheriger Wert>]: ` — Pflichtangabe
@@ -117,7 +147,9 @@ Abfragen in dieser Reihenfolge:
 
 Port 143 (Klartext-IMAP) wird immer abgelehnt (Exit-Code 1). Verbindet sich MailDigest
 nicht, endet das Kommando mit Exit-Code 1 und schreibt **nichts** in die Datei; die Meldung
-verweist auf `--no-test`. Lässt sich die Ordnerliste nicht abrufen, bleibt es bei einer
+enthält die Serverantwort, danach einen anbieterspezifischen Hinweis, woran die Anmeldung
+typischerweise scheitert (bei unbekanntem Anbieter einen allgemeinen), und den Verweis auf
+`--no-test`. Lässt sich die Ordnerliste nicht abrufen, bleibt es bei einer
 Warnung auf stderr und beim bisherigen Ordner.
 
 Gespeichert wird erst nach dem Test. Die Datei behält die Rechte 0600.
@@ -145,6 +177,13 @@ vorhandene Konfigurationsdatei voraus.
 Abfragen in dieser Reihenfolge:
 
 1. `Provider (anthropic/openai_compatible) [anthropic]: `
+
+Danach folgt eine Anleitung passend zum gewählten Provider: für `anthropic`, wo der
+API-Key herkommt (samt des häufigen Fehlers, dass ein gültiger Schlüssel ohne Guthaben
+abgewiesen wird) und welche Modell-IDs mit welchen Preisen zur Wahl stehen; für
+`openai_compatible` die üblichen Basis-URLs lokaler Server und der Hinweis, dass dort meist
+gar kein Schlüssel nötig ist.
+
 2. `Modellname (exakte Modell-ID des Anbieters) [<bisheriger Wert>]: ` — Pflichtangabe, es
    gibt bewusst keinen Default
 3. nur bei `openai_compatible`:
@@ -182,7 +221,9 @@ Konfigurationsdatei voraus.
 Erste Abfrage immer:
 `Messenger (telegram/discord/signal) [telegram]: `
 
-**Telegram.** Hinweis zum Anlegen des Bots über @BotFather, dann
+**Telegram.** Anleitung zum Anlegen des Bots über @BotFather — einschließlich des
+Schrittes, dem eigenen Bot zuerst selbst eine Nachricht zu schreiben, ohne den die
+Chat-Ermittlung im nächsten Schritt nichts finden kann. Dann
 `Bot-Token (leer lassen, wenn MAILDIGEST_TELEGRAM_TOKEN gesetzt werden soll): ` (ohne Echo;
 entfällt, wenn die Umgebungsvariable gesetzt ist — dann steht kein Token in der Datei).
 Ohne `--chat-id` folgt der getUpdates-Flow: Die Ausgabe fordert auf, dem Bot jetzt eine
