@@ -228,7 +228,7 @@ def test_summarizer_failure_is_fail_closed(failure: BaseException) -> None:
     assert result.notice_delivered is True
     assert len(messenger.sent) == 1
     text = "\n".join(messenger.sent[0].parts)
-    assert "nicht sicher verarbeitet" in text
+    assert "could not be processed safely" in text
     assert "Inhalt der Mail" not in text
 
 
@@ -374,7 +374,7 @@ def test_evil_summary_never_reaches_the_messenger_intact() -> None:
     assert "evil.example" not in text  # nur defangt als evil[.]example
     assert "<" not in text and ">" not in text
     assert "](" not in text
-    assert "Mail enthielt Anweisungen an die KI" in text, "Fund wird dem Nutzer gemeldet"
+    assert "instructions aimed at the AI" in text, "Fund wird dem Nutzer gemeldet"
 
 
 def test_gigantic_but_valid_fields_are_capped() -> None:
@@ -545,7 +545,7 @@ def test_readonly_database_raises_the_documented_error(tmp_path: Path) -> None:
     path.chmod(0o400)
     try:
         readonly = StateDB(path)
-        with pytest.raises(StateError, match="nicht benutzbar"):
+        with pytest.raises(StateError, match="unusable"):
             readonly.claim("<neu@example>")
         with pytest.raises(StateError):
             readonly.mark_status("<neu@example>", MailState.DELIVERED)

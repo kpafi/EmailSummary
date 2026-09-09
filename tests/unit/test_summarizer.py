@@ -5,7 +5,7 @@ Schwerpunkte:
 * die deterministische Nachkontrolle (I4, SECURITY §5 Punkt 4): URLs, Markdown-Links,
   HTML und Steuerzeichen werden entfernt **und** flaggen `injection_suspected`,
 * fail-closed: Schema-Bruch propagiert als `LLMInvalidResponse` (I6),
-* Mail ohne darstellbaren Inhalt (nur geblockte Anhänge).
+* Mail without displayable content (nur blocked attachments).
 
 Der Provider wird als Attrappe gegen das `LLMProvider`-Protokoll aus `llm/base.py`
 implementiert — kein HTTP, kein Netz.
@@ -243,7 +243,7 @@ def test_empty_fields_are_normalized_from_sanitizer_data() -> None:
     summary = make_agent(provider).summarize(make_mail())
 
     assert summary.headline == "Rechnung Maerz"
-    assert summary.category == "sonstiges"
+    assert summary.category == "other"
 
 
 def test_invented_attachment_keys_are_dropped() -> None:
@@ -341,7 +341,7 @@ def test_extra_fields_are_rejected_by_the_schema() -> None:
 
 
 def test_no_text_at_all_yields_a_metadata_summary() -> None:
-    """WP3-Bericht (g)5: Mail ohne darstellbaren Inhalt wird über ihre Metadaten beschrieben."""
+    """WP3-Bericht (g)5: Mail without displayable content wird über ihre Metadaten beschrieben."""
     mail = make_mail(
         body_text="",
         attachments=[
@@ -364,7 +364,7 @@ def test_no_text_at_all_yields_a_metadata_summary() -> None:
     summary = make_agent(provider).summarize(mail)
 
     assert summary.summary_text == (
-        "Mail ohne darstellbaren Inhalt, 2 geblockte Anhänge: "
+        "Mail without displayable content, 2 blocked attachments: "
         "rechnung.docx (34 KB), setup.exe (1,2 MB)."
     )
     assert "(kein darstellbarer Text vorhanden)" in provider.users[0]

@@ -506,6 +506,6 @@ def test_composed_message_keeps_exactly_the_composer_structure(
     text = "\n".join(DigestComposer().compose(mail, summary, verdict).parts)
     lines = text.split("\n")
     assert sum(1 for line in lines if line.startswith("📧 ")) == 1
-    assert sum(1 for line in lines if line.startswith("Von: ")) == 1
-    assert sum(1 for line in lines if line.startswith("🔍 Hinweise: ")) <= 1
+    assert sum(1 for line in lines if line.startswith("From: ")) == 1
+    assert sum(1 for line in lines if line.startswith("🔍 Notes: ")) <= 1
     assert not any(line.startswith("⚠️") for line in lines)

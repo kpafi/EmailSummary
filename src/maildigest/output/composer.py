@@ -189,7 +189,7 @@ class DigestComposer:
         headline = scrub_field(
             summary.headline, collector=collector, max_chars=_MAX_HEADLINE_CHARS
         ) or "(keine Zusammenfassung)"
-        tag = " [wichtig]" if summary.importance == "high" else ""
+        tag = " [important]" if summary.importance == "high" else ""
         lines.append(f"📧 {_one_line(headline)}{tag}")
         lines.append(self._sender_line(mail))
 
@@ -237,11 +237,11 @@ class DigestComposer:
             )
         )
         lines = [
-            "⚠️ Mail konnte nicht sicher verarbeitet werden — kein Inhalt zugestellt.",
-            f"Von: {domain or 'unbekannt'}",
-            f"Betreff: {subject or '(kein Betreff)'}",
-            f"Stufe: {_label(notice.stage)} · Grund: {_label(notice.reason_class)}",
-            "Zum Lesen ins echte Postfach schauen.",
+            "⚠️ This mail could not be processed safely — no content delivered.",
+            f"From: {domain or 'unknown'}",
+            f"Subject: {subject or '(no subject)'}",
+            f"Stage: {_label(notice.stage)} · Reason: {_label(notice.reason_class)}",
+            "Open your real mailbox to read it.",
         ]
         return DigestMessage(
             parts=self._finalize("\n".join(lines)),
@@ -262,13 +262,13 @@ class DigestComposer:
             ValueError: Aufruf ohne Einträge — ein leerer Digest wird nie zugestellt.
         """
         if not items:
-            raise ValueError("Sammel-Digest ohne Einträge wird nicht erzeugt.")
+            raise ValueError("A digest without entries is not created.")
         collector = LinkCollector()
         grouped: dict[str, list[LowDigestItem]] = {}
         for item in items[:_MAX_LOW_DIGEST_ITEMS]:
             category = (
                 _one_line(scrub_plain(item.category, max_chars=_MAX_CATEGORY_CHARS))
-                or "sonstiges"
+                or "other"
             )
             grouped.setdefault(category, []).append(item)
 
@@ -279,7 +279,7 @@ class DigestComposer:
                 grouped.items(), key=lambda pair: (-len(pair[1]), pair[0])
             )
         )
-        lines = [f"🗂 {total} unwichtige Mails: {overview}"]
+        lines = [f"🗂 {total} low-priority mails: {overview}"]
         for category, entries in sorted(
             grouped.items(), key=lambda pair: (-len(pair[1]), pair[0])
         ):
@@ -291,10 +291,10 @@ class DigestComposer:
                     )
                 )
                 domain = _one_line(scrub_plain(item.from_domain, max_chars=_MAX_DOMAIN_CHARS))
-                lines.append(f"• {headline or '(ohne Betreff)'} ({domain or 'unbekannt'})")
+                lines.append(f"• {headline or '(no subject)'} ({domain or 'unknown'})")
         rest = total - min(total, _MAX_LOW_DIGEST_ITEMS)
         if rest > 0:
-            lines.append(f"… und {rest} weitere")
+            lines.append(f"... and {rest} more")
 
         return DigestMessage(
             parts=self._finalize("\n".join(lines)),
@@ -356,7 +356,7 @@ class DigestComposer:
             for reason in verdict.risk_reasons[:_MAX_RISK_REASONS]
         ]
         joined = ", ".join(reason for reason in reasons if reason)
-        return f"⚠️ PHISHING-VERDACHT: {joined}" if joined else "⚠️ PHISHING-VERDACHT"
+        return f"⚠️ SUSPECTED PHISHING: {joined}" if joined else "⚠️ SUSPECTED PHISHING"
 
     def _sender_line(self, mail: SanitizedMail) -> str:
         """`Von: <Anzeigename> (<domain>) · <TT.MM. HH:MM>`."""
@@ -366,7 +366,7 @@ class DigestComposer:
             sender = f"{display} ({domain})"
         else:
             sender = display or domain or "unbekannt"
-        return f"Von: {sender} · {_format_date(mail.date)}"
+        return f"From: {sender} · {_format_date(mail.date)}"
 
     def _attachment_summary_lines(
         self, summary: Summary, collector: LinkCollector
@@ -395,10 +395,10 @@ class DigestComposer:
             name = _one_line(
                 scrub_plain(item.filename_sanitized, max_chars=_MAX_FILENAME_CHARS)
             )
-            shown.append(f"{name or '(ohne Namen)'} ({_format_size(item.size_bytes)})")
+            shown.append(f"{name or '(unnamed)'} ({_format_size(item.size_bytes)})")
         rest = len(blocked) - len(shown)
-        suffix = f" und {rest} weitere" if rest > 0 else ""
-        return f"📎 Nicht verarbeitet: {', '.join(shown)}{suffix}"
+        suffix = f" and {rest} more" if rest > 0 else ""
+        return f"📎 Not processed: {', '.join(shown)}{suffix}"
 
     def _hints_line(
         self,
@@ -410,37 +410,37 @@ class DigestComposer:
         """`🔍 Hinweise: …` aus deterministischen Signalen + Injection-Flag (T1/T12)."""
         hints: list[str] = []
         if summary.injection_suspected:
-            hints.append("Mail enthielt Anweisungen an die KI (ignoriert)")
+            hints.append("the mail contained instructions aimed at the AI (ignored)")
         failed_auth = [
             f"{key.upper()}={value}"
             for key, value in sorted(report.auth_results.items())
             if value.lower() not in _AUTH_OK
         ]
         if failed_auth:
-            hints.append("Absender-Prüfung: " + ", ".join(failed_auth))
+            hints.append("sender checks failed: " + ", ".join(failed_auth))
         if report.punycode_domains:
-            hints.append("Punycode-Domain(s): " + ", ".join(report.punycode_domains[:3]))
+            hints.append("punycode domain(s): " + ", ".join(report.punycode_domains[:3]))
         if report.mixed_script_domains:
             hints.append(
-                "gemischte Schriftsysteme: " + ", ".join(report.mixed_script_domains[:3])
+                "mixed writing systems: " + ", ".join(report.mixed_script_domains[:3])
             )
         if report.html_divergent:
             # CT-15: Das Mailprogramm des Nutzers zeigt den HTML-Teil, zusammengefasst wurde
             # der Klartext-Teil. Ohne diesen Hinweis wäre eine „harmlos"-Meldung zu einem
             # Text möglich, den der Nutzer nie zu Gesicht bekommt (ADR-067).
-            hints.append("HTML-Teil weicht vom Textteil ab")
+            hints.append("HTML part differs from the text part")
         if report.hidden_text_removed:
             # Deterministisch, ohne jedes Modell (CT-6): Der Sanitizer *weiß*, dass im HTML
             # unsichtbarer Text stand. Bewusst als eigener Hinweis und nicht über
             # `injection_suspected`: Unsichtbarer Text ist auch der legitime
             # Newsletter-Preheader, „Anweisungen an die KI" wäre dann schlicht falsch.
-            hints.append("versteckter Text im HTML entfernt")
+            hints.append("hidden text removed from the HTML")
         if report.reply_to_mismatch:
-            hints.append("Antwortadresse weicht vom Absender ab")
+            hints.append("reply address differs from the sender")
         if report.return_path_mismatch:
-            hints.append("Return-Path-Domain weicht ab")
+            hints.append("return-path domain differs")
         if report.truncated:
-            hints.append("Text gekürzt")
+            hints.append("text truncated")
         if verdict.phishing_risk == "low" and verdict.risk_reasons:
             reasons = [
                 _one_line(
@@ -450,10 +450,10 @@ class DigestComposer:
             ]
             joined = ", ".join(reason for reason in reasons if reason)
             if joined:
-                hints.append(f"Kritiker: {joined}")
+                hints.append(f"critic: {joined}")
         if not hints:
             return ""
-        return "🔍 Hinweise: " + "; ".join(
+        return "🔍 Notes: " + "; ".join(
             _one_line(scrub_field(hint, collector=collector)) for hint in hints
         )
 

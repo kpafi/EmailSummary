@@ -285,7 +285,7 @@ def test_hartes_signal_wirkt_auch_wenn_das_modell_uebernommen_wurde() -> None:
     agent, _ = build_agent(verdict_json(phishing_risk="none"))
     result = agent.review(mail, make_summary())
     assert result.phishing_risk == "low"
-    assert any("Schriftsystem" in reason for reason in result.risk_reasons)
+    assert any("writing systems" in reason for reason in result.risk_reasons)
 
 
 def test_verdict_felder_ueberstehen_die_nachkontrolle_ohne_url() -> None:
@@ -428,4 +428,4 @@ def test_geblockter_anhang_erscheint_als_faktum_im_prompt() -> None:
     )
     agent, provider = build_agent(verdict_json())
     agent.review(mail, make_summary())
-    assert "Nicht verarbeitete Anhänge: 1" in provider.users[0]
+    assert "unprocessed attachments: 1" in provider.users[0]

@@ -247,7 +247,7 @@ def _notice_subject(subject_raw: str) -> str:
     kept = [char if 0x20 <= ord(char) <= 0x7E else " " for char in subject_raw]
     collapsed = " ".join("".join(kept).split())
     if not collapsed:
-        return "(kein Betreff)"
+        return "(no subject)"
     if len(collapsed) > _NOTICE_SUBJECT_MAX_CHARS:
         return collapsed[: _NOTICE_SUBJECT_MAX_CHARS - 1] + "…"
     return collapsed

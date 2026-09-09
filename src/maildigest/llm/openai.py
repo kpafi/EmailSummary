@@ -65,7 +65,7 @@ class OpenAICompatibleProvider:
             sleep: Wartefunktion für das Backoff.
         """
         if not model:
-            raise ValueError("Modellname darf nicht leer sein.")
+            raise ValueError("The model name must not be empty.")
         self._model = model
         self._api_key = api_key
         self._base_url = (base_url or OPENAI_DEFAULT_BASE_URL).rstrip("/")
@@ -140,7 +140,7 @@ def _extract_text(data: dict[str, Any]) -> str:
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise LLMInvalidResponse(
-            "openai_compatible: Antwort enthält keine `choices`."
+            "openai_compatible: the response has no `choices`."
         )
     first = choices[0]
     message = first.get("message") if isinstance(first, dict) else None
@@ -148,7 +148,7 @@ def _extract_text(data: dict[str, Any]) -> str:
     if not isinstance(content, str):
         finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
         raise LLMInvalidResponse(
-            "openai_compatible: Antwort enthält keinen Textinhalt "
+            "openai_compatible: the response has no text content "
             f"(finish_reason={finish_reason!r})."
         )
     return content

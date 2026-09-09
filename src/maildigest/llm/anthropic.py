@@ -69,7 +69,7 @@ class AnthropicProvider:
             sleep: Wartefunktion für das Backoff (Tests injizieren eine Attrappe).
         """
         if not model:
-            raise ValueError("Modellname darf nicht leer sein.")
+            raise ValueError("The model name must not be empty.")
         self._model = model
         self._api_key = api_key
         self._base_url = (base_url or ANTHROPIC_DEFAULT_BASE_URL).rstrip("/")
@@ -151,7 +151,7 @@ def _extract_text(data: dict[str, Any]) -> str:
     blocks = data.get("content")
     if not isinstance(blocks, list):
         raise LLMInvalidResponse(
-            "anthropic: Antwort enthält kein `content`-Feld mit Blockliste."
+            "anthropic: the response has no `content` field with a block list."
         )
     parts = [
         block["text"]
@@ -162,7 +162,7 @@ def _extract_text(data: dict[str, Any]) -> str:
     ]
     if not parts:
         raise LLMInvalidResponse(
-            f"anthropic: Antwort enthält keinen Textblock ({len(blocks)} Blöcke, "
+            f"anthropic: the response has no text block ({len(blocks)} blocks, "
             f"stop_reason={data.get('stop_reason')!r})."
         )
     return "".join(parts)

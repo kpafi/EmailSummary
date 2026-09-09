@@ -226,7 +226,7 @@ def test_selbsttest_mit_phishing_mail_zeigt_banner(tmp_path: Path) -> None:
     )
     assert code == EXIT_OK
     assert "phishing risk=high" in out
-    assert "PHISHING-VERDACHT" in "\n".join(messenger.sent[0].parts)
+    assert "SUSPECTED PHISHING" in "\n".join(messenger.sent[0].parts)
 
 
 def test_selbsttest_meldet_fail_closed_mit_exit_1(tmp_path: Path) -> None:
@@ -241,7 +241,7 @@ def test_selbsttest_meldet_fail_closed_mit_exit_1(tmp_path: Path) -> None:
     assert "failed" in err
     # F-OPS-3: Die Metadaten-Notiz geht trotzdem raus.
     assert len(messenger.sent) == 1
-    assert "nicht sicher verarbeitet" in messenger.sent[0].parts[0]
+    assert "could not be processed safely" in messenger.sent[0].parts[0]
 
 
 def test_selbsttest_meldet_gescheiterte_zustellung(tmp_path: Path) -> None:
@@ -481,8 +481,8 @@ def test_ct4_trockenlauf_meldet_keine_zustellung_und_zeigt_die_notiz(tmp_path: P
     assert messenger.sent == []
     assert "Fail-closed" in out
     # Die Notiz steht auf stdout — genau dafür ist --dry-run da.
-    assert "nicht sicher verarbeitet" in out
-    assert "Betreff:" in out
+    assert "could not be processed safely" in out
+    assert "Subject:" in out
     # Und die Bilanz behauptet keine Zustellung mehr.
     assert "delivered: yes" not in err
     assert "delivered: no" in err

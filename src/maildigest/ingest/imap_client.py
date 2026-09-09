@@ -381,13 +381,13 @@ class ImapClient:
         """
         if cfg.port == _PLAINTEXT_IMAP_PORT:
             raise IngestError(
-                "[imap] port = 143 ist Klartext-IMAP und wird nicht unterstützt. "
-                "MailDigest verbindet ausschließlich per IMAPS (üblich: Port 993)."
+                "[imap] port = 143 is plaintext IMAP and is not supported. "
+                "MailDigest connects over IMAPS only (usually port 993)."
             )
         if cfg.password is None:
             raise IngestError(
-                "Kein IMAP-Passwort gesetzt: [imap] password in der Config oder die "
-                "Umgebungsvariable MAILDIGEST_IMAP_PASSWORD verwenden."
+                "No IMAP password set: use [imap] password in the configuration or the "
+                "environment variable MAILDIGEST_IMAP_PASSWORD."
             )
         self.cfg = cfg
         self._password = cfg.password.get_secret_value()
@@ -404,7 +404,7 @@ class ImapClient:
             ImapConnectionError: Es besteht keine Verbindung (`connect()` fehlt/abgerissen).
         """
         if self._mailbox is None:
-            raise ImapConnectionError("Keine offene IMAP-Verbindung.")
+            raise ImapConnectionError("No open IMAP connection.")
         return self._mailbox
 
     def connect(self) -> None:
@@ -420,8 +420,8 @@ class ImapClient:
             mailbox.login(self.cfg.username, password, initial_folder=self.cfg.folder)
         except (ImapToolsError, ssl.SSLError, OSError) as exc:
             raise ImapConnectionError(
-                f"IMAP-Verbindung zu {self.cfg.host}:{self.cfg.port} "
-                f"(Ordner {self.cfg.folder}) fehlgeschlagen: {type(exc).__name__}"
+                f"IMAP connection to {self.cfg.host}:{self.cfg.port} "
+                f"(folder {self.cfg.folder}) failed: {type(exc).__name__}"
             ) from exc
         self._mailbox = mailbox
         logger.info(
@@ -467,7 +467,7 @@ class ImapClient:
             yield from self.mailbox.fetch(AND(seen=False), mark_seen=False, bulk=False)
         except (ImapToolsError, OSError) as exc:
             raise ImapConnectionError(
-                f"Abruf ungesehener Mails fehlgeschlagen: {type(exc).__name__}"
+                f"Fetching unseen mail failed: {type(exc).__name__}"
             ) from exc
 
     def list_folders(self) -> list[str]:
@@ -484,7 +484,7 @@ class ImapClient:
             return [folder.name for folder in self.mailbox.folder.list() if folder.name]
         except (ImapToolsError, OSError, UnicodeError) as exc:
             raise ImapConnectionError(
-                f"Ordnerliste konnte nicht abgerufen werden: {type(exc).__name__}"
+                f"The folder list could not be retrieved: {type(exc).__name__}"
             ) from exc
 
     # --- Rohe UID-Kommandos (nie über MailBox.flag/move/delete — die expungen, ADR-064) ---
@@ -500,7 +500,7 @@ class ImapClient:
             status, data = self.mailbox.client.uid(command, uid, *args)  # type: ignore[arg-type]
         except (ImapToolsError, OSError) as exc:
             raise ImapConnectionError(
-                f"IMAP-Kommando {command} fehlgeschlagen: {type(exc).__name__}"
+                f"IMAP command {command} failed: {type(exc).__name__}"
             ) from exc
         except Exception as exc:  # imaplib wirft bei Protokollfehlern eigene Typen
             raise ImapConnectionError(
@@ -543,7 +543,7 @@ class ImapClient:
             self._uid_command("STORE", uid, "+FLAGS", r"(\Seen)")
         except MailboxPostProcessError as exc:
             raise MailboxPostProcessError(
-                f"Die Mail konnte nicht als gelesen markiert werden. {exc}"
+                f"The mail could not be marked as read. {exc}"
             ) from exc
 
         folder = self.cfg.move_processed_to
@@ -551,17 +551,17 @@ class ImapClient:
             return
         if not self._server_supports_move():
             raise MailboxPostProcessError(
-                f"Der Server kann kein server-seitiges MOVE; die Mail bleibt in "
-                f"„{self.cfg.folder}“ liegen (sie ist als gelesen markiert). MailDigest "
-                f"weicht bewusst nicht auf Kopieren+Löschen aus — [imap] "
-                f"move_processed_to leer lassen oder einen Server mit MOVE verwenden."
+                f"The server does not support server-side MOVE; the mail stays in "
+                f'"{self.cfg.folder}" (it is marked as read). MailDigest deliberately '
+                f"does not fall back to copy+delete — leave [imap] move_processed_to "
+                f"empty or use a server that supports MOVE."
             )
         try:
             self._uid_command("MOVE", uid, encode_folder(folder))
         except MailboxPostProcessError as exc:
             raise MailboxPostProcessError(
-                f"Verschieben nach „{folder}“ fehlgeschlagen. {exc} Existiert der Ordner "
-                f"auf dem Server? [imap] move_processed_to prüfen."
+                f'Moving to "{folder}" failed. {exc} Does the folder exist on the server? '
+                f"Check [imap] move_processed_to."
             ) from exc
 
 

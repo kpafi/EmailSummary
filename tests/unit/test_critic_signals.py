@@ -86,7 +86,7 @@ def test_auth_zeile_nennt_alle_werte_sortiert() -> None:
     )
     line = next(s.text for s in collect_signals(mail) if s.key == "auth_failed")
     assert "DKIM=pass, DMARC=fail, SPF=fail" in line
-    assert "nicht bestanden: DMARC, SPF" in line
+    assert "failed: DMARC, SPF" in line
 
 
 def test_spf_fail_ist_kein_hartes_signal() -> None:
@@ -216,7 +216,7 @@ def test_nachkontrolle_saeubert_und_hebt_das_risiko(payload: str) -> None:
     assert "://" not in joined and "www." not in joined and "<a" not in joined
     assert "​" not in joined
     assert result.phishing_risk == "low"
-    assert any("entfernt" in reason for reason in result.risk_reasons)
+    assert any("removed" in reason for reason in result.risk_reasons)
 
 
 def test_fullwidth_schema_wird_ebenfalls_erkannt() -> None:
@@ -246,7 +246,7 @@ def test_gruende_werden_gekappt_entdoppelt_und_einzeilig() -> None:
 
 def test_leere_gruende_fliegen_raus_und_risiko_bekommt_platzhalter() -> None:
     result = enforce_verdict_policy(verdict(phishing_risk="high", risk_reasons=["   ", ""]))
-    assert result.risk_reasons == ["Kritiker meldet ein Risiko ohne Begründung"]
+    assert result.risk_reasons == ["the critic reports a risk without giving a reason"]
 
 
 def test_hartes_signal_hebt_none_auf_low() -> None:
@@ -290,7 +290,7 @@ def test_code_gruende_verdraengen_modellgruende_statt_umgekehrt() -> None:
         signals,
     )
     assert len(result.risk_reasons) == MAX_REASONS
-    assert result.risk_reasons[0].startswith("Kritiker-Ausgabe enthielt")
+    assert result.risk_reasons[0].startswith("critic output contained")
     assert result.risk_reasons[1] == "Homoglyphen-Domain erkannt"
     assert "boese" not in " ".join(result.risk_reasons)
 
@@ -315,7 +315,7 @@ def test_ct11_sechs_zusammenpassende_signale_heben_auf_high() -> None:
     )
     result = enforce_verdict_policy(verdict(phishing_risk="none"), collect_signals(mail))
     assert result.phishing_risk == "high"
-    assert result.risk_reasons[0].startswith("Mehrere unabhängige Fälschungssignale")
+    assert result.risk_reasons[0].startswith("several independent spoofing signals")
 
 
 def test_ct11_weiterleitungsschaden_bleibt_ohne_risiko() -> None:
@@ -352,7 +352,7 @@ def test_ct11_punycode_allein_hebt_nur_auf_low() -> None:
     mail = make_mail(report=SanitizationReport(punycode_domains=["xn--test-3ya[.]example"]))
     result = enforce_verdict_policy(verdict(phishing_risk="none"), collect_signals(mail))
     assert result.phishing_risk == "low"
-    assert "Punycode-Domain" in result.risk_reasons
+    assert "punycode domain" in result.risk_reasons
 
 
 def test_ct11_kombinationsgrund_nennt_keine_domains() -> None:

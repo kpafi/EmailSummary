@@ -272,7 +272,7 @@ def describe_without_body(mail: SanitizedMail) -> str:
     rest = len(blocked) - len(blocked[:_MAX_LISTED_BLOCKED])
     suffix = f" und {rest} weitere" if rest > 0 else ""
     return (
-        f"Mail ohne darstellbaren Inhalt, {len(blocked)} geblockte Anhänge: "
+        f"Mail without displayable content, {len(blocked)} blocked attachments: "
         f"{listed}{suffix}."
     )
 
@@ -328,7 +328,7 @@ def enforce_output_policy(summary: Summary, mail: SanitizedMail) -> Summary:
     category, hit = scrub_text(summary.category)
     suspicious = suspicious or hit
     category = _one_line(category).lower()
-    summary.category = category if category else "sonstiges"
+    summary.category = category if category else "other"
 
     # Nur Anhänge, deren Text das Modell tatsächlich gesehen hat, dürfen einen Eintrag
     # haben. Erfundene oder geblockte Dateinamen fliegen raus (kein Halluzinationskanal

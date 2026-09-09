@@ -100,11 +100,11 @@ def request_json(
             )
         except httpx.TimeoutException as exc:
             raise MessengerError(
-                f"{adapter}: Zeitlimit von {timeout:.0f} s überschritten."
+                f"{adapter}: exceeded the time limit of {timeout:.0f} s."
             ) from exc
         except httpx.RequestError as exc:
             raise MessengerError(
-                f"{adapter}: Verbindung fehlgeschlagen ({type(exc).__name__})."
+                f"{adapter}: connection failed ({type(exc).__name__})."
             ) from exc
 
         status = response.status_code
@@ -124,4 +124,4 @@ def request_json(
         wait = _retry_after_seconds(response)
         sleep(_backoff_seconds(attempt) if wait is None else wait)
 
-    raise MessengerError(f"{adapter}: Zustellung fehlgeschlagen (HTTP {last_status}).")
+    raise MessengerError(f"{adapter}: delivery failed (HTTP {last_status}).")

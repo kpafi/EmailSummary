@@ -255,8 +255,8 @@ def test_13_punycode_und_mixed_script_gekennzeichnet() -> None:
     report = mail.sanitization_report
     assert report.punycode_domains == ["xn--pypal-4ve[.]com (Unicode: pаypal[.]com)"]
     assert report.mixed_script_domains == ["pаypal[.]com"]
-    assert "Punycode" in mail.body_text
-    assert "gemischte Schriftsysteme" in mail.body_text
+    assert "punycode" in mail.body_text
+    assert "mixed writing systems" in mail.body_text
 
 
 def test_14_versteckte_prompt_injection_wird_entfernt() -> None:

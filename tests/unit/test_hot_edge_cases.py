@@ -329,7 +329,7 @@ def test_attachment_metadata_list_is_capped_but_counter_is_not() -> None:
     assert mail.sanitization_report.blocked_attachments == 100
     # Der Composer nennt höchstens 10 namentlich und zählt den Rest.
     composed = DigestComposer().compose(mail, _summary(), _verdict())
-    assert "und 90 weitere" in "\n".join(composed.parts)
+    assert "and 90 more" in "\n".join(composed.parts)
 
 
 # --- Nachrichtenbau an den Rändern ------------------------------------------------------
@@ -341,7 +341,7 @@ def _summary(**overrides: Any) -> Summary:
         "summary_text": "Inhalt.",
         "importance": "normal",
         "importance_reason": "Grund",
-        "category": "sonstiges",
+        "category": "other",
     }
     data.update(overrides)
     return Summary(**data)
@@ -410,7 +410,7 @@ def test_compose_of_a_message_longer_than_one_part() -> None:
 
 def test_low_digest_without_entries_is_refused() -> None:
     """Ein leerer Sammel-Digest wird nie erzeugt (F-SUM-5)."""
-    with pytest.raises(ValueError, match="ohne Einträge"):
+    with pytest.raises(ValueError, match="without entries"):
         DigestComposer().compose_low_digest([])
 
 
@@ -421,8 +421,8 @@ def test_low_digest_caps_the_listed_items() -> None:
         for index in range(75)
     ]
     text = "\n".join(DigestComposer().compose_low_digest(items).parts)
-    assert "75 unwichtige Mails" in text
-    assert "und 15 weitere" in text
+    assert "75 low-priority mails" in text
+    assert "and 15 more" in text
 
 
 def test_attachment_summary_lines_are_capped() -> None:
@@ -576,4 +576,4 @@ def test_blocked_attachment_without_name_is_labelled() -> None:
         ]
     )
     text = "\n".join(DigestComposer().compose(mail, _summary(), _verdict()).parts)
-    assert "(ohne Namen) (0 B)" in text
+    assert "(unnamed) (0 B)" in text

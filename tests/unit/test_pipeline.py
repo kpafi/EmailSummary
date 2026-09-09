@@ -501,8 +501,8 @@ def test_failure_notice_contains_no_error_text_or_mail_content() -> None:
     ("subject_raw", "expected"),
     [
         ("Normaler Betreff", "Normaler Betreff"),
-        ("", "(kein Betreff)"),
-        ("   \t \n ", "(kein Betreff)"),
+        ("", "(no subject)"),
+        ("   \t \n ", "(no subject)"),
         ("Rechnung‮gnudlehcaN", "Rechnung gnudlehcaN"),
         ("Zero​Width", "Zero Width"),
         ("Mehrere    Leerzeichen\nund Zeilen", "Mehrere Leerzeichen und Zeilen"),

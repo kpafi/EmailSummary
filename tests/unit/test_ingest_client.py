@@ -394,7 +394,7 @@ def test_list_folders_uebersetzt_imap_fehler() -> None:
     box = FakeMailBox(folder_error=MailboxFetchError(("NO", [b"LIST failed"]), "OK"))
     client = make_client(box)
     client.connect()
-    with pytest.raises(ImapConnectionError, match="Ordnerliste"):
+    with pytest.raises(ImapConnectionError, match="folder list"):
         client.list_folders()
 
 

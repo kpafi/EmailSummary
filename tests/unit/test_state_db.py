@@ -231,7 +231,7 @@ def test_foreign_schema_version_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "state.db"
     with StateDB(path) as db:
         db.meta_set("schema_version", "99")
-    with pytest.raises(StateError, match="Schema-Version"):
+    with pytest.raises(StateError, match="schema version"):
         StateDB(path)
 
 

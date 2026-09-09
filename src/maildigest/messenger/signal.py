@@ -123,9 +123,9 @@ class SignalMessenger:
             connection = self._connect(self._socket_path, self._timeout)
         except OSError as exc:
             raise MessengerError(
-                "signal: signal-cli ist nicht erreichbar "
-                f"(Socket {self._socket_path!r}, {type(exc).__name__}). "
-                "Läuft `signal-cli --daemon --socket <pfad>`?"
+                "signal: signal-cli is unreachable "
+                f"(socket {self._socket_path!r}, {type(exc).__name__}). "
+                "Is `signal-cli --daemon --socket <path>` running?"
             ) from exc
 
         try:
@@ -133,7 +133,7 @@ class SignalMessenger:
             raw = self._read_line(connection)
         except OSError as exc:
             raise MessengerError(
-                f"signal: Kommunikation mit signal-cli fehlgeschlagen ({type(exc).__name__})."
+                f"signal: communication with signal-cli failed ({type(exc).__name__})."
             ) from exc
         finally:
             # Aufräumen darf den Fehlerpfad nicht überschreiben.
@@ -143,13 +143,15 @@ class SignalMessenger:
         try:
             payload = json.loads(raw)
         except ValueError as exc:
-            raise MessengerError("signal: Antwort von signal-cli ist kein gültiges JSON.") from exc
+            raise MessengerError("signal: the reply from signal-cli is not valid JSON.") from exc
         if not isinstance(payload, dict):
-            raise MessengerError("signal: Antwort von signal-cli ist kein JSON-Objekt.")
+            raise MessengerError("signal: the reply from signal-cli is not a JSON object.")
 
         error = payload.get("error")
         if isinstance(error, dict):
-            raise MessengerError(f"signal: signal-cli meldet Fehler (Code {error.get('code')!r}).")
+            raise MessengerError(
+                f"signal: signal-cli reports an error (code {error.get('code')!r})."
+            )
         result = payload.get("result")
         return result if isinstance(result, dict) else {}
 
@@ -162,8 +164,8 @@ class SignalMessenger:
                 break
             buffer += chunk
             if len(buffer) > _MAX_RESPONSE_BYTES:
-                raise MessengerError("signal: Antwort von signal-cli ist unerwartet groß.")
+                raise MessengerError("signal: the reply from signal-cli is unexpectedly large.")
         line = buffer.split(b"\n", 1)[0]
         if not line:
-            raise MessengerError("signal: signal-cli hat keine Antwort geliefert.")
+            raise MessengerError("signal: signal-cli returned no reply.")
         return line.decode("utf-8", errors="replace")

@@ -108,7 +108,7 @@ def discover_chat_ids(
 
     if data.get("ok") is False:
         raise MessengerError(
-            f"telegram: API meldet Fehler (error_code={data.get('error_code')!r})."
+            f"telegram: the API reports an error (error_code={data.get('error_code')!r})."
         )
 
     updates = data.get("result")

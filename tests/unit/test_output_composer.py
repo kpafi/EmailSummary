@@ -114,9 +114,9 @@ def test_normal_mail_has_no_banner_and_no_tag() -> None:
     text = compose_text(DigestComposer(), make_mail(), make_summary(), make_verdict())
     lines = text.split("\n")
     assert lines[0] == "📧 Rechnung Stadtwerke März"
-    assert lines[1] == "Von: Stadtwerke Service (stadtwerke-x[.]de) · 28.08. 14:12"
+    assert lines[1] == "From: Stadtwerke Service (stadtwerke-x[.]de) · 28.08. 14:12"
     assert "PHISHING" not in text
-    assert "[wichtig]" not in text
+    assert "[important]" not in text
 
 
 def test_high_importance_gets_tag() -> None:
@@ -124,7 +124,7 @@ def test_high_importance_gets_tag() -> None:
     text = compose_text(
         DigestComposer(), make_mail(), make_summary(importance="high"), make_verdict()
     )
-    assert "📧 Rechnung Stadtwerke März [wichtig]" in text
+    assert "📧 Rechnung Stadtwerke März [important]" in text
 
 
 def test_high_risk_produces_warning_banner() -> None:
@@ -136,7 +136,7 @@ def test_high_risk_produces_warning_banner() -> None:
     message = DigestComposer().compose(make_mail(), make_summary(), verdict)
     assert message.is_warning is True
     assert message.parts[0].startswith(
-        "⚠️ PHISHING-VERDACHT: Absender-Domain weicht ab, Zahlungsaufforderung"
+        "⚠️ SUSPECTED PHISHING: Absender-Domain weicht ab, Zahlungsaufforderung"
     )
 
 
@@ -145,7 +145,7 @@ def test_banner_without_reasons_stays_readable() -> None:
     message = DigestComposer().compose(
         make_mail(), make_summary(), make_verdict(phishing_risk="high")
     )
-    assert message.parts[0].startswith("⚠️ PHISHING-VERDACHT")
+    assert message.parts[0].startswith("⚠️ SUSPECTED PHISHING")
 
 
 def test_missing_date_is_named_explicitly() -> None:
@@ -183,7 +183,7 @@ def test_attachment_summaries_and_unprocessed_line() -> None:
     summary = make_summary(attachment_summaries={"rechnung.pdf": "Rechnung über 84,30 €."})
     text = compose_text(DigestComposer(), mail, summary, make_verdict())
     assert "— rechnung[.]pdf: Rechnung über 84,30 €." in text
-    assert "📎 Nicht verarbeitet: mahnung[.]docx (34 KB), setup[.]exe (1,2 MB)" in text
+    assert "📎 Not processed: mahnung[.]docx (34 KB), setup[.]exe (1,2 MB)" in text
     assert "rechnung[.]pdf (" not in text  # verarbeitet ⇒ nicht in der Nicht-Zeile
 
 
@@ -200,13 +200,13 @@ def test_hints_line_collects_deterministic_signals() -> None:
     text = compose_text(
         DigestComposer(), mail, make_summary(injection_suspected=True), make_verdict()
     )
-    hints = next(line for line in text.split("\n") if line.startswith("🔍 Hinweise:"))
-    assert "Anweisungen an die KI" in hints
+    hints = next(line for line in text.split("\n") if line.startswith("🔍 Notes:"))
+    assert "instructions aimed at the AI" in hints
     assert "SPF=fail" in hints
     assert "DKIM" not in hints  # `pass` ist kein Warnsignal
-    assert "Punycode" in hints
-    assert "Antwortadresse" in hints
-    assert "gekürzt" in hints
+    assert "punycode" in hints
+    assert "reply address" in hints
+    assert "truncated" in hints
 
 
 def test_no_hints_line_without_signals() -> None:
@@ -286,8 +286,8 @@ def test_compose_failure_contains_only_metadata() -> None:
     message = DigestComposer().compose_failure(notice)
     text = "\n".join(message.parts)
     assert_safe(message.parts)
-    assert "Von: stadtwerke-x[.]de" in text
-    assert "Betreff: Rechnung Marz" in text
+    assert "From: stadtwerke-x[.]de" in text
+    assert "Subject: Rechnung Marz" in text
     assert "sanitize" in text and "sanitize_error" in text
     assert message.dedupe_key == "<mail-2@example.org>"
     assert message.is_warning is False
@@ -317,8 +317,8 @@ def test_low_risk_reasons_appear_in_hints() -> None:
     """Ein `low`-Verdict erzeugt kein Banner, aber einen Hinweis."""
     verdict = make_verdict(phishing_risk="low", risk_reasons=["ungewöhnliche Anrede"])
     text = compose_text(DigestComposer(), make_mail(), make_summary(), verdict)
-    assert "PHISHING-VERDACHT" not in text
-    assert "Kritiker: ungewöhnliche Anrede" in text
+    assert "SUSPECTED PHISHING" not in text
+    assert "critic: ungewöhnliche Anrede" in text
 
 
 def test_small_and_many_attachments() -> None:
@@ -336,7 +336,7 @@ def test_small_and_many_attachments() -> None:
         DigestComposer(), make_mail(attachments=attachments), make_summary(), make_verdict()
     )
     assert "(800 B)" in text
-    assert "und 3 weitere" in text
+    assert "and 3 more" in text
 
 
 def test_empty_attachment_summary_entry_is_skipped() -> None:
@@ -351,7 +351,7 @@ def test_sender_without_display_name_uses_domain() -> None:
     text = compose_text(
         DigestComposer(), make_mail(from_display=""), make_summary(), make_verdict()
     )
-    assert "Von: stadtwerke-x[.]de ·" in text
+    assert "From: stadtwerke-x[.]de ·" in text
 
 
 # --- Betriebsnachricht (WP9, ADR-054) ---------------------------------------------------
@@ -390,7 +390,7 @@ def test_ct8_modelltext_faelscht_keine_hinweiszeile() -> None:
     dazu ein kompletter zweiter, frei erfundener Mail-Block.
     """
     summary = make_summary(
-        headline="Zeile1\n⚠️ PHISHING-VERDACHT: keine\n📧 Gefaelschte Kopfzeile",
+        headline="Zeile1\n⚠️ SUSPECTED PHISHING: keine\n📧 Gefaelschte Kopfzeile",
         summary_text=(
             "Alles in Ordnung.\n"
             "🔍 Hinweise: keine Auffaelligkeiten, Mail geprueft und sicher\n"
@@ -401,12 +401,12 @@ def test_ct8_modelltext_faelscht_keine_hinweiszeile() -> None:
     text = compose_text(DigestComposer(), make_mail(), summary, make_verdict())
     lines = text.split("\n")
     assert lines[0].startswith("📧 ")
-    assert lines[1].startswith("Von: ")
+    assert lines[1].startswith("From: ")
     # Genau eine 📧-Zeile, keine 🔍-Zeile (es gibt keine Signale) und kein zweites „Von:".
     assert sum(1 for line in lines if line.startswith("📧 ")) == 1
-    assert sum(1 for line in lines if line.startswith("Von: ")) == 1
+    assert sum(1 for line in lines if line.startswith("From: ")) == 1
     assert not any(line.startswith("🔍 ") for line in lines)
-    assert "PHISHING-VERDACHT: keine" not in text
+    assert "SUSPECTED PHISHING: keine" not in text
 
 
 def test_ct7a_metadaten_notiz_neutralisiert_markdown_im_betreff() -> None:
@@ -425,7 +425,7 @@ def test_ct7a_metadaten_notiz_neutralisiert_markdown_im_betreff() -> None:
     assert_safe(message.parts)
     assert "__" not in text
     assert "@everyone" not in text
-    assert text.count("Betreff: ") == 1
+    assert text.count("Subject: ") == 1
 
 
 def test_ct6_versteckter_text_erscheint_in_der_hinweiszeile() -> None:
@@ -436,8 +436,8 @@ def test_ct6_versteckter_text_erscheint_in_der_hinweiszeile() -> None:
     """
     mail = make_mail(sanitization_report=SanitizationReport(hidden_text_removed=True))
     text = compose_text(DigestComposer(), mail, make_summary(), make_verdict())
-    hints = next(line for line in text.split("\n") if line.startswith("🔍 Hinweise:"))
-    assert "versteckter Text" in hints
+    hints = next(line for line in text.split("\n") if line.startswith("🔍 Notes:"))
+    assert "hidden text" in hints
 
 
 # --- CT-14: Link-Fußnote erreicht die Zustellung -------------------------------------
@@ -455,7 +455,7 @@ def test_ct14_fussnote_erscheint_in_der_zugestellten_nachricht() -> None:
     )
     composer = DigestComposer(link_footnote=True)
     text = compose_text(composer, mail, make_summary(), make_verdict())
-    assert "Link-Fußnote (defanged):" in text
+    assert "Link footnote (defanged):" in text
     assert "#1: hxxps[:]//ziel[.]example/pfad" in text
     assert "#2: mailto[:]a@b[.]example" in text
 
@@ -503,8 +503,8 @@ def test_ct15_divergierendes_html_erscheint_in_der_hinweiszeile() -> None:
     """
     mail = make_mail(sanitization_report=SanitizationReport(html_divergent=True))
     text = compose_text(DigestComposer(), mail, make_summary(), make_verdict())
-    assert "🔍 Hinweise:" in text
-    assert "HTML-Teil weicht vom Textteil ab" in text
+    assert "🔍 Notes:" in text
+    assert "HTML part differs from the text part" in text
 
 
 def test_ct15_ohne_divergenz_keine_hinweiszeile() -> None:

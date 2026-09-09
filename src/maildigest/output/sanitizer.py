@@ -195,11 +195,19 @@ _RE_STRUCTURE_EMOJI = re.compile(
     rf"(?m)^[ \t]*(?:[{_STRUCTURE_EMOJI}][\ufe0e\ufe0f]?[ \t]*)+"
 )
 
-#: Beschriftete Strukturzeilen (`Von: …`, `Betreff: …`, `🔍 Hinweise: …`, `Stufe: …`).
+#: Beschriftete Strukturzeilen (`From: …`, `Subject: …`, `🔍 Notes: …`, `Stage: …`).
 #: Der Doppelpunkt wird zum Trennpunkt — die Zeile bleibt lesbar, sieht aber nicht mehr
 #: wie eine vom Programm erzeugte Kopfzeile aus.
+#:
+#: Die deutschen Beschriftungen stehen weiterhin in der Liste: Die Ausgabe ist zwar seit
+#: der Umstellung auf Englisch die einzige, die das Programm selbst erzeugt — ein Angreifer
+#: darf aber auch keine *deutsch* aussehende Kopfzeile fälschen können, und ein Zurück-
+#: übersetzen der Ausgabe darf diese Schutzschicht nicht still aushebeln (CT-8).
 _RE_STRUCTURE_LABEL = re.compile(
-    r"(?mi)^[ \t]*(Von|Betreff|Hinweise|Stufe|Grund|PHISHING-VERDACHT)[ \t]*:[ \t]*"
+    r"(?mi)^[ \t]*("
+    r"From|Subject|Notes|Stage|Reason|SUSPECTED PHISHING"
+    r"|Von|Betreff|Hinweise|Stufe|Grund|PHISHING-VERDACHT"
+    r")[ \t]*:[ \t]*"
 )
 
 _RE_TRAILING_SPACE = re.compile(r"[ \t]+$", re.MULTILINE)

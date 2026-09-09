@@ -70,7 +70,7 @@ def assert_delivered_text_is_safe(text: str) -> None:
 
 def structure_lines(text: str) -> list[str]:
     """Die Zeilen, die im Nachrichtenformat eine Programm-Aussage sind (ARCHITECTURE §7)."""
-    prefixes = ("⚠️", "📧", "📎", "🔍 Hinweise:", "Von:")
+    prefixes = ("⚠️", "📧", "📎", "🔍 Notes:", "Von:")
     return [line for line in text.splitlines() if line.startswith(prefixes)]
 
 
@@ -311,7 +311,7 @@ def test_der_angreifer_kann_keine_programmzeile_faelschen(tmp_path: Path, path: 
     for line in structure_lines(sink.text):
         assert "geprueft und sicher" not in line
         assert "Ihre Bank" not in line
-        assert "PHISHING-VERDACHT: keine" not in line
+        assert "SUSPECTED PHISHING: keine" not in line
 
 
 # --- CT-6: Injection-Verdacht ohne Mitwirkung des Modells ------------------------------
@@ -330,10 +330,10 @@ def test_ct6_angriffsmail_wird_geflaggt_obwohl_das_modell_schweigt(
     """
     sink, code, _out, _err = feed(tmp_path, mail)
     assert code == EXIT_OK
-    assert "🔍 Hinweise:" in sink.text, f"{mail}: keine Hinweiszeile"
+    assert "🔍 Notes:" in sink.text, f"{mail}: keine Hinweiszeile"
     assert (
-        "Mail enthielt Anweisungen an die KI" in sink.text
-        or "versteckter Text im HTML entfernt" in sink.text
+        "instructions aimed at the AI" in sink.text
+        or "hidden text removed from the HTML" in sink.text
     ), f"{mail}: kein deterministisches Signal beim Nutzer"
 
 
@@ -374,7 +374,7 @@ def test_ct7a_der_boese_betreff_erreicht_die_metadaten_notiz_entschaerft(
         error=LLMInvalidResponse("kein JSON"),
     )
     assert code == EXIT_ERROR
-    assert "Mail konnte nicht sicher verarbeitet werden" in sink.text
+    assert "could not be processed safely" in sink.text
     assert_delivered_text_is_safe(sink.text)
 
 
@@ -397,7 +397,7 @@ def test_ct4_trockenlauf_zeigt_die_notiz_und_meldet_keine_zustellung(tmp_path: P
     assert code == EXIT_ERROR
     assert not sink.sent, "Dry run hat etwas an den Messenger geschickt"
     assert "dry run, not sent" in out
-    assert "Mail konnte nicht sicher verarbeitet werden" in out
+    assert "could not be processed safely" in out
     assert "delivered: no" in err
     assert_delivered_text_is_safe(out.split("5/5", 1)[-1])
 
@@ -415,9 +415,9 @@ def test_ct11_die_spoofing_mail_bekommt_das_banner_gegen_das_modell(tmp_path: Pa
     sink, code, _out, _err = feed(tmp_path, "19_phishing_spoof.eml")
     assert code == EXIT_OK
     assert sink.sent[0].is_warning, "Kein Warn-Banner trotz mehrerer Fälschungssignale"
-    assert sink.text.startswith("⚠️ PHISHING-VERDACHT:")
+    assert sink.text.startswith("⚠️ SUSPECTED PHISHING:")
     banner = sink.text.splitlines()[0]
-    assert "Mehrere unabhängige Fälschungssignale" in banner
+    assert "several independent spoofing signals" in banner
     # Der Banner-Grund ist ein Kurzlabel, keine defangte Domain (die steht in den Hinweisen).
     assert "[.]" not in banner
 
@@ -429,7 +429,7 @@ def test_ct11_eine_gewoehnliche_weiterleitung_loest_kein_banner_aus(tmp_path: Pa
     """
     sink, _code, _out, _err = feed(tmp_path, "01_normal.eml")
     assert not sink.sent[0].is_warning
-    assert "PHISHING-VERDACHT" not in sink.text
+    assert "SUSPECTED PHISHING" not in sink.text
 
 
 # --- CT-15: divergierender HTML-Teil ---------------------------------------------------
@@ -439,7 +439,7 @@ def test_ct15_divergierendes_html_wird_dem_nutzer_gemeldet(tmp_path: Path) -> No
     """CT-15: harmloser Klartext, bösartiges HTML — der Nutzer sieht den HTML-Teil."""
     sink, code, _out, _err = feed(tmp_path, "29_alternative.eml")
     assert code == EXIT_OK
-    assert "HTML-Teil weicht vom Textteil ab" in sink.text
+    assert "HTML part differs from the text part" in sink.text
 
 
 def test_ct15_der_html_teil_erreicht_das_modell_weiterhin_nicht(tmp_path: Path) -> None:
@@ -479,8 +479,8 @@ def test_ct14_footnote_option_wirkt_beim_nutzer(tmp_path: Path) -> None:
         ],
         hooks=make_hooks(sink=mit),
     )
-    assert "Link-Fußnote (defanged):" not in ohne.text
-    assert "Link-Fußnote (defanged):" in mit.text
+    assert "Link footnote (defanged):" not in ohne.text
+    assert "Link footnote (defanged):" in mit.text
     assert mit.text != ohne.text
     assert_delivered_text_is_safe(mit.text)
 

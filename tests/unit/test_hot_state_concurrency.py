@@ -186,7 +186,7 @@ def test_unknown_schema_version_refuses_to_open(tmp_path: Path) -> None:
     path = tmp_path / "state.db"
     with StateDB(path) as database:
         database.meta_set("schema_version", "99")
-    with pytest.raises(StateError, match="Schema-Version"):
+    with pytest.raises(StateError, match="schema version"):
         StateDB(path)
 
 
@@ -234,7 +234,7 @@ def test_write_lock_of_another_connection_surfaces_as_state_error(tmp_path: Path
     try:
         database = StateDB(path)
         database._conn.execute("PRAGMA busy_timeout = 100")
-        with pytest.raises(StateError, match="nicht benutzbar"):
+        with pytest.raises(StateError, match="unusable"):
             database.claim("<blockiert@example>")
         database.close()
     finally:

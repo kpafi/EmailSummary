@@ -221,7 +221,7 @@ def test_link_footnote_is_capped() -> None:
         _mail(b"Content-Type: text/plain\r\n\r\n" + body.encode())
     )
     footnote = build_footnote(mail.links_found)
-    assert "[weitere Links unterdrückt]" in footnote
+    assert "[further links suppressed]" in footnote
     assert "://" not in footnote
 
 

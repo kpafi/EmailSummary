@@ -114,14 +114,14 @@ class TestFehlalarmVermeidung:
 class TestKennzeichnung:
     def test_punycode_wird_gekennzeichnet(self) -> None:
         result, collector = scrubbed("https://xn--pypal-4ve.com/secure")
-        assert "Punycode" in result
+        assert "punycode" in result
         assert collector.punycode_domains
         assert "xn--pypal-4ve[.]com" in collector.punycode_domains[0]
         assert "Unicode:" in collector.punycode_domains[0]
 
     def test_mixed_script_wird_gekennzeichnet(self) -> None:
         result, collector = scrubbed("http://pаypal.com/login")  # kyrillisches а
-        assert "gemischte Schriftsysteme" in result
+        assert "mixed writing systems" in result
         assert collector.mixed_script_domains == ["pаypal[.]com"]
 
     def test_nummerierung_laeuft_ueber_aufrufe_weiter(self) -> None:

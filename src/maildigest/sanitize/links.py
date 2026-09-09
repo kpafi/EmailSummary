@@ -38,7 +38,7 @@ _MAX_LINKS_LISTED = 100
 _MAX_FOOTNOTE_CHARS = 5000
 
 #: Überschrift der Fußnote. Öffentlich, damit Tests und Composer denselben Wortlaut sehen.
-FOOTNOTE_TITLE = "Link-Fußnote (defanged):"
+FOOTNOTE_TITLE = "Link footnote (defanged):"
 
 #: Obergrenze der Länge einer defangten URL in `links_found`.
 _MAX_DEFANGED_CHARS = 300
@@ -260,7 +260,7 @@ class LinkCollector:
         suffix = ""
         unicode_form = _punycode_unicode(host)
         if "xn--" in host:
-            suffix = " (Achtung: Punycode)"
+            suffix = " (caution: punycode)"
             entry = host.replace(".", "[.]")
             if unicode_form:
                 entry += f" (Unicode: {unicode_form.replace('.', '[.]')})"
@@ -272,7 +272,7 @@ class LinkCollector:
             entry = checked.replace(".", "[.]")
             if entry not in self.mixed_script_domains:
                 self.mixed_script_domains.append(entry)
-            suffix += " (Achtung: gemischte Schriftsysteme)"
+            suffix += " (caution: mixed writing systems)"
 
         return f"[{kind} #{index}: {host}{suffix}]"
 
@@ -297,7 +297,7 @@ def build_footnote(links_found: list[str]) -> str:
     for entry in links_found:
         total += len(entry) + 1
         if total > _MAX_FOOTNOTE_CHARS:
-            lines.append("[weitere Links unterdrückt]")
+            lines.append("[further links suppressed]")
             break
         lines.append(entry)
     return "\n".join(lines)

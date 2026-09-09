@@ -324,7 +324,7 @@ def test_low_digest_is_sent_after_the_configured_time() -> None:
         clock[0] = datetime(2026, 9, 2, 18, 0)
         assert runner.maybe_send_low_digest() is True
         text = "\n".join(messenger.sent[0].parts)
-        assert "2 unwichtige Mails" in text
+        assert "2 low-priority mails" in text
         assert "Newsletter A" in text
         assert "a[.]de" in text
         assert db.low_digest_entries() == []

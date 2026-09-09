@@ -557,7 +557,7 @@ def build_runner(
 
 def _unwired(raw: RawMail) -> PipelineResult:
     """Platzhalter-Callback; `build_runner` ersetzt ihn unmittelbar nach der Konstruktion."""
-    raise AssertionError("Ingest-Callback wurde nicht verdrahtet.")
+    raise AssertionError("The ingest callback was not wired up.")
 
 
 # --- Hilfen -----------------------------------------------------------------------------

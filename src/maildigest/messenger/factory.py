@@ -81,13 +81,13 @@ def build_messenger_from_section(
         token = telegram.token
         if token is None or not token.get_secret_value():
             raise ConfigError(
-                "[messenger.telegram] token fehlt: Setze das Bot-Token in der "
-                f"Konfigurationsdatei oder über die Umgebungsvariable {ENV_TELEGRAM_TOKEN}."
+                "[messenger.telegram] token is missing: set the bot token in the "
+                f"configuration file or via the environment variable {ENV_TELEGRAM_TOKEN}."
             )
         if not telegram.chat_id:
             raise ConfigError(
-                "[messenger.telegram] chat_id fehlt: `maildigest connect-messenger` "
-                "ermittelt die Chat-ID automatisch."
+                "[messenger.telegram] chat_id is missing: `maildigest connect-messenger` "
+                "discovers the chat ID automatically."
             )
         return TelegramMessenger(
             token=token,
@@ -119,8 +119,8 @@ def build_messenger_from_section(
     signal_config = messenger.signal
     if not signal_config.enabled:
         raise ConfigError(
-            "[messenger.signal] enabled = false: Der Signal-Adapter ist optional und muss "
-            "ausdrücklich freigeschaltet werden."
+            "[messenger.signal] enabled = false: the Signal adapter is optional and has to "
+            "be enabled explicitly."
         )
     if not signal_config.signal_cli_socket:
         raise ConfigError(

@@ -73,7 +73,7 @@ _AUTH_OK = frozenset({"pass", "none", "neutral", "policy"})
 _RISK_RANK: dict[str, int] = {"none": 0, "low": 1, "high": 2}
 
 #: Grund, den der Code selbst anhängt, wenn die Nachkontrolle etwas entfernen musste.
-_SCRUBBED_REASON = "Kritiker-Ausgabe enthielt unzulässige Inhalte (entfernt)"
+_SCRUBBED_REASON = "critic output contained disallowed content (removed)"
 
 #: Signale, die auf eine **Absender-Fälschung** deuten — die einzigen, die zusammen die
 #: Stufe `high` erzwingen dürfen (CT-11). Anhangs-, Link- und Kürzungssignale sagen über
@@ -90,11 +90,11 @@ _SPOOFING_KEYS = frozenset(
 
 #: Kurzbezeichnungen für den vom Code formulierten Kombinations-Grund.
 _SIGNAL_LABELS: dict[str, str] = {
-    "auth_failed": "Absender-Authentifizierung fehlgeschlagen",
-    "reply_to_mismatch": "abweichende Antwortadresse",
-    "return_path_mismatch": "abweichender Return-Path",
-    "punycode": "Punycode-Domain",
-    "mixed_script": "gemischte Schriftsysteme",
+    "auth_failed": "sender authentication failed",
+    "reply_to_mismatch": "differing reply address",
+    "return_path_mismatch": "differing return path",
+    "punycode": "punycode domain",
+    "mixed_script": "mixed writing systems",
 }
 
 #: Ab so vielen **unabhängigen** Fälschungssignalen greift die Anhebung auf `high`.
@@ -142,14 +142,14 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
         signals.append(
             Signal(
                 "reply_to_mismatch",
-                "Antwortadresse (Reply-To) weicht von der Absenderadresse ab",
+                "reply address (Reply-To) differs from the sender address",
             )
         )
     if report.return_path_mismatch:
         signals.append(
             Signal(
                 "return_path_mismatch",
-                "Rückweg-Domain (Return-Path) weicht von der Absender-Domain ab",
+                "return-path domain differs from the sender domain",
             )
         )
 
@@ -166,16 +166,16 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
             signals.append(
                 Signal(
                     "auth_failed",
-                    f"Absender-Authentifizierung: {rendered} — nicht bestanden: "
-                    f"{', '.join(failed)}. Hinweis: Weiterleitung ins Spiegelpostfach kann "
-                    "SPF/DKIM legitim brechen, für sich allein ist das kein Beweis",
+                    f"sender authentication: {rendered} — failed: "
+                    f"{', '.join(failed)}. Note: forwarding into the mirror mailbox can "
+                    "legitimately break SPF/DKIM; on its own this is not proof",
                 )
             )
         else:
-            signals.append(Signal("auth_ok", f"Absender-Authentifizierung: {rendered}"))
+            signals.append(Signal("auth_ok", f"sender authentication: {rendered}"))
     else:
         signals.append(
-            Signal("auth_missing", "Absender-Authentifizierung: keine Angaben in den Kopfzeilen")
+            Signal("auth_missing", "sender authentication: no information in the headers")
         )
 
     if report.punycode_domains:
@@ -183,8 +183,8 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
         signals.append(
             Signal(
                 "punycode",
-                f"Punycode-Domains ({len(report.punycode_domains)}): {listed} — "
-                "IDN-Schreibweise, kann legitim oder eine Namensfälschung sein",
+                f"punycode domains ({len(report.punycode_domains)}): {listed} — "
+                "IDN spelling; can be legitimate or a spoofed name",
                 # Hart im Sinne von ADR-043: Eine Weiterleitung ins Spiegelpostfach kann
                 # SPF/DKIM brechen, aber sie schreibt keine Absender-Domain in Punycode um.
                 # Das Signal ist deshalb — anders als `auth_failed` — nicht wegzuerklären
@@ -198,8 +198,8 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
         signals.append(
             Signal(
                 "mixed_script",
-                f"Domains mit gemischten Schriftsystemen ({len(report.mixed_script_domains)}): "
-                f"{listed} — typische Homoglyphen-Fälschung",
+                f"domains with mixed writing systems ({len(report.mixed_script_domains)}): "
+                f"{listed} — typical homoglyph spoofing",
                 hard=True,
                 label=_SIGNAL_LABELS["mixed_script"],
             )
@@ -209,12 +209,12 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
         kinds = sorted(
             {item.declared_mime for item in mail.attachments if not item.processed}
         )
-        listed = ", ".join(kinds[:_MAX_LISTED_DOMAINS]) or "unbekannt"
+        listed = ", ".join(kinds[:_MAX_LISTED_DOMAINS]) or "unknown"
         signals.append(
             Signal(
                 "blocked_attachments",
-                f"Nicht verarbeitete Anhänge: {report.blocked_attachments} "
-                f"(Typen laut Mail: {listed})",
+                f"unprocessed attachments: {report.blocked_attachments} "
+                f"(types declared in the mail: {listed})",
             )
         )
     signals.append(
@@ -231,21 +231,21 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
         signals.append(
             Signal(
                 "html_divergent",
-                "Die HTML-Fassung der Mail weicht inhaltlich vom ausgewerteten "
-                "Klartext-Teil ab — der Empfänger sieht in seinem Mailprogramm den "
-                "HTML-Teil, zusammengefasst wurde der Klartext",
-                label="HTML-Teil weicht vom Textteil ab",
+                "the HTML version of the mail differs in content from the plain-text part "
+                "that was analysed — the recipient sees the HTML part in their mail "
+                "program, while the summary is based on the plain text",
+                label="HTML part differs from the text part",
             )
         )
     if report.control_chars_removed:
         signals.append(
             Signal(
                 "control_chars",
-                f"Entfernte Steuer-/Unsichtbarzeichen: {report.control_chars_removed}",
+                f"control/invisible characters removed: {report.control_chars_removed}",
             )
         )
     if report.truncated:
-        signals.append(Signal("truncated", "Der Mail-Text wurde gekürzt (Längenlimit)"))
+        signals.append(Signal("truncated", "the mail text was truncated (length limit)"))
     return tuple(signals)
 
 
@@ -361,12 +361,12 @@ def enforce_verdict_policy(
             _SIGNAL_LABELS.get(signal.key, signal.key) for signal in spoofing
         )
         code_reasons.insert(
-            0, _one_line(f"Mehrere unabhängige Fälschungssignale: {listed}", MAX_REASON_CHARS)
+            0, _one_line(f"several independent spoofing signals: {listed}", MAX_REASON_CHARS)
         )
 
     reasons = code_reasons + [reason for reason in model_reasons if reason not in code_reasons]
     if risk != "none" and not reasons:
-        reasons.append("Kritiker meldet ein Risiko ohne Begründung")
+        reasons.append("the critic reports a risk without giving a reason")
 
     verdict.phishing_risk = risk
     verdict.risk_reasons = reasons[:MAX_REASONS]

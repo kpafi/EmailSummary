@@ -135,11 +135,11 @@ def post_json(
             response = client.post(url, headers=headers, json=payload, timeout=timeout)
         except httpx.TimeoutException as exc:
             raise LLMTimeout(
-                f"{provider}: Zeitlimit von {timeout:.0f} s überschritten."
+                f"{provider}: exceeded the time limit of {timeout:.0f} s."
             ) from exc
         except httpx.RequestError as exc:
             raise LLMTransportError(
-                f"{provider}: Verbindung fehlgeschlagen ({type(exc).__name__})."
+                f"{provider}: connection failed ({type(exc).__name__})."
             ) from exc
 
         status = response.status_code
@@ -148,11 +148,11 @@ def post_json(
                 data = response.json()
             except ValueError as exc:
                 raise LLMTransportError(
-                    f"{provider}: Antwort (HTTP {status}) ist kein gültiges JSON."
+                    f"{provider}: response (HTTP {status}) is not valid JSON."
                 ) from exc
             if not isinstance(data, dict):
                 raise LLMTransportError(
-                    f"{provider}: Antwort (HTTP {status}) ist kein JSON-Objekt."
+                    f"{provider}: response (HTTP {status}) is not a JSON object."
                 )
             return data
 

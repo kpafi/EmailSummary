@@ -321,7 +321,7 @@ def test_low_mails_are_collected_and_delivered_once_a_day(mailbox: FakeMailBox) 
         runner.run_once()
         assert len(messenger.sent) == einzelzustellungen + 1
         digest = messenger.texts[-1]
-        assert f"{len(queued)} unwichtige Mails" in digest
+        assert f"{len(queued)} low-priority mails" in digest
         assert db.low_digest_entries() == []
         for pattern in FORBIDDEN:
             assert pattern.search(digest) is None
@@ -342,7 +342,7 @@ def test_high_risk_mail_never_lands_in_the_low_digest(mailbox: FakeMailBox) -> N
         )
         runner.run_once()
 
-        banner_messages = [text for text in messenger.texts if "PHISHING-VERDACHT" in text]
+        banner_messages = [text for text in messenger.texts if "SUSPECTED PHISHING" in text]
         assert banner_messages, "mindestens eine Rechnungs-Mail im Korpus"
         for text in banner_messages:
             assert "Rechnung" in text
@@ -364,7 +364,7 @@ def test_permanent_llm_failure_ends_as_metadata_notice(mailbox: FakeMailBox) -> 
         notices = [
             text
             for text in messenger.texts
-            if "konnte nicht sicher verarbeitet werden" in text
+            if "could not be processed safely" in text
         ]
         assert notices
         assert all("llm_timeout" in text for text in notices)

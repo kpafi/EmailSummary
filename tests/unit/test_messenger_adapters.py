@@ -314,7 +314,7 @@ def test_signal_rpc_error_is_reported() -> None:
     """Ein Fehlerobjekt in der Antwort ist ein Fehlschlag."""
     socket = FakeSocket([json.dumps({"jsonrpc": "2.0", "id": "1", "error": {"code": -1}})])
     adapter = SignalMessenger(socket_path="/tmp/signal.sock", connect=lambda *_: socket)
-    with pytest.raises(MessengerError, match="Code"):
+    with pytest.raises(MessengerError, match="code"):
         adapter.send(message("Inhalt"))
 
 
@@ -373,7 +373,7 @@ def test_discord_connection_error_is_wrapped() -> None:
         raise httpx.ConnectError("kein Netz")
 
     adapter = DiscordMessenger(webhook_url=SecretStr(WEBHOOK_URL), client=client_for(handler))
-    with pytest.raises(MessengerError, match="Verbindung"):
+    with pytest.raises(MessengerError, match="connection failed"):
         adapter.send(message("Inhalt"))
 
 
@@ -389,7 +389,7 @@ def test_signal_empty_response() -> None:
     """Bricht die Verbindung ohne Antwort ab, wird das gemeldet."""
     socket = FakeSocket([""])
     adapter = SignalMessenger(socket_path="/tmp/signal.sock", connect=lambda *_: socket)
-    with pytest.raises(MessengerError, match="keine Antwort"):
+    with pytest.raises(MessengerError, match="no reply"):
         adapter.send(message("Inhalt"))
 
 

@@ -136,7 +136,7 @@ def _wrap_sqlite_errors(func: Callable[_P, _R]) -> Callable[_P, _R]:
             return func(*args, **kwargs)
         except sqlite3.Error as exc:
             raise StateError(
-                f"State-Datenbank nicht benutzbar ({func.__name__}): {exc}"
+                f"State database unusable ({func.__name__}): {exc}"
             ) from exc
 
     return inner
@@ -305,11 +305,11 @@ class StateDB:
             self._check_schema_version()
         except sqlite3.Error as exc:
             self._close_quietly()
-            raise StateError(f"State-Datenbank {path} nicht benutzbar: {exc}") from exc
+            raise StateError(f"State database {path} is unusable: {exc}") from exc
         except OSError as exc:
             self._close_quietly()
             raise StateError(
-                f"State-Datenbank {path} kann nicht angelegt werden: {exc.strerror}"
+                f"State database {path} cannot be created: {exc.strerror}"
             ) from exc
         except StateError:
             self._close_quietly()
@@ -355,8 +355,8 @@ class StateDB:
             return
         if stored != str(SCHEMA_VERSION):
             raise StateError(
-                f"State-Datenbank hat Schema-Version {stored}, erwartet wird "
-                f"{SCHEMA_VERSION}. Datei entfernen oder Version prüfen."
+                f"The state database has schema version {stored}, but "
+                f"{SCHEMA_VERSION} is expected. Remove the file or check the version."
             )
 
     # --- seen_mails -----------------------------------------------------------------------

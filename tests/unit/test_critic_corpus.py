@@ -214,7 +214,7 @@ def test_echo_angriff_wird_als_risiko_sichtbar(name: str) -> None:
     agent = CriticAgent(provider, token_source=fixed_token)
     verdict = agent.review(mail, plain_summary(mail))
     assert verdict.phishing_risk != "none"
-    assert any("entfernt" in reason for reason in verdict.risk_reasons)
+    assert any("removed" in reason for reason in verdict.risk_reasons)
 
 
 @pytest.mark.parametrize(
@@ -253,7 +253,7 @@ def test_kette_bis_zur_fertigen_nachricht_zeigt_das_warn_banner() -> None:
     assert verdict.phishing_risk == "high"
     message = DigestComposer().compose(mail, summary, verdict)
     assert message.is_warning is True
-    assert message.parts[0].startswith("⚠️ PHISHING-VERDACHT:")
+    assert message.parts[0].startswith("⚠️ SUSPECTED PHISHING:")
     # In der fertigen Nachricht sind defangte Formen (`beispiel[.]example`) ausdrücklich
     # erwünscht (ADR-036) — verboten bleibt alles, was ein Messenger verlinken könnte.
     for part in message.parts:
