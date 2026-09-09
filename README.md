@@ -234,16 +234,7 @@ Angebliche Zahlungsaufforderung des Chefs, Überweisung noch heute.
 
 ## Vom Handy aus anstoßen (optional)
 
-Standardmäßig ist die Zustellung eine Einbahnstraße: MailDigest schickt Nachrichten, nimmt
-aber keine entgegen. Wer den Abruf per Telegram auslösen will, schaltet das ausdrücklich
-frei:
-
-```toml
-[messenger.telegram]
-accept_commands = true
-```
-
-Danach reagiert `maildigest run` auf genau zwei Wörter aus **deinem** Chat:
+Während `maildigest run` läuft, reagiert es auf genau zwei Wörter aus **deinem** Chat:
 
 | Befehl | Wirkung |
 |---|---|
@@ -256,8 +247,15 @@ lesen, zu beantworten oder an das Sprachmodell zu geben. Das ist Absicht: Belieb
 in ein Sprachmodell, dessen Antwort dann Aktionen steuert, ist genau die Kopplung, die
 dieses Werkzeug vermeidet.
 
-Bedenke vor dem Einschalten: Wer in diesen Chat schreiben kann, kann Abrufe auslösen — und
-damit Kosten beim Modellanbieter verursachen. Deshalb ist es ab Werk aus.
+Das ist ab Werk an (ADR-078). Wer in diesen Chat schreiben kann, kann damit Abrufe
+auslösen und so Kosten beim Modellanbieter verursachen — bei einem privaten Bot-Chat bist
+das nur du. Ist `chat_id` dagegen eine **Gruppe**, in der nicht jeder das können soll,
+schalte es ab:
+
+```toml
+[messenger.telegram]
+accept_commands = false
+```
 
 **Die Alternative ohne jeden Rückkanal:** Lass MailDigest per systemd-Timer oder Cron
 laufen (siehe [docs/BETRIEB.md](docs/BETRIEB.md)). Dann hast du die Zusammenfassungen
@@ -380,8 +378,10 @@ Warnung, die immer kommt, ist keine.
 Server die MOVE-Erweiterung beherrscht und ob der Zielordner existiert. Beides fällt erst
 beim ersten Lauf auf; verloren geht dabei nichts — die Mail bleibt als gelesen liegen.
 
-**Ein Postfach, ein Prozess, keine Rückrichtung.** Kein Multi-Postfach-Betrieb, keine
-Antworten aus dem Messenger heraus, kein Zugriff auf dein echtes Postfach.
+**Ein Postfach, ein Prozess, fast keine Rückrichtung.** Kein Multi-Postfach-Betrieb, kein
+Zugriff auf dein echtes Postfach, kein Dialog mit dem Bot — die einzige Ausnahme ist die
+feste Befehlsliste `/digest` und `/status` aus deinem Chat, siehe
+[Vom Handy aus anstoßen](#vom-handy-aus-anstoßen-optional).
 
 Zwei bewusste Eigenheiten, die wie Fehler aussehen können:
 

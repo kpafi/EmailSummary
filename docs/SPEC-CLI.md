@@ -425,7 +425,7 @@ Alle Felder mit ihren Defaults:
 | `[messenger] active` | `telegram`/`discord`/`signal` | `"telegram"` | Aktiver Zustellweg |
 | `[messenger.telegram] token` | Text | — | Alternativ `MAILDIGEST_TELEGRAM_TOKEN` |
 | `[messenger.telegram] chat_id` | Text | `""` | Ziel-Chat; `connect-messenger` ermittelt ihn |
-| `[messenger.telegram] accept_commands` | true/false | `false` | Ob MailDigest Befehle aus dem Chat annimmt (ADR-077). Eingeschaltet reagiert `run` auf `/digest` (sofortiger Abrufzyklus) und `/status` (Kurzbericht), **nur** aus `chat_id` und **nur** auf diese beiden Wörter; jeder andere Text wird verworfen und erreicht kein Sprachmodell |
+| `[messenger.telegram] accept_commands` | true/false | `true` | Ob MailDigest Befehle aus dem Chat annimmt (ADR-077, Vorgabe seit ADR-078 `true`). Eingeschaltet reagiert `run` auf `/digest` (sofortiger Abrufzyklus) und `/status` (Kurzbericht), **nur** aus `chat_id` und **nur** auf diese beiden Wörter; jeder andere Text wird verworfen und erreicht kein Sprachmodell |
 | `[messenger.discord] webhook_url` | URL | — | Webhook des Kanals (ist selbst ein Secret) |
 | `[messenger.signal] enabled` | `true`/`false` | `false` | Signal-Adapter freischalten |
 | `[messenger.signal] signal_cli_socket` | Pfad | `""` | Socket von `signal-cli --daemon` |

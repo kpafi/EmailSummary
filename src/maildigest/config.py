@@ -163,11 +163,12 @@ class LinksConfig(_Section):
 class TelegramConfig(_Section):
     """`[messenger.telegram]` — Bot-Token (bevorzugt via Env) und Chat-ID."""
 
-    #: Ob MailDigest Befehle aus dem Chat annimmt (`/digest`, `/status`). Ab Werk **aus**:
-    #: Die Zustellung ist sonst eine Einbahnstraße, und das bleibt die sichere Vorgabe
-    #: (ADR-077). Eingeschaltet gilt weiterhin: nur die feste Befehlsliste, nur aus
-    #: `chat_id`, und kein fremder Text erreicht je ein Sprachmodell.
-    accept_commands: bool = False
+    #: Ob MailDigest Befehle aus dem Chat annimmt (`/digest`, `/status`). Ab Werk **an**
+    #: (ADR-078, kehrt die Vorgabe aus ADR-077 um): Der Kanal ist so schmal, dass er ohne
+    #: Erklärung sicher ist — nur die feste Befehlsliste, nur aus `chat_id`, und kein
+    #: fremder Text erreicht je ein Sprachmodell. Auf `false` setzen, wenn `chat_id` eine
+    #: Gruppe ist, in der nicht jeder Abrufe auslösen können soll.
+    accept_commands: bool = True
     token: SecretStr | None = None
     chat_id: str = ""
 

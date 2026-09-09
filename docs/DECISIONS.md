@@ -1871,7 +1871,7 @@
 
 
 ## ADR-077: Fernauslösung aus dem Messenger — feste Befehle statt Dialog
-- Status: accepted
+- Status: accepted; die Vorgabe „ab Werk aus" ersetzt durch ADR-078
 - WP / Datum: Nachlauf zum Feldtest, 2026-09-09
 - Kontext: Der Nutzer wollte vom Handy aus einen Abruf anstoßen, statt auf das
   Poll-Intervall zu warten. Bis hierher war die Zustellung eine Einbahnstraße; PLAN §7 und
@@ -1907,3 +1907,40 @@
   weiter für Dialog und Aktionen, nicht mehr für die feste Befehlsliste. Wer den Kanal
   einschaltet, gibt jedem, der in diesen Chat schreiben kann, die Möglichkeit, Abrufe
   auszulösen (und damit Modellkosten zu verursachen). Deshalb opt-in.
+
+
+## ADR-078: Der Befehlskanal ist ab Werk an
+- Status: accepted
+- WP / Datum: Nutzer-Entscheid, 2026-09-10
+- Ersetzt: die Vorgabe aus ADR-077 („ab Werk `false`"). Der übrige Inhalt von ADR-077 —
+  feste Wortliste, nur aus `chat_id`, kein fremder Text ins Modell — gilt unverändert.
+- Kontext: ADR-077 hatte den Kanal vorsichtshalber ausgeschaltet, weil er eine bewusst
+  gezogene Grenze kreuzt. Im Gebrauch zeigte sich, dass die Vorsicht am falschen Ort
+  saß: Wer den Bot einrichtet, ist bei einem privaten Bot-Chat die einzige Person, die
+  dort schreiben kann — der Schalter schützte ihn also vor sich selbst. Gleichzeitig
+  kostete er Sichtbarkeit: Die Befehle existierten, waren aber nur auffindbar, wenn man
+  die Dokumentation las und danach eine Konfigurationsdatei bearbeitete.
+- Entscheidung: `[messenger.telegram] accept_commands` ist ab Werk `true`. `init` schreibt
+  das Feld ausdrücklich in die erzeugte Datei, statt sich auf den Schema-Default zu
+  verlassen (behebt zugleich HC-18).
+- Warum das vertretbar ist: Die Befugnis lautet unverändert „jetzt abrufen". Es gibt keinen
+  Dialog, keine Konfigurationsänderung per Chat, und kein fremdes Zeichen erreicht ein
+  Sprachmodell — alle Absicherungen aus ADR-077 bleiben. Der reale Unterschied betrifft
+  ausschließlich den Fall, dass `chat_id` auf eine **Gruppe** zeigt: Dort könnte jedes
+  Mitglied Abrufe und damit Modellkosten auslösen. Für diesen Fall nennt die Ausgabe von
+  `connect-messenger` und der README den Weg zurück (`accept_commands = false`), statt alle
+  anderen Nutzer mit einer Voreinstellung zu belasten, die sie nicht brauchen.
+- Nebenwirkung, die einen Befund erledigt: Die Testnachricht musste bisher zum Bearbeiten
+  der Konfiguration auffordern und nannte dafür einen Sektionsnamen, den der
+  Output-Sanitizer entstellt hätte — sie stand deshalb ohne Punkt und damit als TOML falsch
+  im Quelltext (HC-16). Mit einem eingeschalteten Kanal entfällt die Aufforderung; die
+  Nachricht nennt nur noch die Befehle, und der Zusatz geht nur an Telegram, wo der
+  Schalter überhaupt wirkt.
+- Alternativen: (a) Beim Ausschalten bleiben und die Sichtbarkeit über die Dokumentation
+  lösen — war der Zustand, der zur Rückfrage führte. (b) Beim ersten Start interaktiv
+  fragen — verlagert die Entscheidung in einen Moment, in dem der Nutzer den Kanal noch
+  nicht beurteilen kann, und hilft im nicht-interaktiven Betrieb gar nicht.
+- Konsequenzen: Bestehende Konfigurationen ohne das Feld schalten den Kanal beim nächsten
+  Start ein. Das ist gewollt, aber es ist eine Verhaltensänderung ohne Zutun des Nutzers —
+  deshalb steht sie im CHANGELOG unter „Unveröffentlicht" und in der Ausgabe von
+  `connect-messenger`.

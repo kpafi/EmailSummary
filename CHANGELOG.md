@@ -4,6 +4,30 @@ Alle nennenswerten Änderungen an MailDigest. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die Versionsnummern folgen
 [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unveröffentlicht]
+
+### Funktionen
+- **Betrieb ohne Sprachmodell** als Standard (`[llm] provider = "none"`, ADR-076):
+  MailDigest läuft ohne Anmeldung bei irgendeinem Anbieter und stellt einen beschrifteten
+  Auszug samt aller deterministischen Warnungen zu. `connect-llm` bietet die Betriebsarten
+  als Auswahlliste an, darunter drei Anbieter mit Gratis-Kontingent und die lokale Variante.
+- **Fernauslösung per Telegram** (ADR-077, Vorgabe geändert durch ADR-078): `maildigest run`
+  reagiert auf `/digest` (sofortiger Abruf) und `/status` (Kurzbericht) — **nur** auf diese
+  beiden Wörter und **nur** aus dem konfigurierten Chat. Jeder andere Text wird verworfen und
+  erreicht nie ein Sprachmodell. Schalter `[messenger.telegram] accept_commands`, seit
+  ADR-078 ab Werk **an**; für Gruppen-Chats auf `false` setzen.
+- **Anbieter-Wissensbasis** für die Einrichtung (ADR-075): `connect-mail` erklärt den Begriff
+  IMAP-Host, übersetzt eine eingetippte Mailadresse in den Host und bricht bei Anbietern ohne
+  Passwort-Anmeldung (Outlook.com, Proton) sofort mit Begründung ab.
+
+### Geändert
+- Alle nutzersichtbaren Texte sind englisch; Docstrings und `docs/` bleiben deutsch.
+- Die von `maildigest test` zugestellte Nachricht ist als Selbsttest gekennzeichnet.
+
+### Bekannte Grenzen
+- Die Aussage „keine Antworten aus dem Messenger heraus" aus 0.1.0 gilt eingeschränkt
+  weiter: kein Dialog, keine Aktionen — außer der festen Befehlsliste oben.
+
 ## [0.1.0] — 2026-09-08
 
 Erstes vollständiges Release. MailDigest liest ein Spiegel-Postfach, fasst jede Mail mit

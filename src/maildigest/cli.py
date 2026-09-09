@@ -123,10 +123,16 @@ _SAFE_NAME_RE = re.compile(r"[^0-9A-Za-zÄÖÜäöüß _./-]")
 #: der Nachbrenner des Output-Sanitizers würde sie sonst sichtbar entschärfen.
 _TEST_MESSAGE = (
     "✅ MailDigest test message\n"
-    "Delivery works — your mail summaries will arrive here from now on\n"
+    "Delivery works — your mail summaries will arrive here from now on"
+)
+
+#: Nur für Telegram angehängt: `accept_commands` wirkt ausschließlich dort (HC-16). Der
+#: Text nennt bewusst keinen punktierten Sektionsnamen — der Output-Sanitizer entschärft
+#: Punkte, und eine falsch abgetippte TOML-Zeile ist schlimmer als gar keine.
+_TELEGRAM_COMMAND_HINT = (
     "\n"
-    "Optional, off by default: set accept_commands = true under [messenger telegram] in "
-    "your config, then this chat also understands\n"
+    "\n"
+    "This chat can also trigger MailDigest:\n"
     "/digest — fetch and summarise right now\n"
     "/status — short report on what is waiting"
 )
@@ -697,7 +703,7 @@ def cmd_init(ctx: Context) -> int:
         "links": {"footnote": False},
         "messenger": {
             "active": "telegram",
-            "telegram": {"chat_id": ""},
+            "telegram": {"chat_id": "", "accept_commands": True},
             "discord": {},
             "signal": {"enabled": False, "signal_cli_socket": ""},
         },
@@ -1199,11 +1205,12 @@ def _setup_telegram(ctx: Context, config_file: ConfigFile) -> None:
     telegram["chat_id"] = _discover_chat_id(ctx, SecretStr(token), telegram)
     console.out("")
     console.out(
-        "Tip: this chat can also trigger MailDigest. Set accept_commands = true under\n"
-        "[messenger.telegram] in your config, then `maildigest run` reacts to:\n"
+        "While `maildigest run` is running, this chat can also trigger it:\n"
         "  /digest   fetch and summarise right now\n"
         "  /status   short report on what is waiting\n"
-        "Off by default — anyone who can write here could otherwise trigger runs."
+        "Anything else you write is discarded — there is no chat function.\n"
+        "If the chat is a group where not everyone should be able to trigger runs, set\n"
+        "accept_commands = false under [messenger.telegram] in your configuration."
     )
 
 
@@ -1298,7 +1305,10 @@ def _send_test_message(ctx: Context, section: MessengerConfig) -> None:
         )
     composer = DigestComposer(part_limit=part_limit_for(section.active))
     try:
-        messenger.send(composer.compose_plain(_TEST_MESSAGE))
+        text = _TEST_MESSAGE
+        if section.active == "telegram" and section.telegram.accept_commands:
+            text += _TELEGRAM_COMMAND_HINT
+        messenger.send(composer.compose_plain(text))
     except MessengerError as exc:
         raise CliError(f"The test message could not be delivered: {exc}", EXIT_ERROR) from exc
     console.step("Test message delivered — check your messenger.")

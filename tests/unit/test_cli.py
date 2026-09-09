@@ -573,11 +573,36 @@ def test_ct16_eof_auf_stdin_ist_bedienfehler(tmp_path: Path) -> None:
 
 def test_testnachricht_nennt_die_befehle() -> None:
     """Nach dem Einrichten soll der Nutzer wissen, dass es /digest und /status gibt."""
-    from maildigest.cli import _TEST_MESSAGE
+    from maildigest.cli import _TELEGRAM_COMMAND_HINT
 
-    assert "/digest" in _TEST_MESSAGE
-    assert "/status" in _TEST_MESSAGE
-    assert "accept_commands" in _TEST_MESSAGE
+    assert "/digest" in _TELEGRAM_COMMAND_HINT
+    assert "/status" in _TELEGRAM_COMMAND_HINT
+
+
+def test_testnachricht_nennt_keine_ungueltige_config_sektion() -> None:
+    """HC-16: Eine abgetippte Zeile `[messenger telegram]` bricht die Konfiguration.
+
+    Der Sanitizer entschärft Punkte, ein punktierter Sektionsname käme also verstümmelt
+    an. Statt ihn ohne Punkt zu schreiben (und damit falsch), nennt die Nachricht ihn gar
+    nicht — die exakte Syntax steht im Terminal-Hinweis und im README.
+    """
+    from maildigest.cli import _SELFTEST_NOTICE, _TELEGRAM_COMMAND_HINT, _TEST_MESSAGE
+    from maildigest.output.sanitizer import final_guard
+
+    for text in (_TEST_MESSAGE, _TELEGRAM_COMMAND_HINT, _SELFTEST_NOTICE):
+        assert "messenger telegram" not in text
+        # Der Text übersteht den Nachbrenner unverändert — sonst käme er entstellt an.
+        assert final_guard(text) == text
+
+
+def test_init_schreibt_accept_commands_aus(tmp_path: Path) -> None:
+    """HC-18: Ein Feld mit Default gehört in die Vorlage, nicht nur ins Schema."""
+    cfg = tmp_path / "config.toml"
+    code, _out, _err = run(["--config", str(cfg), "--non-interactive", "init"])
+
+    assert code == EXIT_OK
+    data = tomllib.loads(cfg.read_text())
+    assert data["messenger"]["telegram"]["accept_commands"] is True
 
 
 def test_selbsttest_vorspann_sagt_dass_die_mail_nicht_echt_ist() -> None:
