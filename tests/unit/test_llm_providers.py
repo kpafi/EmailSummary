@@ -425,3 +425,60 @@ def test_providers_satisfy_the_protocol(factory: Any) -> None:
         return httpx.Response(200, json={})
 
     assert isinstance(factory(handler), LLMProvider)
+
+
+# --- Diagnose-Auskunft des Anbieters (nur beim Verbindungstest) -------------------------------
+
+
+def _error_transport(status: int, message: str) -> httpx.MockTransport:
+    """Antwortet immer mit einer Fehlerantwort im OpenAI-/Anthropic-Format."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"error": {"message": message, "code": status}})
+
+    return httpx.MockTransport(handler)
+
+
+def test_anbietertext_bleibt_im_normalbetrieb_aussen_vor() -> None:
+    """I5: Der Antworttext könnte Teile der Anfrage zitieren — im Betrieb also nicht zeigen."""
+    client = httpx.Client(transport=_error_transport(401, "User not found."))
+    provider = OpenAICompatibleProvider(model="m", client=client, max_attempts=1)
+
+    with pytest.raises(LLMTransportError) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    assert "User not found" not in str(excinfo.value)
+    assert "HTTP 401" in str(excinfo.value)
+
+
+def test_anbietertext_erscheint_beim_verbindungstest() -> None:
+    """Beim festen, inhaltsfreien Testaufruf ist der Text die eigentliche Auskunft.
+
+    Ohne ihn stand bei einem abgelehnten OpenRouter-Zugang nur „HTTP 401" da — die
+    Ursache („No endpoints found matching your data policy", „User not found.") blieb
+    verborgen und war ohne fremde Hilfe nicht zu erraten.
+    """
+    client = httpx.Client(transport=_error_transport(401, "User not found."))
+    provider = OpenAICompatibleProvider(
+        model="m", client=client, max_attempts=1, reveal_error_details=True
+    )
+
+    with pytest.raises(LLMTransportError) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    assert 'Provider says: "User not found."' in str(excinfo.value)
+
+
+def test_anbietertext_wird_gekuerzt_und_einzeilig_gemacht() -> None:
+    """Ein Anbieter darf die Fehlermeldung nicht zur Textwand machen."""
+    client = httpx.Client(transport=_error_transport(400, "zeile1\nzeile2 " + "x" * 500))
+    provider = OpenAICompatibleProvider(
+        model="m", client=client, max_attempts=1, reveal_error_details=True
+    )
+
+    with pytest.raises(LLMTransportError) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    message = str(excinfo.value)
+    assert "\n" not in message
+    assert len(message) < 450

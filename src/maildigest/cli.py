@@ -1061,6 +1061,10 @@ def _test_llm(ctx: Context, section: LlmConfig) -> None:
             model=section.model,
             base_url=section.base_url,
             api_key=section.api_key,
+            # Der Testaufruf schickt einen festen, inhaltsfreien Satz — der Antworttext des
+            # Anbieters kann hier also nichts aus einer Mail zitieren und ist genau die
+            # Auskunft, die bei einer abgelehnten Verbindung weiterhilft.
+            reveal_error_details=True,
         )
         answer = provider.complete(
             "You are answering a connection test.",

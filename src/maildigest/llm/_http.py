@@ -72,26 +72,50 @@ def _backoff_seconds(attempt: int) -> float:
     return min(_BACKOFF_BASE_SECONDS * 2.0 ** (attempt - 1), _BACKOFF_MAX_SECONDS)
 
 
+def _provider_error_message(response: httpx.Response) -> str:
+    """Der Klartext aus `error.message`, gekürzt und einzeilig.
+
+    Wird **nur** beim Verbindungstest von `connect-llm` ausgegeben (`reveal_message`).
+    Dort besteht die Anfrage aus einem festen, inhaltsfreien Satz, der Antworttext kann
+    also nichts aus einer Mail zitieren. Im Normalbetrieb bleibt er außen vor (I5).
+
+    Der Nutzen ist erheblich: Anbieter erklären hier, *warum* abgelehnt wurde
+    („No endpoints found matching your data policy" bei OpenRouter, „User not found."
+    bei falschem Schlüssel). Ohne diesen Satz bleibt nur ein nackter Statuscode.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    message = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(message, str) or not message.strip():
+        return ""
+    return " ".join(message.split())[:300]
+
+
 def _provider_error_type(response: httpx.Response) -> str:
     """Extrahiert den Fehler-*Typ* (nicht den Text) aus einer Fehlerantwort.
 
     Anthropic und OpenAI liefern beide `{"error": {"type": ..., "message": ...}}`. Nur
     `type` wird übernommen: Es ist eine kurze, herstellerdefinierte Konstante wie
     `rate_limit_error`. Der `message`-Text bleibt außen vor, weil er im Zweifel Teile der
-    Anfrage zitiert (I5).
+    Anfrage zitiert (I5) — Ausnahme: :func:`_provider_error_message` beim Verbindungstest.
     """
     try:
         payload = response.json()
     except ValueError:
-        return "unbekannt"
+        return "unknown"
     if not isinstance(payload, dict):
-        return "unbekannt"
+        return "unknown"
     error = payload.get("error")
     if isinstance(error, dict):
         error_type = error.get("type")
         if isinstance(error_type, str) and error_type:
             return error_type
-    return "unbekannt"
+    return "unknown"
 
 
 def post_json(
@@ -103,6 +127,7 @@ def post_json(
     provider: str,
     timeout: float,
     max_attempts: int = MAX_ATTEMPTS,
+    reveal_message: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """Sendet einen JSON-POST mit Retry-Politik und liefert die geparste Antwort.
@@ -128,7 +153,8 @@ def post_json(
             nicht-JSON-Antwort bei Status 2xx.
     """
     last_status: int | None = None
-    last_error_type = "unbekannt"
+    last_error_type = "unknown"
+    last_message = ""
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -158,6 +184,8 @@ def post_json(
 
         last_status = status
         last_error_type = _provider_error_type(response)
+        if reveal_message:
+            last_message = _provider_error_message(response)
 
         if not _is_retryable(status) or attempt == max_attempts:
             break
@@ -165,11 +193,12 @@ def post_json(
         wait = _retry_after_seconds(response)
         sleep(_backoff_seconds(attempt) if wait is None else wait)
 
+    detail = f' Provider says: "{last_message}"' if last_message else ""
     if last_status == 429:
         raise LLMRateLimited(
-            f"{provider}: Rate-Limit erreicht (HTTP 429, Typ {last_error_type}); "
-            f"nach {max_attempts} Versuchen aufgegeben."
+            f"{provider}: rate limit reached (HTTP 429, type {last_error_type}); "
+            f"gave up after {max_attempts} attempts.{detail}"
         )
     raise LLMTransportError(
-        f"{provider}: Anfrage fehlgeschlagen (HTTP {last_status}, Typ {last_error_type})."
+        f"{provider}: request failed (HTTP {last_status}, type {last_error_type}).{detail}"
     )

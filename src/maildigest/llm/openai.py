@@ -50,6 +50,7 @@ class OpenAICompatibleProvider:
         max_attempts: int = MAX_ATTEMPTS,
         client: httpx.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        reveal_error_details: bool = False,
     ) -> None:
         """Baut den Adapter.
 
@@ -72,6 +73,8 @@ class OpenAICompatibleProvider:
         self._timeout = timeout
         self._max_attempts = max_attempts
         self._sleep = sleep
+        # Nur der Verbindungstest von `connect-llm` schaltet das ein (I5).
+        self._reveal_error_details = reveal_error_details
         self._client = client if client is not None else httpx.Client(timeout=timeout)
         self._owns_client = client is None
 
@@ -124,6 +127,7 @@ class OpenAICompatibleProvider:
             payload=payload,
             provider="openai_compatible",
             timeout=self._timeout,
+            reveal_message=self._reveal_error_details,
             max_attempts=self._max_attempts,
             sleep=self._sleep,
         )

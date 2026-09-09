@@ -80,6 +80,9 @@ def build_provider(
         max_attempts=max_attempts,
         client=client,
         sleep=sleep,
+        # Bewusst nicht durchgereicht: Im Normalbetrieb bleibt der Antworttext des
+        # Anbieters außen vor (I5). Nur `connect-llm` schaltet ihn für seinen
+        # inhaltsfreien Testaufruf ein.
     )
 
 
@@ -93,6 +96,7 @@ def build_provider_from_settings(
     max_attempts: int = MAX_ATTEMPTS,
     client: httpx.Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    reveal_error_details: bool = False,
 ) -> LLMProvider:
     """Baut einen Provider aus Einzelwerten statt aus einer vollständigen :class:`Config`.
 
@@ -131,4 +135,5 @@ def build_provider_from_settings(
         max_attempts=max_attempts,
         client=client,
         sleep=sleep,
+        reveal_error_details=reveal_error_details,
     )
