@@ -928,8 +928,30 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
 
     if not folders:
         return section.folder
+
+    if section.folder not in folders:
+        # Der eingestellte Ordner existiert dort nicht. Ohne Rückfrage einfach den ersten
+        # der Liste zu nehmen wäre gefährlich: Server sortieren alphabetisch, der erste
+        # Eintrag ist häufig „Drafts"/„Entwurf". MailDigest würde dann Entwürfe lesen und
+        # als gelesen markieren, statt den Posteingang.
+        console.err(
+            f'The configured folder "{section.folder}" does not exist on the server.'
+        )
+        if not console.interactive:
+            console.err(
+                "Keeping it unchanged — pick one of the folders listed above with "
+                "--folder, otherwise the next run will fail."
+            )
+            for number, name in enumerate(folders, start=1):
+                console.out(f"  {number:>2}) {_safe_name(name)}")
+            return section.folder
+
     names = [_safe_name(name) for name in folders]
-    default_index = folders.index(section.folder) if section.folder in folders else 0
+    if section.folder in folders:
+        default_index = folders.index(section.folder)
+    else:
+        # Kein Treffer: INBOX ist die einzige vertretbare Vorgabe, sonst der erste Eintrag.
+        default_index = folders.index("INBOX") if "INBOX" in folders else 0
     console.out("Which folder should MailDigest read?")
     index = console.choose("Folder", names, default_index=default_index)
     return folders[index]

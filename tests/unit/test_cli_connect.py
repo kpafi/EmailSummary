@@ -625,3 +625,36 @@ def test_connect_llm_testaufruf_wiederholt_ratenlimits_nicht(config_path: Path) 
     )
     assert gesehen["max_attempts"] == 1
     assert gesehen["reveal_error_details"] is True
+
+
+def test_connect_mail_wechselt_nicht_stillschweigend_den_ordner(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ein nicht vorhandener Ordner darf nicht kommentarlos durch den ersten ersetzt werden.
+
+    Server liefern die Ordnerliste alphabetisch; der erste Eintrag ist häufig
+    „Drafts"/„Entwurf". Würde der nicht-interaktive Modus den nehmen, läse MailDigest
+    Entwürfe statt des Posteingangs — und markierte sie als gelesen.
+    """
+
+    monkeypatch.setenv("MAILDIGEST_IMAP_PASSWORD", "geheim")
+
+    class Mailbox:
+        def connect(self) -> None: ...
+        def disconnect(self) -> None: ...
+        def list_folders(self) -> list[str]:
+            return ["Entwurf", "Gesendet", "INBOX", "Papierkorb"]
+
+    code, out, err = run(
+        [
+            "connect-mail", "--config", str(config_path), "--non-interactive",
+            "--host", "imap.web.de", "--username", "x@web.de", "--folder", "GibtsNicht",
+        ],
+        stdin="",
+        hooks=Hooks(imap_client=lambda section: Mailbox()),
+    )
+
+    assert code == EXIT_OK
+    assert "does not exist on the server" in err
+    assert read(config_path)["imap"]["folder"] == "GibtsNicht"  # unverändert, nicht „Entwurf"
+    assert "Entwurf" in out  # die Liste wird trotzdem gezeigt
