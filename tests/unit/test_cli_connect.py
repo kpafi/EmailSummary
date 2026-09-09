@@ -601,3 +601,27 @@ def test_connect_messenger_no_test_sendet_nichts(config_path: Path) -> None:
     assert code == EXIT_OK
     assert messenger.sent == []
     assert "skipped" in out
+
+
+def test_connect_llm_testaufruf_wiederholt_ratenlimits_nicht(config_path: Path) -> None:
+    """Ein Ratenlimit beim Einrichten darf kein Kontingent verbrennen.
+
+    Anbieter mit Tageskontingent (OpenRouter: 50 Anfragen/Tag im Gratis-Tarif) zählen jede
+    Wiederholung mit. Ein einziger Fehlversuch hätte sonst drei davon gekostet — und die
+    Wartezeiten des Backoffs stünden interaktiv im Weg.
+    """
+    gesehen: dict[str, object] = {}
+
+    def fake_build(**kwargs: object) -> object:
+        gesehen.update(kwargs)
+        # Kontrollierter Abbruch: Die CLI fängt LLMError und macht daraus einen
+        # sauberen Exit — der Test kommt danach an die mitgeschriebenen Argumente.
+        raise LLMTransportError("stop")
+
+    run(
+        ["connect-llm", "--config", str(config_path)],
+        stdin="6\nclaude-modell\nschluessel\n",
+        hooks=Hooks(build_provider=fake_build),
+    )
+    assert gesehen["max_attempts"] == 1
+    assert gesehen["reveal_error_details"] is True

@@ -1065,6 +1065,11 @@ def _test_llm(ctx: Context, section: LlmConfig) -> None:
             # Anbieters kann hier also nichts aus einer Mail zitieren und ist genau die
             # Auskunft, die bei einer abgelehnten Verbindung weiterhilft.
             reveal_error_details=True,
+            # Genau ein Versuch: Ein Ratenlimit beim Einrichten wiederholt sich nicht
+            # binnen Sekunden, und bei Anbietern mit Tageskontingent (OpenRouter: 50
+            # Anfragen/Tag) würde jede Wiederholung davon eine weitere aufbrauchen. Der
+            # Test soll melden, was der Anbieter sagt — nicht ihn überreden.
+            max_attempts=1,
         )
         answer = provider.complete(
             "You are answering a connection test.",
