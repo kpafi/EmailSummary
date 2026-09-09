@@ -481,7 +481,8 @@ def test_anbietertext_wird_gekuerzt_und_einzeilig_gemacht() -> None:
 
     message = str(excinfo.value)
     assert "\n" not in message
-    assert len(message) < 450
+    # Der Anbietertext selbst ist auf 400 Zeichen gedeckelt (plus feste Rahmen-Wörter).
+    assert len(message) < 500
 
 
 def _body_error_transport(payload: dict[str, object]) -> httpx.MockTransport:
@@ -534,3 +535,59 @@ def test_gueltige_antwort_bleibt_unberuehrt() -> None:
     provider = OpenAICompatibleProvider(model="m", client=client, max_attempts=1)
 
     assert provider.complete("s", "u", max_tokens=8) == "OK"
+
+
+def test_openrouter_hueller_wird_um_den_wirklichen_grund_ergaenzt() -> None:
+    """OpenRouter meldet „Provider returned error" und legt den Grund nach `metadata`.
+
+    Ohne diese Auswertung stand beim Nutzer eine Hülle ohne Inhalt — der Name des
+    tatsächlich bedienenden Anbieters und dessen Text sind aber genau die Auskunft, an der
+    sich entscheidet, ob es am Kontingent, an der Auslastung oder an der Datenpolitik lag.
+    """
+    payload = {
+        "error": {
+            "code": 429,
+            "message": "Provider returned error",
+            "metadata": {
+                "provider_name": "Google AI Studio",
+                "raw": "Resource has been exhausted (e.g. check quota).",
+            },
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleProvider(
+        model="m", client=client, max_attempts=1, reveal_error_details=True
+    )
+
+    with pytest.raises(LLMRateLimited) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    message = str(excinfo.value)
+    assert "Google AI Studio" in message
+    assert "Resource has been exhausted" in message
+
+
+def test_metadata_bleibt_im_normalbetrieb_ebenfalls_aussen_vor() -> None:
+    """Auch der Upstream-Text ist ein Antworttext des Anbieters (I5)."""
+    payload = {
+        "error": {
+            "code": 429,
+            "message": "Provider returned error",
+            "metadata": {"raw": "Resource has been exhausted."},
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleProvider(model="m", client=client, max_attempts=1)
+
+    with pytest.raises(LLMRateLimited) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    assert "exhausted" not in str(excinfo.value)

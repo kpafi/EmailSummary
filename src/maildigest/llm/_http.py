@@ -90,10 +90,37 @@ def _provider_error_message(response: httpx.Response) -> str:
     if not isinstance(payload, dict):
         return ""
     error = payload.get("error")
-    message = error.get("message") if isinstance(error, dict) else None
-    if not isinstance(message, str) or not message.strip():
+    if not isinstance(error, dict):
         return ""
-    return " ".join(message.split())[:300]
+    return _describe_error(error)
+
+
+def _describe_error(error: dict[str, Any]) -> str:
+    """Setzt `message` und — falls vorhanden — die Angaben aus `metadata` zusammen.
+
+    OpenRouter reicht Fehler des tatsächlich bedienenden Anbieters als generisches
+    „Provider returned error" weiter und legt den eigentlichen Text nach
+    `error.metadata.raw`, den Namen nach `error.metadata.provider_name`. Ohne diese
+    Auswertung bleibt eine Hülle ohne Inhalt stehen — genau die Lage, in der ein Nutzer
+    nicht weiterkommt.
+    """
+    parts: list[str] = []
+    message = error.get("message")
+    if isinstance(message, str) and message.strip():
+        parts.append(" ".join(message.split()))
+
+    metadata = error.get("metadata")
+    if isinstance(metadata, dict):
+        name = metadata.get("provider_name")
+        if isinstance(name, str) and name.strip():
+            parts.append(f"upstream provider: {' '.join(name.split())}")
+        raw = metadata.get("raw")
+        if isinstance(raw, str) and raw.strip():
+            parts.append(f"upstream says: {' '.join(raw.split())}")
+        elif raw is not None and not isinstance(raw, str):
+            parts.append(f"upstream says: {raw!r}")
+
+    return " | ".join(parts)[:400]
 
 
 def _provider_error_type(response: httpx.Response) -> str:
@@ -225,7 +252,5 @@ def body_error_suffix(data: dict[str, Any], *, reveal: bool) -> str:
     suffix = f" The provider reported an error in the response body (code {code!r})."
     if not reveal:
         return suffix
-    message = error.get("message")
-    if isinstance(message, str) and message.strip():
-        return f'{suffix} It says: "{" ".join(message.split())[:300]}"'
-    return suffix
+    described = _describe_error(error)
+    return f'{suffix} It says: "{described}"' if described else suffix
