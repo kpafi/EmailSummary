@@ -60,7 +60,10 @@
 ## 4. Explizit außerhalb des Scopes (v0.1)
 
 - Kein Zugriff auf das echte Postfach (nur Mirror).
-- Keine Antwort-/Aktions-Funktionen aus dem Messenger heraus.
+- Kein Dialog mit dem Bot und keine Aktionen aus dem Messenger heraus. **Ausnahme seit
+  2026-09-09 (ADR-077):** ein opt-in Befehlskanal mit der festen Wortliste `/digest`
+  und `/status`, nur aus dem konfigurierten Chat. Freier Text wird verworfen und
+  erreicht nie ein Sprachmodell; ab Werk ist der Kanal aus.
 - Kein OCR / keine Bildinhalts-Analyse (Known Limitation: Bild-Phishing wird nur als
   unverarbeiteter Anhang gemeldet).
 - Keine Entschlüsselung von PGP/S-MIME.

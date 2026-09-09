@@ -248,3 +248,104 @@ class TelegramMessenger:
         """Schließt den intern erzeugten httpx-Client; injizierte bleiben offen."""
         if self._owns_client:
             self._client.close()
+
+
+# --- Befehle vom Nutzer (opt-in, ADR-077) ----------------------------------------------------
+#
+# Bewusst schmal gehalten: MailDigest nimmt aus dem Messenger AUSSCHLIESSLICH die feste
+# Wortliste unten entgegen, und nur aus dem konfigurierten Chat. Freier Text wird
+# verworfen, ohne ihn zu lesen, zu beantworten oder gar an ein Sprachmodell zu geben.
+# Damit bleibt die neue Befugnis auf „jetzt abrufen" beschränkt; die Invarianten I1-I8
+# sind unberührt, weil Mails weiterhin denselben Weg nehmen.
+
+#: Die einzigen akzeptierten Befehle. Alles andere wird ignoriert.
+COMMANDS: frozenset[str] = frozenset({"/digest", "/status"})
+
+
+def poll_commands(
+    *,
+    token: SecretStr,
+    chat_id: str,
+    offset: int = 0,
+    base_url: str = "",
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    client: httpx.Client | None = None,
+) -> tuple[tuple[str, ...], int]:
+    """Holt neue Befehle aus dem konfigurierten Chat.
+
+    Args:
+        token: Bot-Token.
+        chat_id: Der einzige Chat, aus dem Befehle angenommen werden. Nachrichten aus
+            jedem anderen Chat werden verworfen — der Bot könnte sonst von einem
+            beliebigen Fremden ausgelöst werden, der seinen Namen kennt.
+        offset: `update_id`, ab der gelesen wird (Telegram bestätigt damit zugleich die
+            älteren). Verhindert, dass ein Neustart alte Befehle erneut ausführt.
+        base_url: Abweichender API-Host; leer = :data:`TELEGRAM_DEFAULT_BASE_URL`.
+        timeout: Zeitlimit des Requests in Sekunden.
+        client: Vorhandener httpx-Client (Tests: `MockTransport`).
+
+    Returns:
+        `(befehle, neuer_offset)`. `befehle` enthält nur Werte aus :data:`COMMANDS`, in
+        der Reihenfolge des Eingangs. `neuer_offset` ist die höchste gesehene
+        `update_id` + 1 — auch dann, wenn nichts Verwertbares dabei war, damit
+        unbrauchbare Nachrichten nicht dauerhaft erneut geholt werden.
+
+    Raises:
+        MessengerError: Telegram nicht erreichbar oder Token abgelehnt.
+    """
+    host = (base_url or TELEGRAM_DEFAULT_BASE_URL).rstrip("/")
+    url = f"{host}/bot{token.get_secret_value()}/getUpdates"
+    payload: dict[str, Any] = {"limit": _GET_UPDATES_LIMIT, "timeout": 0}
+    if offset > 0:
+        payload["offset"] = offset
+    http = client if client is not None else httpx.Client(timeout=timeout)
+    try:
+        data = request_json(
+            http,
+            "POST",
+            url,
+            payload=payload,
+            adapter="telegram",
+            timeout=timeout,
+            max_attempts=1,
+            sleep=lambda _seconds: None,
+        )
+    finally:
+        if client is None:
+            http.close()
+
+    if data.get("ok") is False:
+        raise MessengerError(
+            f"telegram: the API reports an error (error_code={data.get('error_code')!r})."
+        )
+
+    updates = data.get("result")
+    if not isinstance(updates, list):
+        return (), offset
+
+    found: list[str] = []
+    highest = offset - 1 if offset > 0 else -1
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        update_id = update.get("update_id")
+        if isinstance(update_id, int):
+            highest = max(highest, update_id)
+        message = update.get("message")
+        if not isinstance(message, dict):
+            continue
+        chat = message.get("chat")
+        seen_chat = chat.get("id") if isinstance(chat, dict) else None
+        if str(seen_chat) != str(chat_id):
+            continue
+        text = message.get("text")
+        if not isinstance(text, str):
+            continue
+        # Erstes Wort, kleingeschrieben, ohne @botname-Anhang (Telegram hängt den in
+        # Gruppen an). Der Rest der Nachricht wird nicht einmal angesehen.
+        word = text.strip().split(maxsplit=1)[0].lower() if text.strip() else ""
+        word = word.split("@", 1)[0]
+        if word in COMMANDS:
+            found.append(word)
+
+    return tuple(found), (highest + 1 if highest >= 0 else offset)

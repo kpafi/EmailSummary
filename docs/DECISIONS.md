@@ -1868,3 +1868,42 @@
 - Konsequenzen: `[llm] model` ist nur noch Pflicht, wenn ein echter Provider gewählt ist
   (Validator in `config.py`). Wer den Modus produktiv nutzt, bekommt Auszüge statt
   Zusammenfassungen — das steht so in README und in jeder erzeugten Nachricht.
+
+
+## ADR-077: Fernauslösung aus dem Messenger — feste Befehle statt Dialog
+- Status: accepted
+- WP / Datum: Nachlauf zum Feldtest, 2026-09-09
+- Kontext: Der Nutzer wollte vom Handy aus einen Abruf anstoßen, statt auf das
+  Poll-Intervall zu warten. Bis hierher war die Zustellung eine Einbahnstraße; PLAN §7 und
+  REQUIREMENTS §4 schlossen „Antwort-/Aktions-Funktionen aus dem Messenger" ausdrücklich
+  aus, mit der Begründung „würde Rechte erfordern". Die Frage ist also nicht, ob es
+  technisch geht (`getUpdates` wird beim Einrichten längst benutzt), sondern wie viel
+  Macht dieser Kanal bekommt.
+- Entscheidung: Ein **opt-in** Befehlskanal mit maximal schmaler Befugnis.
+  `[messenger.telegram] accept_commands` ist ab Werk `false`. Eingeschaltet nimmt `run`
+  ausschließlich die feste Wortliste `{"/digest", "/status"}` entgegen, und nur aus dem
+  konfigurierten `chat_id`. `/digest` löst genau einen zusätzlichen Abrufzyklus aus,
+  `/status` schickt einen aus Code und Zählwerten gebauten Kurzbericht. Jeder andere Text
+  wird verworfen — nicht beantwortet, nicht protokolliert, nicht an ein Modell gegeben.
+- Warum das die Invarianten nicht antastet: Die neue Befugnis lautet „jetzt abrufen", sonst
+  nichts. Mails nehmen unverändert denselben Weg durch Sanitizer, Summarizer, Kritiker und
+  Output-Sanitizer. Es gelangt kein fremder Text in einen Prompt (I2/I8 unberührt), keine
+  Modellausgabe steuert eine Aktion (I4), und die Antwort auf `/status` durchläuft
+  `compose_plain` und damit denselben Ausgabe-Sanitizer wie jede Nachricht (I3).
+- Absicherungen im Einzelnen: Nur das erste Wort der Nachricht wird angesehen, der Rest
+  nicht einmal gelesen; ein `@botname`-Anhang wird abgetrennt (Telegram hängt ihn in
+  Gruppen an); Nachrichten aus fremden Chats fallen weg, bevor der Text betrachtet wird;
+  die zuletzt gesehene `update_id` liegt in der `meta`-Tabelle, damit ein Neustart keine
+  alten Befehle erneut ausführt; mehrere `/digest` in einem Zyklus lösen genau einen
+  zusätzlichen Durchlauf aus, damit ein Tastendruck-Gewitter kein LLM-Kontingent verbrennt;
+  ein Fehler beim Abfragen stoppt den Betrieb nie.
+- Alternativen: (a) Alles beim Alten lassen und stattdessen einen systemd-Timer nutzen —
+  weiterhin die Variante mit der kleinsten Angriffsfläche, im README als solche benannt.
+  (b) Freien Text an den Bot erlauben („fasse die Mail von gestern zusammen") — verworfen:
+  Damit gelangte beliebiger Text ins Modell und dessen Antwort steuerte, was geschieht.
+  Das ist genau die Kopplung, die dieses Werkzeug vermeidet; I2 und I4 müssten dafür neu
+  gefasst werden.
+- Konsequenzen: REQUIREMENTS §4 wird eingeschränkt statt gestrichen — der Ausschluss gilt
+  weiter für Dialog und Aktionen, nicht mehr für die feste Befehlsliste. Wer den Kanal
+  einschaltet, gibt jedem, der in diesen Chat schreiben kann, die Möglichkeit, Abrufe
+  auszulösen (und damit Modellkosten zu verursachen). Deshalb opt-in.

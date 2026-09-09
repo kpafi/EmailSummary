@@ -8,6 +8,7 @@ Output-Sanitisierung (ADR-049) und die tägliche Digest-Planung (F-SUM-5).
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -476,3 +477,93 @@ def test_signal_handlers_are_installed_and_restored() -> None:
             signal_module.getsignal(signal_module.SIGINT),
             signal_module.getsignal(signal_module.SIGTERM),
         ) == before
+
+
+# --- Fernauslösung aus dem Messenger (ADR-077) ------------------------------------------------
+
+
+def _commands_config(*, accept: bool) -> Config:
+    return load_config_from_dict(
+        {
+            "general": {},
+            "imap": {"host": "imap.example.org", "username": "mirror@example.org"},
+            "llm": {"model": "modell", "api_key": "sk-test"},
+            "messenger": {
+                "active": "telegram",
+                "telegram": {"token": "1:abc", "chat_id": "42", "accept_commands": accept},
+            },
+        },
+        env={},
+    )
+
+
+def _runner_with_commands(db: StateDB, config: Config, found: tuple[str, ...]) -> Runner:
+    calls: list[dict[str, Any]] = []
+
+    def fake_poll(**kwargs: Any) -> tuple[tuple[str, ...], int]:
+        calls.append(kwargs)
+        return found, int(kwargs.get("offset", 0)) + len(found)
+
+    runner = build_runner(
+        config,
+        db=db,
+        summarizer=_StubSummarizer(),
+        critic=_StubCritic(),
+        messenger=SendingMessenger(),
+        sleep=lambda _seconds: None,
+    )
+    runner.commands = fake_poll
+    runner.command_calls = calls  # type: ignore[attr-defined]
+    return runner
+
+
+def test_befehle_werden_ohne_freischaltung_nicht_abgefragt(tmp_path: Path) -> None:
+    """Ab Werk bleibt die Zustellung eine Einbahnstraße (ADR-077)."""
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _runner_with_commands(db, _commands_config(accept=False), ("/digest",))
+        assert runner.poll_commands_once() == ()
+        assert runner.command_calls == []  # type: ignore[attr-defined]
+
+
+def test_freigeschaltet_werden_befehle_geholt_und_der_offset_gemerkt(tmp_path: Path) -> None:
+    """Der Offset überlebt Neustarts — sonst liefe ein alter Befehl erneut."""
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _runner_with_commands(db, _commands_config(accept=True), ("/digest",))
+        assert runner.poll_commands_once() == ("/digest",)
+        assert db.meta_get("telegram_command_offset") == "1"
+        # Zweiter Aufruf startet beim gemerkten Offset.
+        runner.poll_commands_once()
+        assert runner.command_calls[1]["offset"] == 1  # type: ignore[attr-defined]
+
+
+def test_digest_verlangt_einen_zyklus_status_nicht(tmp_path: Path) -> None:
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _runner_with_commands(db, _commands_config(accept=True), ())
+        assert runner.handle_command("/digest") is True
+        assert runner.handle_command("/status") is False
+
+
+def test_status_meldet_zahlen_und_keinen_fremdtext(tmp_path: Path) -> None:
+    """Die Antwort entsteht vollständig aus Code und Zählwerten."""
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _runner_with_commands(db, _commands_config(accept=True), ())
+        runner.handle_command("/status")
+        sent = runner.outbox._messenger.sent  # type: ignore[attr-defined]
+        assert sent, "Statusmeldung wurde nicht zugestellt"
+        text = "\n".join(sent[-1].parts)
+        assert "MailDigest is running" in text
+        assert "INBOX" in text
+
+
+def test_fehler_beim_abfragen_stoppt_den_betrieb_nicht(tmp_path: Path) -> None:
+    """Die Zustellung ist die Hauptaufgabe; die Fernauslösung nur Bequemlichkeit."""
+    from maildigest.messenger.base import MessengerError
+
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _runner_with_commands(db, _commands_config(accept=True), ())
+
+        def boom(**kwargs: Any) -> tuple[tuple[str, ...], int]:
+            raise MessengerError("telegram down")
+
+        runner.commands = boom
+        assert runner.poll_commands_once() == ()

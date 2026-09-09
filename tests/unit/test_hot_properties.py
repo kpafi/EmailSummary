@@ -509,3 +509,19 @@ def test_composed_message_keeps_exactly_the_composer_structure(
     assert sum(1 for line in lines if line.startswith("From: ")) == 1
     assert sum(1 for line in lines if line.startswith("🔍 Notes: ")) <= 1
     assert not any(line.startswith("⚠️") for line in lines)
+
+
+def test_ht13_ketten_von_zeilen_markdown_ueberleben_nicht() -> None:
+    """HT-13: Jede Runde entfernt nur einen Marker — drei reichten nicht.
+
+    Gefunden von der Property unten mit `⚠️# # #`: Das Struktur-Emoji verschiebt den
+    Zeilenanfang um eine Runde, danach blieb bei drei Runden ein `#` stehen.
+    """
+    from maildigest.output.sanitizer import scrub_plain
+
+    for payload in ("⚠️# # #", "# " * 10 + "x", "⚠️" * 5 + "# " * 5, "> > > > zitat"):
+        result = scrub_plain(payload)
+        for line in result.splitlines():
+            assert not line.lstrip().startswith(("#", ">", "-#")), (
+                f"{payload!r} hinterließ {line!r}"
+            )

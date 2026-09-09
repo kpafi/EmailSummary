@@ -347,7 +347,7 @@ _KEY_ORDER: dict[str, tuple[str, ...]] = {
     "summarizer": ("instructions",),
     "links": ("footnote",),
     "messenger": ("active",),
-    "messenger.telegram": ("token", "chat_id"),
+    "messenger.telegram": ("token", "chat_id", "accept_commands"),
     "messenger.discord": ("webhook_url",),
     "messenger.signal": ("enabled", "signal_cli_socket"),
     "limits": (
@@ -391,6 +391,7 @@ _KEY_COMMENTS: dict[str, str] = {
     "llm.provider": "none (no model) | anthropic | openai_compatible",
     "llm.base_url": "only for openai_compatible / local servers",
     "messenger.active": "telegram | discord | signal",
+    "messenger.telegram.accept_commands": "accept /digest and /status from your chat",
 }
 
 #: Auskommentierte Platzhalter für Felder ohne Default (Pflichtfelder) und für Secrets.

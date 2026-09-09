@@ -54,7 +54,9 @@ from maildigest.ingest.imap_client import (
 )
 from maildigest.llm.base import LLMRateLimited, LLMTimeout, LLMTransportError
 from maildigest.logging_setup import traceback_enabled
+from maildigest.messenger.base import MessengerError
 from maildigest.messenger.factory import build_messenger
+from maildigest.messenger.telegram import poll_commands
 from maildigest.models import CriticVerdict, RawMail, SanitizedMail, Summary
 from maildigest.output.composer import DigestComposer, LowDigestItem
 from maildigest.output.sanitizer import scrub_field, scrub_plain
@@ -84,6 +86,9 @@ __all__ = [
 ]
 
 logger = logging.getLogger("maildigest.runner")
+
+#: `meta`-Schlüssel für die zuletzt gesehene Telegram-`update_id` + 1 (ADR-077).
+_META_COMMAND_OFFSET = "telegram_command_offset"
 
 #: Versuche je LLM-Stufe (docs/ARCHITECTURE.md §6: „3 Versuche, dann fail-closed").
 LLM_MAX_ATTEMPTS: Final = 3
@@ -249,6 +254,8 @@ class Runner:
     ingest: IngestService
     now: Callable[[], datetime] = datetime.now
     sleep: Callable[[float], None] | None = None
+    #: Befehlsabfrage (ADR-077); injizierbar, damit Tests ohne Netz auskommen.
+    commands: Callable[..., tuple[tuple[str, ...], int]] = poll_commands
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     #: Zustellungen, die schon beim ersten Versuch durchgingen und deshalb nie in
     #: `outbox.flush()` auftauchen (siehe :meth:`take_direct_delivery_stats`).
@@ -432,6 +439,63 @@ class Runner:
         stats.delivery = stats.delivery + self.take_direct_delivery_stats()
         return stats
 
+    # --- Befehle aus dem Messenger (opt-in, ADR-077) --------------------------------
+
+    def _commands_enabled(self) -> bool:
+        """Ob Befehle angenommen werden — dreifach abgesichert."""
+        telegram = self.config.messenger.telegram
+        return (
+            self.config.messenger.active == "telegram"
+            and telegram.accept_commands
+            and telegram.token is not None
+            and bool(telegram.chat_id)
+        )
+
+    def poll_commands_once(self) -> tuple[str, ...]:
+        """Holt neue Befehle und merkt sich den Telegram-Offset über Neustarts hinweg.
+
+        Ein Fehler beim Abfragen darf den Betrieb nie stoppen: Die Zustellung ist die
+        Hauptaufgabe, die Fernauslösung nur Bequemlichkeit.
+        """
+        if not self._commands_enabled():
+            return ()
+        telegram = self.config.messenger.telegram
+        assert telegram.token is not None  # von `_commands_enabled` sichergestellt
+        stored = self.db.meta_get(_META_COMMAND_OFFSET)
+        offset = int(stored) if stored and stored.isdigit() else 0
+        try:
+            found, new_offset = self.commands(
+                token=telegram.token, chat_id=telegram.chat_id, offset=offset
+            )
+        except MessengerError as exc:
+            logger.warning("command_poll_failed", extra={"error": type(exc).__name__})
+            return ()
+        if new_offset != offset:
+            self.db.meta_set(_META_COMMAND_OFFSET, str(new_offset))
+        if found:
+            logger.info("commands_received", extra={"count": len(found)})
+        return found
+
+    def handle_command(self, command: str) -> bool:
+        """Führt einen Befehl aus der festen Liste aus.
+
+        Returns:
+            True, wenn danach ein Abrufzyklus fällig ist (`/digest`).
+        """
+        if command == "/status":
+            pending = self.outbox.pending
+            queued = len(self.db.low_digest_entries())
+            text = (
+                f"MailDigest is running. Folder: {self.config.imap.folder}. "
+                f"{pending} message(s) waiting to be delivered, "
+                f"{queued} mail(s) collected for the daily digest."
+            )
+            # Der Text stammt vollständig aus Code und Zahlen; er läuft trotzdem durch
+            # denselben Ausgabe-Sanitizer wie jede andere Nachricht (I3).
+            self.outbox.send(self.composer.compose_plain(text))
+            return False
+        return command == "/digest"
+
     def run_forever(self, *, handle_signals: bool = True) -> RunStats:
         """Dauerbetrieb bis SIGINT/SIGTERM oder :meth:`stop`.
 
@@ -471,6 +535,13 @@ class Runner:
                 if self.maybe_send_low_digest():
                     total.low_digests += 1
                 total.delivery = total.delivery + self.take_direct_delivery_stats()
+
+                # Auf Zuruf sofort noch einmal abrufen, statt das Poll-Intervall
+                # abzuwarten. Mehrere `/digest` in einem Zyklus lösen genau einen
+                # zusätzlichen Durchlauf aus — sonst könnte ein Tastendruck-Gewitter
+                # das LLM-Kontingent verbrennen.
+                if any(self.handle_command(command) for command in self.poll_commands_once()):
+                    continue
                 self._wait(float(self.config.imap.poll_interval_seconds))
             logger.info(
                 "runner_stopped",

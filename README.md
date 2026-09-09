@@ -232,6 +232,37 @@ Angebliche Zahlungsaufforderung des Chefs, Überweisung noch heute.
 🔍 Hinweise: Antwortadresse weicht vom Absender ab
 ```
 
+## Vom Handy aus anstoßen (optional)
+
+Standardmäßig ist die Zustellung eine Einbahnstraße: MailDigest schickt Nachrichten, nimmt
+aber keine entgegen. Wer den Abruf per Telegram auslösen will, schaltet das ausdrücklich
+frei:
+
+```toml
+[messenger.telegram]
+accept_commands = true
+```
+
+Danach reagiert `maildigest run` auf genau zwei Wörter aus **deinem** Chat:
+
+| Befehl | Wirkung |
+|---|---|
+| `/digest` | Ruft sofort ab, statt das Poll-Intervall abzuwarten |
+| `/status` | Kurzbericht: gelesener Ordner, wartende Zustellungen, gesammelte Mails |
+
+**Was dieser Kanal ausdrücklich nicht kann:** Es gibt keinen Dialog. Schreibst du etwas
+anderes — auch „fasse mir die Mail von gestern zusammen" —, wird es verworfen, ohne es zu
+lesen, zu beantworten oder an das Sprachmodell zu geben. Das ist Absicht: Beliebiger Text
+in ein Sprachmodell, dessen Antwort dann Aktionen steuert, ist genau die Kopplung, die
+dieses Werkzeug vermeidet.
+
+Bedenke vor dem Einschalten: Wer in diesen Chat schreiben kann, kann Abrufe auslösen — und
+damit Kosten beim Modellanbieter verursachen. Deshalb ist es ab Werk aus.
+
+**Die Alternative ohne jeden Rückkanal:** Lass MailDigest per systemd-Timer oder Cron
+laufen (siehe [docs/BETRIEB.md](docs/BETRIEB.md)). Dann hast du die Zusammenfassungen
+ohnehin auf dem Handy, ohne dass von außen irgendetwas hereinreicht.
+
 ## Anpassen
 
 In der `config.toml`:

@@ -304,6 +304,19 @@ Adapter, die bereits über `httpx.MockTransport` in ihren eigenen Tests abgedeck
 | `tests/unit/test_hot_cli_robustness.py` | Kaputte Config, fehlende Rechte, keine Secrets in Fehlermeldungen |
 | `tests/unit/test_hot_sanitize_error_paths.py` | Defensive Zweige des Sanitizers und der PDF-Kindprozess |
 
+### HT-13: Ketten von Zeilen-Markdown überlebten den Scrub
+- Severity: **low**
+- Modul: `output/sanitizer.py` (`scrub_plain`, Rundenzahl)
+- Beschreibung: Gefunden vom Property-Test mit `⚠️# # #`. Jede Runde entfernt nur **einen**
+  Marker je Zeile, und ein vorangestelltes Struktur-Emoji verschiebt den Zeilenanfang um
+  eine weitere Runde — bei drei Runden blieb ein `#` stehen. Ein alleinstehendes `#`
+  rendert zwar keine Überschrift, die zugesicherte Eigenschaft („kein Zeilenanfangs-Markdown
+  überlebt") galt aber nicht mehr.
+- Fix: eigene, großzügige Rundenzahl für diesen Schritt (`_MAX_LINE_MARKUP_ROUNDS = 12`)
+  statt der gemeinsamen 3. Regression: `test_ht13_ketten_von_zeilen_markdown_ueberleben_nicht`.
+- Herkunft: Der Fall tauchte erst Monate nach WP10 auf — die Property zieht bei jedem Lauf
+  neue Beispiele. Genau dafür ist sie da.
+
 ## 6. Findings-Log (Cold-Testing)
 
 Durchlauf WP11, 2026-09-08. Der vollständige Blackbox-Report mit Repro-Schritten,

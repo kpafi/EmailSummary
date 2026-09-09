@@ -64,6 +64,10 @@ SIGNAL_MAX_PART_CHARS = 2000
 #: Maximale Runden beim Auflösen von HTML-Entities bzw. beim Tag-Strip.
 _MAX_ROUNDS = 3
 
+#: Runden für Zeilenanfangs-Markdown. Höher als :data:`_MAX_ROUNDS`, weil jede Runde nur
+#: einen Marker je Zeile entfernt und Struktur-Emojis den Anfang zusätzlich verschieben.
+_MAX_LINE_MARKUP_ROUNDS = 12
+
 #: Zeichen, die Struktur/Formatierung erzeugen können und in untrusted Text nichts zu
 #: suchen haben. `[`/`]` fallen mit, damit niemand einen Sanitizer-Marker fälschen kann
 #: und `[text](ziel)` nicht als Markdown-Link zusammenfindet. `_` steht **nicht** in dieser
@@ -289,7 +293,11 @@ def neutralize_markup(text: str) -> str:
     """
     cleaned = _RE_UNDERSCORE_EDGE.sub("", _RE_UNDERSCORE_RUN.sub("_", text))
     cleaned = _RE_MASS_MENTION.sub(r"(at)\1", cleaned)
-    for _ in range(_MAX_ROUNDS):
+    # Bis zum Fixpunkt: Jede Runde entfernt genau einen Marker je Zeile, und ein
+    # vorangestelltes Struktur-Emoji verschiebt den Zeilenanfang um eine weitere Runde.
+    # `⚠️# # #` brauchte deshalb vier — bei drei blieb ein `#` stehen (HT-13). Die Schranke
+    # ist großzügig statt knapp; sie begrenzt nur den Aufwand, nicht die Wirkung.
+    for _ in range(_MAX_LINE_MARKUP_ROUNDS):
         stripped = _RE_LINE_MARKUP.sub(_neutralize_line_markup, cleaned)
         stripped = _RE_STRUCTURE_EMOJI.sub("", stripped)
         if stripped == cleaned:
