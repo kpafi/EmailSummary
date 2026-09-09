@@ -21,7 +21,7 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from maildigest.llm._http import post_json
+from maildigest.llm._http import body_error_suffix, post_json
 from maildigest.llm.base import (
     DEFAULT_TIMEOUT_SECONDS,
     MAX_ATTEMPTS,
@@ -137,7 +137,7 @@ class AnthropicProvider:
             max_attempts=self._max_attempts,
             sleep=self._sleep,
         )
-        return _extract_text(data)
+        return _extract_text(data, reveal=self._reveal_error_details)
 
     def close(self) -> None:
         """Schließt den intern erzeugten httpx-Client; injizierte Clients bleiben offen."""
@@ -145,7 +145,7 @@ class AnthropicProvider:
             self._client.close()
 
 
-def _extract_text(data: dict[str, Any]) -> str:
+def _extract_text(data: dict[str, Any], *, reveal: bool = False) -> str:
     """Setzt die `text`-Blöcke der Antwort zusammen.
 
     Andere Blocktypen (z. B. `thinking`) werden ignoriert. Fehlt jeder Textblock, ist die
@@ -156,6 +156,7 @@ def _extract_text(data: dict[str, Any]) -> str:
     if not isinstance(blocks, list):
         raise LLMInvalidResponse(
             "anthropic: the response has no `content` field with a block list."
+            + body_error_suffix(data, reveal=reveal)
         )
     parts = [
         block["text"]

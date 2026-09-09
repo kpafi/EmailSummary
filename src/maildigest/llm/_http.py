@@ -202,3 +202,30 @@ def post_json(
     raise LLMTransportError(
         f"{provider}: request failed (HTTP {last_status}, type {last_error_type}).{detail}"
     )
+
+
+def body_error_suffix(data: dict[str, Any], *, reveal: bool) -> str:
+    """Beschreibt ein Fehler-Objekt, das mit HTTP 200 im Antwortkörper steckt.
+
+    Nicht jeder Anbieter meldet Fehler über den Statuscode: OpenRouter antwortet in
+    manchen Lagen mit `200` und `{"error": {"message": ..., "code": ...}}` im Körper. Ohne
+    diese Auswertung bliebe davon nur „die Antwort hat kein `choices`" übrig — formal
+    richtig und praktisch nutzlos.
+
+    Wie bei :func:`_provider_error_message` wandert der Klartext nur in die Meldung, wenn
+    `reveal` gesetzt ist (Verbindungstest, inhaltsfreie Anfrage — I5).
+
+    Returns:
+        Einen anhängbaren Satz, oder `""`, wenn kein Fehler-Objekt vorliegt.
+    """
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return ""
+    code = error.get("code")
+    suffix = f" The provider reported an error in the response body (code {code!r})."
+    if not reveal:
+        return suffix
+    message = error.get("message")
+    if isinstance(message, str) and message.strip():
+        return f'{suffix} It says: "{" ".join(message.split())[:300]}"'
+    return suffix

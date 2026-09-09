@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from maildigest.llm._http import post_json
+from maildigest.llm._http import body_error_suffix, post_json
 from maildigest.llm.base import (
     DEFAULT_TIMEOUT_SECONDS,
     MAX_ATTEMPTS,
@@ -131,7 +131,7 @@ class OpenAICompatibleProvider:
             max_attempts=self._max_attempts,
             sleep=self._sleep,
         )
-        return _extract_text(data)
+        return _extract_text(data, reveal=self._reveal_error_details)
 
     def close(self) -> None:
         """Schließt den intern erzeugten httpx-Client; injizierte Clients bleiben offen."""
@@ -139,12 +139,13 @@ class OpenAICompatibleProvider:
             self._client.close()
 
 
-def _extract_text(data: dict[str, Any]) -> str:
+def _extract_text(data: dict[str, Any], *, reveal: bool = False) -> str:
     """Liest `choices[0].message.content` und behandelt jede Abweichung als ungültig."""
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise LLMInvalidResponse(
             "openai_compatible: the response has no `choices`."
+            + body_error_suffix(data, reveal=reveal)
         )
     first = choices[0]
     message = first.get("message") if isinstance(first, dict) else None

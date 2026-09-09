@@ -482,3 +482,55 @@ def test_anbietertext_wird_gekuerzt_und_einzeilig_gemacht() -> None:
     message = str(excinfo.value)
     assert "\n" not in message
     assert len(message) < 450
+
+
+def _body_error_transport(payload: dict[str, object]) -> httpx.MockTransport:
+    """HTTP 200 mit einem Fehler-Objekt im Körper — die OpenRouter-Eigenart."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    return httpx.MockTransport(handler)
+
+
+def test_fehler_im_koerper_wird_erkannt_statt_verschluckt() -> None:
+    """OpenRouter meldet manche Fehler mit HTTP 200 im Antwortkörper.
+
+    Ohne diese Auswertung blieb davon nur „die Antwort hat kein `choices`" übrig — formal
+    richtig, aber für die Fehlersuche wertlos.
+    """
+    payload = {"error": {"message": "No endpoints found matching your data policy", "code": 404}}
+    client = httpx.Client(transport=_body_error_transport(payload))
+    provider = OpenAICompatibleProvider(model="m", client=client, max_attempts=1)
+
+    with pytest.raises(LLMInvalidResponse) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    message = str(excinfo.value)
+    assert "error in the response body" in message
+    assert "404" in message
+    # Ohne Freigabe bleibt der Klartext des Anbieters außen vor (I5).
+    assert "data policy" not in message
+
+
+def test_fehler_im_koerper_wird_beim_verbindungstest_ausgeschrieben() -> None:
+    """Beim inhaltsfreien Testaufruf ist genau dieser Satz die gesuchte Auskunft."""
+    payload = {"error": {"message": "No endpoints found matching your data policy", "code": 404}}
+    client = httpx.Client(transport=_body_error_transport(payload))
+    provider = OpenAICompatibleProvider(
+        model="m", client=client, max_attempts=1, reveal_error_details=True
+    )
+
+    with pytest.raises(LLMInvalidResponse) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    assert "No endpoints found matching your data policy" in str(excinfo.value)
+
+
+def test_gueltige_antwort_bleibt_unberuehrt() -> None:
+    """Der neue Zweig darf den Normalfall nicht anfassen."""
+    payload = {"choices": [{"message": {"content": "OK"}}]}
+    client = httpx.Client(transport=_body_error_transport(payload))
+    provider = OpenAICompatibleProvider(model="m", client=client, max_attempts=1)
+
+    assert provider.complete("s", "u", max_tokens=8) == "OK"
