@@ -101,15 +101,15 @@ def test_anleitung_wird_auf_terminalbreite_umbrochen() -> None:
 def test_gmail_anleitung_nennt_die_tatsaechliche_ursache() -> None:
     """Der konkrete Fall, an dem ein Nutzer hängen blieb."""
     guide = providers.setup_guide(providers.PROVIDERS[0])
-    assert "App-Passwort" in guide
-    assert "zwei Schritten" in guide  # 2FA ist Voraussetzung
+    assert "app password" in guide
+    assert "2-Step Verification" in guide  # 2FA ist Voraussetzung
     assert "myaccount.google.com/apppasswords" in guide
 
 
 def test_gmx_anleitung_nennt_die_freischaltung() -> None:
     """Bei GMX/WEB.DE ist IMAP ab Werk aus — ohne diesen Hinweis sucht man am Passwort."""
     guide = providers.setup_guide(providers.find_by_host("imap.gmx.net"))
-    assert "freischalten" in guide
+    assert "Switch IMAP on first" in guide
     assert "POP3/IMAP" in guide
 
 
@@ -119,13 +119,13 @@ def test_gmx_anleitung_nennt_die_freischaltung() -> None:
 def test_hinweis_bei_bekanntem_anbieter_enthaelt_die_anleitung() -> None:
     hint = providers.auth_failure_hint("imap.gmail.com")
     assert "Gmail" in hint
-    assert "App-Passwort" in hint
+    assert "app password" in hint
 
 
 def test_hinweis_bei_unbekanntem_anbieter_bleibt_allgemein() -> None:
     """Ohne Wissen wird nicht geraten, aber die häufigste Ursache genannt."""
     hint = providers.auth_failure_hint("mail.firma-xy.example")
-    assert "App-Passwort" in hint
+    assert "app password" in hint
     assert "firma-xy" not in hint
 
 
@@ -144,7 +144,7 @@ def test_connect_mail_lehnt_outlook_mit_begruendung_ab(tmp_path) -> None:
     )
     assert code == EXIT_USAGE
     assert "LOGINDISABLED" in err
-    assert "weiterleiten" in err  # der Ausweg wird genannt
+    assert "forward" in err  # der Ausweg wird genannt
 
 
 def test_connect_mail_uebersetzt_die_mailadresse_in_den_host(tmp_path) -> None:
@@ -159,7 +159,7 @@ def test_connect_mail_uebersetzt_die_mailadresse_in_den_host(tmp_path) -> None:
         ]
     )
     assert "imap.gmail.com" in out
-    assert "App-Passwort" in out
+    assert "app password" in out
     assert code in {0, EXIT_USAGE}  # ohne gesetztes Env-Passwort ist 2 zulässig
 
 

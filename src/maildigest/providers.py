@@ -81,8 +81,8 @@ class Provider:
         return (self.imap_host, *self.hosts, *self.domains)
 
 
-_APP_PASSWORD = "ein App-Passwort (nicht dein Kontopasswort)"
-_ACCOUNT_PASSWORD = "dein normales Kontopasswort"
+_APP_PASSWORD = "an app password (not your account password)"
+_ACCOUNT_PASSWORD = "your normal account password"
 
 PROVIDERS: tuple[Provider, ...] = (
     Provider(
@@ -92,52 +92,52 @@ PROVIDERS: tuple[Provider, ...] = (
         password_kind=_APP_PASSWORD,
         domains=("gmail.com", "googlemail.com"),
         steps=(
-            "Bestätigung in zwei Schritten aktivieren — ohne sie bietet Google gar keine "
-            "App-Passwörter an: myaccount.google.com → Sicherheit.",
-            "App-Passwort erzeugen: myaccount.google.com/apppasswords (Name frei wählbar).",
-            "Die 16 Zeichen ohne Leerzeichen als Passwort verwenden.",
+            "Turn on 2-Step Verification first — without it Google does not offer app "
+            "passwords at all: myaccount.google.com -> Security.",
+            "Create an app password: myaccount.google.com/apppasswords (name it anything).",
+            "Use those 16 characters, without the spaces, as the password.",
         ),
         setup_url="https://myaccount.google.com/apppasswords",
         note=(
-            "Das Google-Kontopasswort wird für IMAP seit Abschaltung der „weniger sicheren "
-            "Apps\" abgelehnt — das ist der häufigste Grund für „Anmeldung fehlgeschlagen\"."
+            "Google stopped accepting the account password for IMAP when it removed "
+            '"less secure apps" — this is by far the most common cause of '
+            '"authentication failed" when host and username look correct.'
         ),
     ),
     Provider(
         key="outlook",
         name="Outlook.com / Hotmail / Live",
         imap_host="outlook.office365.com",
-        password_kind="— hier gibt es keins, das funktioniert",
+        password_kind="- there is none that works",
         hosts=("outlook.office365.com", "imap-mail.outlook.com", "outlook.com"),
         domains=("outlook.com", "outlook.de", "hotmail.com", "hotmail.de", "live.com", "live.de"),
         supported=False,
         unsupported_reason=(
-            "Microsoft hat die Passwort-Anmeldung für IMAP abgeschaltet; der Server meldet "
-            "ausdrücklich LOGINDISABLED und akzeptiert nur noch OAuth2. MailDigest kann kein "
-            "OAuth2 — mit einem Outlook.com-Postfach ist keine Verbindung möglich, auch nicht "
-            "mit einem App-Passwort."
+            "Microsoft turned off password authentication for IMAP; the server explicitly "
+            "reports LOGINDISABLED and accepts OAuth2 only. MailDigest cannot do OAuth2, so "
+            "an Outlook.com mailbox cannot be connected at all — not even with an app password."
         ),
         note=(
-            "Ausweg: ein Spiegel-Postfach bei einem anderen Anbieter anlegen und Outlook.com "
-            "dorthin weiterleiten lassen. Dein Outlook-Konto bleibt dabei unangetastet."
+            "Way around it: create the mirror mailbox at a different provider and have "
+            "Outlook.com forward to it. Your Outlook account stays untouched."
         ),
     ),
     Provider(
         key="gmx",
         name="GMX",
         imap_host="imap.gmx.net",
-        password_kind="dein Kontopasswort — oder ein App-Passwort, falls 2FA aktiv ist",
+        password_kind="your account password — or an app password if you use 2FA",
         hosts=("imap.gmx.net", "imap.gmx.com", "imap.gmx.de"),
         domains=("gmx.de", "gmx.net", "gmx.at", "gmx.ch", "gmx.com"),
         steps=(
-            "IMAP zuerst freischalten — das ist bei GMX ab Werk AUS: im Browser einloggen → "
-            "E-Mail-Einstellungen → „POP3/IMAP\" → Zugriff erlauben.",
-            "Nur falls Zwei-Faktor-Anmeldung aktiv ist: Account verwalten → Login & Sicherheit "
-            "→ „Anwendungsspezifische Passwörter verwalten\" → neues Passwort erzeugen.",
+            "Switch IMAP on first — it is OFF by default at GMX: log in via the browser, "
+            'then Email settings -> "POP3/IMAP" -> allow access.',
+            "Only if two-factor login is active: Manage account -> Login & Security -> "
+            '"Manage application-specific passwords" -> create a new one.',
         ),
         note=(
-            "Ohne den Schalter „POP3/IMAP-Zugriff erlauben\" scheitert die Anmeldung, obwohl "
-            "Benutzername und Passwort stimmen."
+            'Without the "allow POP3/IMAP access" switch the login fails even though '
+            "username and password are correct."
         ),
         good_for_mirror=True,
     ),
@@ -145,15 +145,15 @@ PROVIDERS: tuple[Provider, ...] = (
         key="webde",
         name="WEB.DE",
         imap_host="imap.web.de",
-        password_kind="dein Kontopasswort — oder ein App-Passwort, falls 2FA aktiv ist",
+        password_kind="your account password — or an app password if you use 2FA",
         domains=("web.de",),
         steps=(
-            "IMAP zuerst freischalten (ab Werk AUS): im Browser einloggen → Einstellungen → "
-            "„POP3/IMAP Abruf\" → Zugriff erlauben.",
-            "Nur bei aktiver Zwei-Faktor-Anmeldung: unter Sicherheit ein anwendungs"
-            "spezifisches Passwort erzeugen.",
+            "Switch IMAP on first (OFF by default): log in via the browser, then Settings "
+            '-> "POP3/IMAP retrieval" -> allow access.',
+            "Only with two-factor login active: create an application-specific password "
+            "under Security.",
         ),
-        note="WEB.DE und GMX gehören zusammen; die Einrichtung ist identisch.",
+        note="WEB.DE and GMX belong to the same company; setup is identical.",
         good_for_mirror=True,
     ),
     Provider(
@@ -164,23 +164,38 @@ PROVIDERS: tuple[Provider, ...] = (
         hosts=("posteo.de", "imap.posteo.de"),
         domains=("posteo.de", "posteo.net", "posteo.eu", "posteo.org"),
         steps=(
-            "Nichts weiter nötig: IMAP ist ab Werk offen, das Kontopasswort genügt.",
-            "Nur falls du den „erweiterten Schutz\" eingeschaltet hast, brauchst du das dort "
-            "vergebene App-Passwort.",
+            "Nothing else to do: IMAP is open by default and the account password works.",
+            'Only if you enabled the "extended protection" option do you need the app '
+            "password set there.",
         ),
-        note="Der Host heißt schlicht posteo.de — ohne imap. davor.",
+        note="The host is simply posteo.de — no imap. in front of it.",
         good_for_mirror=True,
     ),
     Provider(
         key="mailboxorg",
         name="mailbox.org",
         imap_host="imap.mailbox.org",
-        password_kind="dein Kontopasswort — oder ein App-Passwort, falls 2FA aktiv ist",
+        password_kind="your account password — or an app password if you use 2FA",
         domains=("mailbox.org",),
         steps=(
-            "Ohne Zwei-Faktor-Anmeldung genügt das Kontopasswort.",
-            "Mit 2FA: Einstellungen → Sicherheit → „Anwendungsspezifische Passwörter\".",
+            "Without two-factor login the account password is enough.",
+            'With 2FA: Settings -> Security -> "Application-specific passwords".',
         ),
+        good_for_mirror=True,
+    ),
+    Provider(
+        key="infomaniak",
+        name="Infomaniak (ik.me)",
+        imap_host="mail.infomaniak.com",
+        password_kind=_ACCOUNT_PASSWORD,
+        domains=("ik.me", "ikmail.com", "etik.com", "infomaniak.com"),
+        steps=(
+            "Create a free account at infomaniak.com/en/free-email "
+            "(@ik.me, 20 GB, ad-free, servers in Switzerland).",
+            "The account password works; with two-factor login enabled, create an "
+            "application password in the account area.",
+        ),
+        note="The host is mail.infomaniak.com for every address variant.",
         good_for_mirror=True,
     ),
     Provider(
@@ -190,13 +205,12 @@ PROVIDERS: tuple[Provider, ...] = (
         password_kind=_APP_PASSWORD,
         domains=("icloud.com", "me.com", "mac.com"),
         steps=(
-            "Zwei-Faktor-Authentifizierung muss aktiv sein — sonst erscheint die Option gar "
-            "nicht.",
-            "App-spezifisches Passwort erzeugen: account.apple.com → Anmeldung und Sicherheit "
-            "→ „App-spezifische Passwörter\".",
+            "Two-factor authentication must be on — otherwise the option does not appear.",
+            "Create an app-specific password: account.apple.com -> Sign-In and Security -> "
+            '"App-Specific Passwords".',
         ),
         setup_url="https://account.apple.com",
-        note="Das Apple-ID-Passwort selbst wird immer abgelehnt.",
+        note="The Apple ID password itself is always rejected.",
     ),
     Provider(
         key="yahoo",
@@ -205,19 +219,19 @@ PROVIDERS: tuple[Provider, ...] = (
         password_kind=_APP_PASSWORD,
         domains=("yahoo.com", "yahoo.de", "ymail.com"),
         steps=(
-            "Kontosicherheit öffnen → „App-Passwort erzeugen\".",
-            "Das erzeugte Passwort verwenden, nicht das Kontopasswort.",
+            'Open Account Security -> "Generate app password".',
+            "Use the generated password, not the account password.",
         ),
     ),
     Provider(
         key="tonline",
         name="Telekom / T-Online",
         imap_host="secureimap.t-online.de",
-        password_kind="dein „Passwort für E-Mail-Programme\" (nicht das Telekom-Kundenpasswort)",
+        password_kind='your "password for email programs" (not the Telekom customer password)',
         domains=("t-online.de", "magenta.de"),
         steps=(
-            "Im Telekom-Kundencenter unter E-Mail-Einstellungen ein eigenes Passwort für "
-            "E-Mail-Programme vergeben und den Zugriff für E-Mail-Programme freischalten.",
+            "In the Telekom customer centre, set a separate password for email programs "
+            "under email settings and allow access for email programs.",
         ),
     ),
     Provider(
@@ -227,20 +241,23 @@ PROVIDERS: tuple[Provider, ...] = (
         password_kind=_ACCOUNT_PASSWORD,
         hosts=("imap.ionos.de", "imap.ionos.com", "imap.1und1.de"),
         domains=("ionos.de", "1und1.de"),
-        steps=("Das Passwort des jeweiligen Postfachs verwenden (nicht das Vertragskonto).",),
+        steps=("Use the password of the mailbox itself, not of the contract account.",),
     ),
     Provider(
         key="zoho",
         name="Zoho Mail",
         imap_host="imap.zoho.eu",
-        password_kind="ein App-Passwort, sobald 2FA aktiv ist",
+        password_kind="an app password once 2FA is active",
         hosts=("imap.zoho.eu", "imap.zoho.com"),
         domains=("zoho.com", "zohomail.eu"),
         steps=(
-            "IMAP im Webmail unter Mail-Konten aktivieren.",
-            "Bei aktiver 2FA ein App-Passwort erzeugen.",
+            "Enable IMAP in webmail under Mail Accounts (paid plans only).",
+            "With 2FA active, create an app password.",
         ),
-        note="Konten aus der EU nutzen imap.zoho.eu, andere imap.zoho.com.",
+        note=(
+            "Careful: the free Zoho plan no longer includes IMAP — new accounts need a paid "
+            "plan for it. Accounts in the EU use imap.zoho.eu, others imap.zoho.com."
+        ),
     ),
     Provider(
         key="fastmail",
@@ -248,48 +265,52 @@ PROVIDERS: tuple[Provider, ...] = (
         imap_host="imap.fastmail.com",
         password_kind=_APP_PASSWORD,
         domains=("fastmail.com", "fastmail.fm"),
-        steps=("Settings → Privacy & Security → „App Passwords\" → neues Passwort erzeugen.",),
+        steps=('Settings -> Privacy & Security -> "App Passwords" -> create a new one.',),
     ),
     Provider(
         key="proton",
         name="Proton Mail",
-        imap_host="127.0.0.1 (nur über die Proton-Bridge)",
-        password_kind="— mit MailDigest nicht nutzbar",
+        imap_host="127.0.0.1 (via Proton Bridge only)",
+        password_kind="- not usable with MailDigest",
         domains=("proton.me", "protonmail.com", "pm.me"),
         supported=False,
         unsupported_reason=(
-            "Proton bietet kein öffentliches IMAP an. Der Zugriff läuft über die Proton-Bridge "
-            "auf 127.0.0.1, die STARTTLS auf Port 1143 spricht — MailDigest verbindet "
-            "ausschließlich per IMAPS und lehnt Klartext-Ports ab."
+            "Proton offers no public IMAP. Access goes through Proton Bridge on 127.0.0.1, "
+            "which speaks STARTTLS on port 1143 — MailDigest connects over IMAPS only and "
+            "rejects plaintext ports."
         ),
         note=(
-            "Ausweg: Spiegel-Postfach bei einem anderen Anbieter anlegen und Proton dorthin "
-            "weiterleiten lassen."
+            "Way around it: create the mirror mailbox at a different provider and have "
+            "Proton forward to it."
         ),
     ),
 )
+
 
 _BY_TOKEN: dict[str, Provider] = {
     token.lower(): provider for provider in PROVIDERS for token in provider.match_tokens()
 }
 
 MIRROR_RECOMMENDATION = """
-Noch kein Spiegel-Postfach? Empfehlenswert sind Anbieter, bei denen IMAP ohne Umwege
-funktioniert:
+No mirror mailbox yet? These providers let IMAP work without detours:
 
-  Posteo (posteo.de)        ~1 €/Monat, IMAP ab Werk offen, Kontopasswort genügt.
-                            Der unkomplizierteste Weg — hier gibt es keine App-Passwort-
-                            und keine Freischalt-Hürde.
-  mailbox.org               ~1 €/Monat, ebenso unkompliziert.
-  GMX oder WEB.DE           kostenlos; IMAP muss aber erst in den Einstellungen
-                            freigeschaltet werden (ein Schalter, siehe Anleitung unten).
+  Free of charge
+    GMX or WEB.DE           IMAP has to be switched on once in the settings
+                            (one toggle; instructions follow below).
+    Infomaniak (@ik.me)     20 GB, ad-free, Switzerland; account password is enough.
+    Gmail                   works, but requires two-factor login and a separately
+                            created app password.
 
-Weniger geeignet: Outlook.com/Hotmail und Proton Mail — beide lassen die Anmeldung, die
-MailDigest benutzt, grundsätzlich nicht zu (Details nennt dir `connect-mail`, sobald du
-den Host einträgst).
+  A euro a month, but no hurdles at all
+    Posteo (posteo.de)      IMAP open by default, account password is enough.
+    mailbox.org             equally straightforward.
 
-Das Spiegel-Postfach ist ein reines Ablagefach: Es braucht keinen schönen Namen, und du
-liest es nie selbst. Ein neues, leeres Konto ist besser als ein bestehendes.
+Not usable: Outlook.com/Hotmail and Proton Mail refuse the kind of login MailDigest uses,
+and the free Zoho plan no longer includes IMAP. (connect-mail tells you the details as
+soon as you enter the host.)
+
+The mirror mailbox is a plain drop box: it needs no pretty name, and you never read it
+yourself. A fresh, empty account is better than an existing one.
 """.strip()
 
 
@@ -346,45 +367,45 @@ def _wrap(text: str, *, indent: str = "", first: str = "") -> str:
 
 def setup_guide(provider: Provider) -> str:
     """Die vollständige Anleitung für einen erkannten Anbieter."""
-    lines = [f"Erkannt: {provider.name}"]
+    lines = [f"Detected: {provider.name}"]
     if not provider.supported:
         lines.append("")
-        lines.append(_wrap(f"Das funktioniert mit MailDigest nicht. {provider.unsupported_reason}"))
+        lines.append(_wrap(f"This does not work with MailDigest. {provider.unsupported_reason}"))
         if provider.note:
             lines.append("")
             lines.append(_wrap(provider.note))
         return "\n".join(lines)
 
-    lines.append(_wrap(f"Ins Passwortfeld gehört: {provider.password_kind}."))
+    lines.append(_wrap(f"The password field needs: {provider.password_kind}."))
     if provider.steps:
         lines.append("")
         for number, step in enumerate(provider.steps, start=1):
             lines.append(_wrap(step, indent="     ", first=f"  {number}. "))
     if provider.setup_url:
         lines.append("")
-        lines.append(f"  Direktlink: {provider.setup_url}")
+        lines.append(f"  Direct link: {provider.setup_url}")
     if provider.note:
         lines.append("")
-        lines.append(_wrap(provider.note, indent="  ", first="  Hinweis: "))
+        lines.append(_wrap(provider.note, indent="  ", first="  Note: "))
     return "\n".join(lines)
 
 
 def auth_failure_hint(host: str) -> str:
     """Anbieterspezifischer Hinweis nach einer abgelehnten Anmeldung.
 
-    Gibt eine leere Zeichenkette zurück, wenn der Anbieter unbekannt ist — dann bleibt es
-    bei der allgemeinen Fehlermeldung, statt zu raten.
+    Gibt einen allgemeinen Hinweis zurück, wenn der Anbieter unbekannt ist — geraten wird
+    nicht, aber die mit Abstand häufigste Ursache wird trotzdem genannt.
     """
     provider = find_by_host(host)
     if provider is None:
         return (
-            "Häufigste Ursache: Der Anbieter verlangt für IMAP ein eigens erzeugtes "
-            "App-Passwort statt des Kontopassworts. Prüfe außerdem, ob IMAP für das Konto "
-            "überhaupt freigeschaltet ist."
+            "Most common cause: the provider requires a separately created app password "
+            "for IMAP instead of the account password. Also check whether IMAP is enabled "
+            "for the account at all."
         )
     if not provider.supported:
         return f"{provider.name}: {provider.unsupported_reason}"
-    return f"{provider.name} — so bekommst du gültige Zugangsdaten:\n{setup_guide(provider)}"
+    return f"{provider.name} — how to get working credentials:\n{setup_guide(provider)}"
 
 
 # --- Sprachmodell ----------------------------------------------------------------------------
@@ -394,60 +415,60 @@ def auth_failure_hint(host: str) -> str:
 # Modell stillschweigend hinter dem Rücken des Nutzers Kosten verursacht (ADR-021).
 
 LLM_ANTHROPIC_GUIDE = """
-API-Key besorgen (Anthropic)
-  1. console.anthropic.com öffnen und anmelden.
-  2. Settings → API Keys → „Create Key", den Schlüssel (beginnt mit sk-ant-) kopieren.
-  3. Unter Billing Guthaben aufladen — ohne Guthaben antwortet die API mit einem Fehler,
-     obwohl der Schlüssel gültig ist. Das ist der häufigste Stolperstein.
+Getting an API key (Anthropic)
+  1. Open console.anthropic.com and sign in.
+  2. Settings -> API Keys -> "Create Key", copy the key (it starts with sk-ant-).
+  3. Add credit under Billing — without credit the API returns an error even though the
+     key is valid. That is the most common stumbling block here.
 
-Modell-ID (Feld `model`, exakt so eintragen)
-  claude-opus-5      teuerste, stärkste Wahl        ~5 $ / 25 $ je Mio. Token
-  claude-sonnet-5    guter Mittelweg bei viel Post  ~2 $ / 10 $ je Mio. Token
-  claude-haiku-4-5   günstigste Wahl                ~1 $ /  5 $ je Mio. Token
+Model ID (field `model`, enter it exactly)
+  claude-opus-5      most capable, most expensive   ~$5 / $25 per million tokens
+  claude-sonnet-5    good middle ground for volume  ~$2 / $10 per million tokens
+  claude-haiku-4-5   cheapest                       ~$1 /  $5 per million tokens
 
-Pro Mail fallen zwei Aufrufe an (Zusammenfassung + Kritiker). Für den Kritiker lässt sich
-in der Konfiguration unter [llm.critic] ein eigenes, günstigeres Modell eintragen.
+Every mail costs two calls (summary + critic). You can give the critic its own, cheaper
+model under [llm.critic] in the configuration.
 """.strip()
 
 LLM_LOCAL_GUIDE = """
-Lokales oder OpenAI-kompatibles Modell
-  Basis-URL muss auf den API-Pfad zeigen, meist mit /v1 am Ende:
-    Ollama    http://localhost:11434/v1
-    LM Studio http://localhost:1234/v1
-    vLLM      http://localhost:8000/v1
-  Modell-ID ist der lokale Modellname (bei Ollama: `ollama list`, z. B. llama3.1).
-  Einen API-Key brauchen lokale Server in der Regel nicht — Feld einfach leer lassen.
+Local or OpenAI-compatible model
+  The base URL must point at the API path, usually ending in /v1:
+    Ollama     http://localhost:11434/v1
+    LM Studio  http://localhost:1234/v1
+    vLLM       http://localhost:8000/v1
+  The model ID is the local model name (with Ollama: `ollama list`, e.g. llama3.1).
+  Local servers usually need no API key at all — just leave the field empty.
 
-Hinweis: Der Mailinhalt verlässt bei einem lokalen Modell deinen Rechner nicht. Bei einer
-Basis-URL ohne TLS im Netz ginge er dagegen im Klartext über die Leitung.
+Note: with a local model the mail content never leaves your machine. With a base URL over
+plain HTTP on a network, it would travel in the clear.
 """.strip()
 
 # --- Messenger -------------------------------------------------------------------------------
 
 TELEGRAM_GUIDE = """
-Telegram-Bot einrichten
-  1. In Telegram @BotFather anschreiben und /newbot senden; Name und Benutzername
-     (muss auf „bot" enden) vergeben.
-  2. BotFather antwortet mit dem Token in der Form 123456789:AA... — das ist der Wert,
-     der hier abgefragt wird.
-  3. WICHTIG: Schreibe deinem neuen Bot jetzt selbst eine Nachricht (irgendetwas, z. B.
-     „hallo"). Ohne diesen ersten Schritt kennt Telegram euren Chat nicht, und die
-     Chat-ID lässt sich nicht ermitteln — ein Bot darf niemanden zuerst anschreiben.
+Setting up a Telegram bot
+  1. In Telegram, message @BotFather and send /newbot; pick a name and a username
+     (it has to end in "bot").
+  2. BotFather replies with the token, in the form 123456789:AA... — that is the value
+     asked for here.
+  3. IMPORTANT: now send your new bot a message yourself (anything, e.g. "hello").
+     Without this first step Telegram does not know your chat, and the chat ID cannot be
+     discovered — a bot is never allowed to message someone first.
 """.strip()
 
 DISCORD_GUIDE = """
-Discord-Webhook einrichten
-  1. Auf dem Zielkanal: Kanal bearbeiten → Integrationen → Webhooks → „Neuer Webhook".
-  2. „Webhook-URL kopieren" — sie sieht aus wie
-     https://discord.com/api/webhooks/<Zahlenfolge>/<langer Schlüssel>.
-  3. Diese URL ist ein Geheimnis: Wer sie hat, kann in deinen Kanal schreiben. Sie wird
-     mit Dateirechten 0600 gespeichert.
+Setting up a Discord webhook
+  1. On the target channel: Edit Channel -> Integrations -> Webhooks -> "New Webhook".
+  2. Click "Copy Webhook URL" — it looks like
+     https://discord.com/api/webhooks/<digits>/<long key>.
+  3. That URL is a secret: anyone holding it can post to your channel. It is stored with
+     file permissions 0600.
 """.strip()
 
 SIGNAL_GUIDE = """
-Signal einrichten (Zusatzaufwand)
-  Signal hat keine offene Bot-Schnittstelle. MailDigest spricht deshalb mit einem lokal
-  laufenden signal-cli im JSON-RPC-Modus, das mit deiner Nummer registriert sein muss.
-  Zugestellt wird an „Notiz an mich" — es ist bewusst der kleinste mögliche Umfang.
-  Wenn du es einfach haben willst, nimm Telegram oder Discord.
+Setting up Signal (extra effort)
+  Signal has no open bot interface. MailDigest therefore talks to a locally running
+  signal-cli in JSON-RPC mode, registered with your phone number. Messages are delivered
+  to "Note to Self" — deliberately the smallest possible scope.
+  If you want it simple, use Telegram or Discord instead.
 """.strip()
