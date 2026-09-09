@@ -81,6 +81,12 @@ class _InaccurateSummaryError(Exception):
 
 #: Bekannte Exception-Namen → grobe, stabile Fehlerklassen. Bewusst über den Klassennamen
 #: statt über Imports, damit `pipeline.py` nicht von späteren WP-Modulen abhängt.
+#: Fehlerklassen, deren Meldung **per Konstruktion** frei von Mail-Inhalt ist und deshalb
+#: protokolliert werden darf. `LLMInvalidResponse` nennt nur Feldpfade und Fehlertypen
+#: (llm/schema.py `_error_summary`) — genau die Auskunft, an der sich entscheidet, ob ein
+#: Modell schlicht ungeeignet ist. Ohne sie steht im Protokoll nur „llm_invalid_response".
+_LOGGABLE_DETAIL: frozenset[str] = frozenset({"LLMInvalidResponse"})
+
 _ERROR_CLASSES: dict[str, str] = {
     "_InaccurateSummaryError": "summary_inaccurate",
     "SanitizeError": "sanitize_error",
@@ -213,6 +219,10 @@ class FailedNotice:
     notice: FailureNotice
     notice_delivered: bool
     status: MailStatus = "failed"
+    #: Anzeigbare Ursache für das Protokoll — leer, außer bei Fehlerklassen, deren
+    #: Meldung per Konstruktion keinen Mail-Inhalt trägt (:func:`failure_detail`). Sie
+    #: gehört bewusst **nicht** in die zugestellte `FailureNotice`.
+    detail: str = ""
 
     @property
     def dedupe_key(self) -> str:
@@ -225,6 +235,17 @@ PipelineResult = Delivered | QueuedLow | FailedNotice
 
 
 # --- Hilfsfunktionen -----------------------------------------------------------------------
+
+
+def failure_detail(exc: BaseException) -> str:
+    """Die anzeigbare Ursache einer Stufen-Ausnahme, oder `""`.
+
+    Gibt nur für Fehlerklassen aus :data:`_LOGGABLE_DETAIL` etwas zurück; bei allen
+    anderen bleibt es beim Klassennamen in `reason_class` (ADR-012, I5).
+    """
+    if type(exc).__name__ not in _LOGGABLE_DETAIL:
+        return ""
+    return " ".join(str(exc).split())[:300]
 
 
 def classify_failure(stage: Stage, exc: BaseException) -> str:
@@ -277,11 +298,12 @@ def _fail_closed(
         stage=stage,
         reason_class=classify_failure(stage, exc),
     )
+    detail = failure_detail(exc)
     try:
         deps.messenger.send(deps.composer.compose_failure(notice))
     except Exception:  # Fail-closed: Der Versand der Notiz darf nie eskalieren.
-        return FailedNotice(notice=notice, notice_delivered=False)
-    return FailedNotice(notice=notice, notice_delivered=True)
+        return FailedNotice(notice=notice, notice_delivered=False, detail=detail)
+    return FailedNotice(notice=notice, notice_delivered=True, detail=detail)
 
 
 def _record(deps: PipelineDeps, ref: MailRef, state: ProgressState) -> None:

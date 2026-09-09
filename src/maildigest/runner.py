@@ -339,6 +339,8 @@ class Runner:
                 "stage": result.notice.stage,
                 "reason": result.notice.reason_class,
                 "notice_delivered": result.notice_delivered,
+                # Nur gesetzt, wenn die Ursache nachweislich keinen Mail-Inhalt trägt.
+                "detail": result.detail,
             },
         )
 

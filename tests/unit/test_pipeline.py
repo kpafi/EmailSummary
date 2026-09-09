@@ -560,3 +560,30 @@ def test_classify_failure_falls_back_to_stage() -> None:
 def test_classify_failure_ignores_exception_message() -> None:
     """I5: Der Exception-Text fließt nie in die Fehlerklasse ein."""
     assert "geheim" not in classify_failure("deliver", RuntimeError("geheim"))
+
+
+# --- Diagnose-Detail im Fehlerfall ------------------------------------------------------------
+
+
+def test_ursache_einer_schema_verletzung_ist_protokollierbar() -> None:
+    """Ohne diese Auskunft steht im Protokoll nur „llm_invalid_response".
+
+    Genau daran entscheidet sich aber, ob ein Modell schlicht ungeeignet ist — die
+    Meldung von `complete_json` nennt Feldpfad und Fehlertyp, nie einen Eingabewert.
+    """
+    from maildigest.pipeline import failure_detail
+
+    class LLMInvalidResponse(Exception): ...
+
+    exc = LLMInvalidResponse("not schema-valid (Summary); last cause: field `importance`")
+    assert "importance" in failure_detail(exc)
+
+
+def test_andere_fehlerklassen_liefern_kein_detail() -> None:
+    """Bei allen übrigen bleibt es beim Klassennamen (ADR-012, I5)."""
+    from maildigest.pipeline import failure_detail
+
+    class SanitizeError(Exception): ...
+
+    assert failure_detail(SanitizeError("mail_zu_gross")) == ""
+    assert failure_detail(ValueError("irgendein Text mit Mailinhalt")) == ""

@@ -23,6 +23,7 @@ Zwei bewusste Entscheidungen zur Injection-Härtung:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -129,11 +130,15 @@ def _error_summary(exc: ValidationError) -> str:
     """
     lines: list[str] = []
     for error in exc.errors()[:_MAX_REPORTED_ERRORS]:
-        location = ".".join(str(part) for part in error["loc"]) or "(Wurzel)"
-        lines.append(f"- Feld `{location}`: {error['type']}")
+        # Der Pfad kann bei `extra_forbidden` ein vom Modell erfundener Schlüssel sein
+        # und damit theoretisch Mail-Inhalt tragen — deshalb auf eine Zeichen-Allowlist
+        # reduziert, bevor er in Prompt oder Protokoll wandert (I5).
+        raw_location = ".".join(str(part) for part in error["loc"]) or "(root)"
+        location = re.sub(r"[^A-Za-z0-9_.\[\]-]", "?", raw_location)[:60]
+        lines.append(f"- field `{location}`: {error['type']}")
     remaining = len(exc.errors()) - len(lines)
     if remaining > 0:
-        lines.append(f"- … und {remaining} weitere Fehler")
+        lines.append(f"- ... and {remaining} more errors")
     return "\n".join(lines)
 
 
@@ -188,27 +193,27 @@ def complete_json(
         )
         candidate = extract_json_object(raw)
         if candidate is None:
-            problem = "Die Antwort enthielt kein JSON-Objekt."
+            problem = "the response contained no JSON object."
         else:
             try:
                 parsed: Any = json.loads(candidate)
             except json.JSONDecodeError as exc:
-                problem = f"Das JSON war syntaktisch ungültig ({exc.msg})."
+                problem = f"the JSON was syntactically invalid ({exc.msg})."
             else:
                 if not isinstance(parsed, dict):
-                    problem = "Das JSON war kein Objekt."
+                    problem = "the JSON was not an object."
                 else:
                     try:
                         return schema.model_validate(parsed)
                     except ValidationError as exc:
                         problem = (
-                            "Das JSON verletzte das Schema:\n" + _error_summary(exc)
+                            "the JSON violated the schema: " + _error_summary(exc)
                         )
 
         if attempt == 1:
             effective_system = _repair_system_prompt(system, schema, problem)
 
     raise LLMInvalidResponse(
-        f"Antwort war auch nach einem Reparaturversuch nicht schema-valide "
-        f"({schema.__name__}); letzte Ursache: {problem.splitlines()[0]}"
+        f"The response was still not schema-valid after one repair attempt "
+        f"({schema.__name__}); last cause: {problem.splitlines()[0]}"
     )
