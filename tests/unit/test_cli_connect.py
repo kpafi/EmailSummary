@@ -404,7 +404,7 @@ def test_connect_messenger_telegram_findet_chat_id(config_path: Path) -> None:
     assert telegram["token"] == "123:token"
     assert "Chat ID found: 4711" in out
     assert len(messenger.sent) == 1
-    assert "Testnachricht" in messenger.sent[0].parts[0]
+    assert "test message" in messenger.sent[0].parts[0]
 
 
 def test_testnachricht_enthaelt_keine_klickbaren_ziele(config_path: Path) -> None:

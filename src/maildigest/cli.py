@@ -122,8 +122,13 @@ _SAFE_NAME_RE = re.compile(r"[^0-9A-Za-zÄÖÜäöüß _./-]")
 #: Text der Testnachricht (`connect-messenger`). Bewusst ohne Punkte, Domains und Markup —
 #: der Nachbrenner des Output-Sanitizers würde sie sonst sichtbar entschärfen.
 _TEST_MESSAGE = (
-    "✅ MailDigest Testnachricht\n"
-    "Die Zustellung funktioniert — ab jetzt landen hier deine Mail-Zusammenfassungen"
+    "✅ MailDigest test message\n"
+    "Delivery works — your mail summaries will arrive here from now on\n"
+    "\n"
+    "Optional, off by default: set accept_commands = true under [messenger telegram] in "
+    "your config, then this chat also understands\n"
+    "/digest — fetch and summarise right now\n"
+    "/status — short report on what is waiting"
 )
 
 
@@ -1192,6 +1197,14 @@ def _setup_telegram(ctx: Context, config_file: ConfigFile) -> None:
         telegram["chat_id"] = args.chat_id
         return
     telegram["chat_id"] = _discover_chat_id(ctx, SecretStr(token), telegram)
+    console.out("")
+    console.out(
+        "Tip: this chat can also trigger MailDigest. Set accept_commands = true under\n"
+        "[messenger.telegram] in your config, then `maildigest run` reacts to:\n"
+        "  /digest   fetch and summarise right now\n"
+        "  /status   short report on what is waiting\n"
+        "Off by default — anyone who can write here could otherwise trigger runs."
+    )
 
 
 def _discover_chat_id(
@@ -1348,6 +1361,29 @@ class _CollectingMessenger:
         return True
 
 
+#: Vorspann der Selbsttest-Zustellung. Ohne Punkte und Domains, damit der Nachbrenner des
+#: Output-Sanitizers ihn nicht sichtbar entschärft (wie bei :data:`_TEST_MESSAGE`).
+_SELFTEST_NOTICE = (
+    "🧪 MailDigest self-test\n"
+    "The next message is built from the bundled example mail, not from your mailbox — "
+    "there is no such mail to look for"
+)
+
+
+def _announce_selftest(ctx: Context, config: Config) -> None:
+    """Kündigt die Selbsttest-Zustellung an, damit sie erkennbar ist.
+
+    Ein Fehlschlag ist hier kein Grund abzubrechen: Der eigentliche Test ist die
+    Zustellung danach, und die meldet ihre Probleme selbst.
+    """
+    try:
+        messenger = ctx.hooks.build_messenger(config.messenger)
+        composer = DigestComposer(part_limit=part_limit_for(config.messenger.active))
+        messenger.send(composer.compose_plain(_SELFTEST_NOTICE))
+    except (ConfigError, MessengerError):
+        ctx.console.err("Note: the self-test marker could not be delivered.")
+
+
 def cmd_test(ctx: Context) -> int:
     """Ende-zu-Ende-Selbsttest mit einer `.eml`-Datei statt aus dem Postfach (F-OPS-2)."""
     console, args = ctx.console, ctx.args
@@ -1374,6 +1410,11 @@ def cmd_test(ctx: Context) -> int:
     collector = _CollectingMessenger() if args.dry_run else None
     if collector is not None:
         console.out("    Dry run: nothing is sent to the messenger (--dry-run).")
+    else:
+        # Ohne diesen Vorspann ist die zugestellte Nachricht von einer echten
+        # Zusammenfassung nicht zu unterscheiden — und der Nutzer sucht im Postfach nach
+        # einer Mail, die es nie gab (Feldbericht 2026-09-09).
+        _announce_selftest(ctx, test_config)
 
     with tempfile.TemporaryDirectory(prefix="maildigest-test-") as tmp:
         # Eigene State-Datei: Der Selbsttest darf weder den Dedupe-Stand noch die

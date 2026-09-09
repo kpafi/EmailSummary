@@ -569,3 +569,20 @@ def test_ct16_eof_auf_stdin_ist_bedienfehler(tmp_path: Path) -> None:
     code, _out, err = run(["init", "--config", str(tmp_path / "config.toml")], stdin="")
     assert code == EXIT_USAGE
     assert "--non-interactive" in err
+
+
+def test_testnachricht_nennt_die_befehle() -> None:
+    """Nach dem Einrichten soll der Nutzer wissen, dass es /digest und /status gibt."""
+    from maildigest.cli import _TEST_MESSAGE
+
+    assert "/digest" in _TEST_MESSAGE
+    assert "/status" in _TEST_MESSAGE
+    assert "accept_commands" in _TEST_MESSAGE
+
+
+def test_selbsttest_vorspann_sagt_dass_die_mail_nicht_echt_ist() -> None:
+    """Sonst sucht man im Postfach nach einer Mail, die es nie gab (Feldbericht)."""
+    from maildigest.cli import _SELFTEST_NOTICE
+
+    assert "self-test" in _SELFTEST_NOTICE
+    assert "not from your mailbox" in _SELFTEST_NOTICE
