@@ -573,7 +573,10 @@ def test_ursache_einer_schema_verletzung_ist_protokollierbar() -> None:
     """
     from maildigest.pipeline import failure_detail
 
-    class LLMInvalidResponse(Exception): ...
+    # Die Zuordnung läuft über den Klassennamen (ADR-012), nicht über den Typ — deshalb
+    # genügt hier eine gleichnamige Attrappe.
+    class LLMInvalidResponse(Exception):  # noqa: N818
+        ...
 
     exc = LLMInvalidResponse("not schema-valid (Summary); last cause: field `importance`")
     assert "importance" in failure_detail(exc)
