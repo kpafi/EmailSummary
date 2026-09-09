@@ -112,6 +112,18 @@ pipx install .
 Fehlt `pipx`, installiert `sudo apt install pipx` es (Debian/Ubuntu/Kali); unter macOS
 `brew install pipx`. Danach einmalig `pipx ensurepath` und ein neues Terminal öffnen.
 
+**Achtung bei eigenen Änderungen am Quelltext:** `pipx install .` erstellt eine *Kopie*
+des Pakets. Änderungen am Quelltext wirken sich auf den installierten Befehl dann **nicht**
+aus — man arbeitet unbemerkt mit einem alten Stand weiter. Wer am Projekt selbst arbeitet
+oder Änderungen ausprobiert, installiert deshalb verknüpft:
+
+```bash
+pipx install --force --editable .
+```
+
+Dann entspricht `maildigest` immer dem aktuellen Arbeitsstand. Bei einer bereits
+vorhandenen Kopie-Installation genügt derselbe Befehl zum Umstellen.
+
 **Alternative — im virtuellen Umfeld.** Praktisch zum Entwickeln, aber der Befehl liegt
 dann nur in `.venv/bin` und steht außerhalb nicht zur Verfügung:
 
