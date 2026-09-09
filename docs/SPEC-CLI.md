@@ -245,6 +245,8 @@ nichts gefunden, endet das Kommando mit Exit-Code 1 (steht bereits eine Chat-ID 
 Datei, bleibt sie stehen und es gibt nur eine Warnung). Ein abgelehntes Token führt zu
 Exit-Code 1 mit dem Hinweis auf das Bot-Token.
 
+Nach erfolgreicher Einrichtung nennt die Ausgabe die optionalen Befehle `/digest` und `/status` samt des Schalters `accept_commands` (ADR-077), damit der Nutzer von ihrer Existenz erfaehrt; die zugestellte Testnachricht enthaelt dieselbe Auskunft.
+
 **Discord.** Hinweis zum Anlegen des Webhooks, dann `Webhook-URL: ` (ohne Echo, weil die
 URL selbst das Secret ist). Ohne URL: Exit-Code 2.
 
@@ -276,6 +278,8 @@ Für das Bot-Token gibt es keine Option; es kommt aus der Abfrage oder aus
 `MAILDIGEST_TELEGRAM_TOKEN`.
 
 ### `maildigest test`
+
+Ohne `--dry-run` geht der eigentlichen Nachricht ein kurzer Vorspann voraus (Kennzeichnung als Selbsttest mit dem Hinweis, dass die Mail nicht aus dem Postfach stammt). Ohne ihn waere die zugestellte Zusammenfassung von einer echten nicht zu unterscheiden, und der Nutzer suchte im Postfach nach einer Mail, die es nie gab.
 
 Ende-zu-Ende-Selbsttest: verarbeitet **eine `.eml`-Datei** durch dieselbe Pipeline wie im
 Betrieb (Sanitizer → Summarizer → Kritiker → Output-Sanitizer → Messenger) und stellt das
