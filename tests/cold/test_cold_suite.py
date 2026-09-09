@@ -395,10 +395,10 @@ def test_ct4_trockenlauf_zeigt_die_notiz_und_meldet_keine_zustellung(tmp_path: P
         hooks=make_hooks(sink=sink, error=LLMInvalidResponse("kein JSON")),
     )
     assert code == EXIT_ERROR
-    assert not sink.sent, "Trockenlauf hat etwas an den Messenger geschickt"
-    assert "Trockenlauf, nicht gesendet" in out
+    assert not sink.sent, "Dry run hat etwas an den Messenger geschickt"
+    assert "dry run, not sent" in out
     assert "Mail konnte nicht sicher verarbeitet werden" in out
-    assert "zugestellt: nein" in err
+    assert "delivered: no" in err
     assert_delivered_text_is_safe(out.split("5/5", 1)[-1])
 
 

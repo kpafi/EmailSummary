@@ -186,8 +186,8 @@ class Console:
         line = self.stdin.readline()
         if line == "":
             raise CliError(
-                "Eingabe abgebrochen (Ende der Eingabe erreicht). Für Läufe ohne "
-                "Terminal --non-interactive verwenden und die Werte als Optionen setzen.",
+                "Input aborted (end of input reached). For runs without a terminal, use "
+                "--non-interactive and pass the values as options.",
                 EXIT_USAGE,
             )
         return line.strip()
@@ -218,8 +218,8 @@ class Console:
             value = default
             if required and not value:
                 raise CliError(
-                    f"{prompt}: Pflichtangabe fehlt. Im nicht-interaktiven Modus über "
-                    f"{flag or 'die passende Option'} setzen.",
+                    f"{prompt}: required value missing. In non-interactive mode, set it via "
+                    f"{flag or 'the matching option'}.",
                     EXIT_USAGE,
                 )
             return value
@@ -229,13 +229,13 @@ class Console:
         for _attempt in range(3):
             value = self._readline(f"{prompt}{options}{suffix}: ") or default
             if allowed and value not in allowed:
-                self.err(f"Ungültiger Wert. Erlaubt: {', '.join(allowed)}.")
+                self.err(f"Invalid value. Allowed: {', '.join(allowed)}.")
                 continue
             if required and not value:
-                self.err("Pflichtangabe — bitte einen Wert eingeben.")
+                self.err("Required — please enter a value.")
                 continue
             return value
-        raise CliError("Zu viele ungültige Eingaben — abgebrochen.", EXIT_USAGE)
+        raise CliError("Too many invalid entries — aborted.", EXIT_USAGE)
 
     def ask_int(
         self, prompt: str, *, default: int, minimum: int = 1, maximum: int = 65535
@@ -250,10 +250,10 @@ class Console:
             try:
                 value = int(raw)
             except ValueError:
-                self.err("Bitte eine ganze Zahl eingeben.")
+                self.err("Please enter a whole number.")
                 continue
             if not minimum <= value <= maximum:
-                self.err(f"Bitte einen Wert zwischen {minimum} und {maximum} eingeben.")
+                self.err(f"Please enter a value between {minimum} and {maximum}.")
                 continue
             return value
         raise CliError("Zu viele ungültige Eingaben — abgebrochen.", EXIT_USAGE)
@@ -283,7 +283,7 @@ class Console:
     def choose(self, prompt: str, options: Sequence[str], *, default_index: int = 0) -> int:
         """Lässt aus einer nummerierten Liste wählen und liefert den Index."""
         if not options:
-            raise CliError("Keine Auswahlmöglichkeiten vorhanden.", EXIT_ERROR)
+            raise CliError("No options available.", EXIT_ERROR)
         for index, option in enumerate(options, start=1):
             self.out(f"  {index:>2}) {option}")
         if not self.interactive:
@@ -295,11 +295,11 @@ class Console:
             try:
                 number = int(raw)
             except ValueError:
-                self.err("Bitte die Nummer der gewünschten Zeile eingeben.")
+                self.err("Please enter the number of the line you want.")
                 continue
             if 1 <= number <= len(options):
                 return number - 1
-            self.err(f"Bitte eine Nummer zwischen 1 und {len(options)} eingeben.")
+            self.err(f"Please enter a number between 1 and {len(options)}.")
         raise CliError("Zu viele ungültige Eingaben — abgebrochen.", EXIT_USAGE)
 
 
@@ -368,27 +368,27 @@ _TABLE_ORDER: dict[str, tuple[str, ...]] = {
 
 #: Erklärender Kommentar über jeder Sektion.
 _SECTION_COMMENTS: dict[str, str] = {
-    "general": "Sprache, Länge, Zustellschwelle und Betrieb",
-    "imap": "Mirror-Postfach (nur IMAPS) — `maildigest connect-mail`",
-    "llm": "LLM-Provider — `maildigest connect-llm`",
-    "llm.critic": "optionaler Override für den Kritiker; leere Felder erben von [llm]",
-    "summarizer": "Custom-Instructions: was ist wichtig, worauf achten",
-    "links": "Links werden immer entfernt; hier nur die defangte Fußnote",
-    "messenger": "Zustellung — `maildigest connect-messenger`",
-    "limits": "Ressourcengrenzen (Defaults siehe docs/SPEC-CLI.md)",
+    "general": "language, length, delivery threshold and operation",
+    "imap": "mirror mailbox (IMAPS only) — `maildigest connect-mail`",
+    "llm": "language model provider — `maildigest connect-llm`",
+    "llm.critic": "optional override for the critic; empty fields inherit from [llm]",
+    "summarizer": "custom instructions: what matters, what to watch for",
+    "links": "links are always removed; this only controls the defanged footnote",
+    "messenger": "delivery — `maildigest connect-messenger`",
+    "limits": "resource limits (defaults: see docs/SPEC-CLI.md)",
 }
 
 #: Kommentar hinter einzelnen Schlüsseln.
 _KEY_COMMENTS: dict[str, str] = {
     "general.summary_length": "short | medium | long",
     "general.deliver_min_importance": "low | normal | high",
-    "general.low_digest_time": "tägliche Sammelzustellung, lokale Uhrzeit",
-    "general.state_db": "leer = state.db neben dieser Datei",
+    "general.low_digest_time": "daily digest, local wall-clock time",
+    "general.state_db": "empty = state.db next to this file",
     "general.log_level": "DEBUG | INFO | WARNING | ERROR",
-    "imap.port": "993 = IMAPS; Port 143 wird abgelehnt",
-    "imap.move_processed_to": "leer = nur als gelesen markieren",
+    "imap.port": "993 = IMAPS; port 143 is rejected",
+    "imap.move_processed_to": "empty = only mark as read",
     "llm.provider": "anthropic | openai_compatible",
-    "llm.base_url": "nur für openai_compatible / lokale Server",
+    "llm.base_url": "only for openai_compatible / local servers",
     "messenger.active": "telegram | discord | signal",
 }
 
@@ -397,31 +397,31 @@ _PLACEHOLDERS: dict[str, tuple[tuple[str, str], ...]] = {
     "imap": (
         ("host", '"imap.example.org"'),
         ("username", '"mirror@example.org"'),
-        ("password", f'"…"   # oder Umgebungsvariable {ENV_IMAP_PASSWORD}'),
+        ("password", f'"..."   # or environment variable {ENV_IMAP_PASSWORD}'),
     ),
     "llm": (
-        ("model", '"…"   # Pflichtfeld, es gibt bewusst keinen Default'),
-        ("api_key", f'"…"   # oder Umgebungsvariable {ENV_LLM_API_KEY}'),
+        ("model", '"..."   # required; there is deliberately no default'),
+        ("api_key", f'"..."   # or environment variable {ENV_LLM_API_KEY}'),
     ),
     # Der Kritiker erbt alles von `[llm]`; die Datei zeigt trotzdem den vollständigen
     # Feldsatz aus SPEC-CLI.md §5, damit ein Override nicht nachgeschlagen werden muss.
     "llm.critic": (
-        ("provider", '"openai_compatible"   # leer/fehlend = erbt von [llm]'),
-        ("model", '"…"   # leer/fehlend = erbt von [llm]'),
-        ("base_url", '"http://localhost:11434/v1"   # leer/fehlend = erbt von [llm]'),
-        ("max_tokens", "1024   # leer/fehlend = erbt von [llm]"),
+        ("provider", '"openai_compatible"   # empty/absent = inherits from [llm]'),
+        ("model", '"..."   # empty/absent = inherits from [llm]'),
+        ("base_url", '"http://localhost:11434/v1"   # empty/absent = inherits from [llm]'),
+        ("max_tokens", "1024   # empty/absent = inherits from [llm]"),
     ),
     "messenger.telegram": (
-        ("token", f'"…"   # oder Umgebungsvariable {ENV_TELEGRAM_TOKEN}'),
+        ("token", f'"..."   # or environment variable {ENV_TELEGRAM_TOKEN}'),
     ),
     "messenger.discord": (("webhook_url", '"https://discord.com/api/webhooks/…"'),),
 }
 
 #: Kopf der erzeugten Datei.
 _FILE_HEADER = (
-    "# MailDigest — Konfiguration",
-    "# Erzeugt von `maildigest init`. Dateirechte: 0600 (enthält ggf. Secrets).",
-    "# Vollständige Feldreferenz: docs/SPEC-CLI.md",
+    "# MailDigest — configuration",
+    "# Created by `maildigest init`. File mode: 0600 (may contain secrets).",
+    "# Full field reference: docs/SPEC-CLI.md",
 )
 
 
@@ -442,8 +442,8 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     raise CliError(
-        f"Wert vom Typ {type(value).__name__} kann nicht in die Konfiguration geschrieben "
-        "werden. Bitte den Eintrag von Hand korrigieren."
+        f"A value of type {type(value).__name__} cannot be written to the configuration. "
+        "Please correct the entry by hand."
     )
 
 
@@ -509,19 +509,19 @@ class ConfigFile:
             raw = path.read_bytes()
         except FileNotFoundError as exc:
             raise CliError(
-                f"Konfigurationsdatei nicht gefunden: {path}\n"
-                "Lege sie mit `maildigest init` an oder gib den Pfad mit --config an.",
+                f"Configuration file not found: {path}\n"
+                "Create it with `maildigest init`, or pass the path with --config.",
                 EXIT_ERROR,
             ) from exc
         except OSError as exc:
             raise CliError(
-                f"Konfigurationsdatei {path} kann nicht gelesen werden: {exc.strerror}."
+                f"Configuration file {path} cannot be read: {exc.strerror}."
             ) from exc
         try:
             data = tomllib.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
             raise CliError(
-                f"Konfigurationsdatei {path} ist kein gültiges UTF-8-TOML: {exc}"
+                f"Configuration file {path} is not valid UTF-8 TOML: {exc}"
             ) from exc
         return cls(path=path, data=data)
 
@@ -539,8 +539,8 @@ class ConfigFile:
                 cursor[part] = child
             elif not isinstance(child, dict):
                 raise CliError(
-                    f"In {self.path} ist `{part}` kein Abschnitt. Bitte die Datei von Hand "
-                    "korrigieren."
+                    f"In {self.path}, `{part}` is not a section. Please correct the file by "
+                    "hand."
                 )
             cursor = child
         return cursor
@@ -555,7 +555,7 @@ class ConfigFile:
         try:
             tomllib.loads(text)
         except tomllib.TOMLDecodeError as exc:  # pragma: no cover - Schutz gegen Regression
-            raise CliError(f"Interner Fehler beim Schreiben der Konfiguration: {exc}") from exc
+            raise CliError(f"Internal error while writing the configuration: {exc}") from exc
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             descriptor = os.open(
@@ -568,7 +568,7 @@ class ConfigFile:
             os.chmod(self.path, 0o600)
         except OSError as exc:
             raise CliError(
-                f"Konfigurationsdatei {self.path} kann nicht geschrieben werden: "
+                f"Configuration file {self.path} cannot be written: "
                 f"{exc.strerror}."
             ) from exc
 
@@ -618,29 +618,29 @@ def cmd_init(ctx: Context) -> int:
     path = ctx.config_path
     if path.exists() and not args.force:
         raise CliError(
-            f"{path} existiert bereits. Mit --force überschreiben (der bisherige Inhalt "
-            "geht dabei verloren) oder einen anderen Pfad mit --config wählen.",
+            f"{path} already exists. Overwrite it with --force (the current content is "
+            "lost) or choose another path with --config.",
             EXIT_ERROR,
         )
 
-    console.out(f"MailDigest einrichten — Konfiguration: {path}")
+    console.out(f"Setting up MailDigest — configuration: {path}")
     language = args.language or console.ask(
-        "Sprache der Zusammenfassungen", default="de", allowed=_LANGUAGES, flag="--language"
+        "Language of the summaries", default="de", allowed=_LANGUAGES, flag="--language"
     )
     summary_length = args.summary_length or console.ask(
-        "Länge der Zusammenfassungen",
+        "Length of the summaries",
         default="medium",
         allowed=_SUMMARY_LENGTHS,
         flag="--summary-length",
     )
     min_importance = args.min_importance or console.ask(
-        "Einzeln zustellen ab Wichtigkeit",
+        "Deliver individually from importance",
         default="normal",
         allowed=_IMPORTANCES,
         flag="--min-importance",
     )
     digest_time = args.low_digest_time or console.ask(
-        "Uhrzeit des täglichen Sammel-Digests (HH:MM)",
+        "Time of the daily digest (HH:MM)",
         default="18:00",
         flag="--low-digest-time",
     )
@@ -650,8 +650,8 @@ def cmd_init(ctx: Context) -> int:
         if console.interactive:
             # Nur als Erläuterung der Frage — ohne Frage keine Erläuterung (CT-3).
             console.out(
-                "Custom-Instructions: eine Zeile dazu, was für dich wichtig ist "
-                "(leer lassen = keine)."
+                "Custom instructions: one line about what matters to you "
+                "(leave empty for none)."
             )
         instructions = console.ask("Custom-Instructions", flag="--instructions")
     instructions = instructions[:_MAX_INSTRUCTIONS_CHARS]
@@ -695,50 +695,50 @@ def cmd_init(ctx: Context) -> int:
 
     config_file = ConfigFile(path=path, data=data)
     config_file.save()
-    console.out(f"Konfiguration angelegt: {path} (Dateirechte 0600)")
+    console.out(f"Configuration created: {path} (file mode 0600)")
     console.out("")
-    console.out("Nächste Schritte:")
-    console.out("  1) maildigest connect-mail        (Mirror-Postfach)")
-    console.out("  2) maildigest connect-llm         (Sprachmodell)")
+    console.out("Next steps:")
+    console.out("  1) maildigest connect-mail        (mirror mailbox)")
+    console.out("  2) maildigest connect-llm         (language model)")
     console.out("  3) maildigest connect-messenger   (Telegram/Discord/Signal)")
-    console.out("  4) maildigest test                (Selbsttest)")
-    console.out("  5) maildigest run                 (Dauerbetrieb)")
+    console.out("  4) maildigest test                (self-test)")
+    console.out("  5) maildigest run                 (continuous operation)")
     return EXIT_OK
 
 
 # --- Kommando: connect-mail ------------------------------------------------------------------
 
 _FORWARDING_GUIDE = """
-So richtest du die Weiterleitung in deinem echten Postfach ein
---------------------------------------------------------------
-MailDigest liest NIE dein echtes Postfach. Es liest nur das Mirror-Postfach, in das
-du deine Mails weiterleitest.
+How to set up forwarding in your real mailbox
+---------------------------------------------
+MailDigest NEVER reads your real mailbox. It only reads the mirror mailbox that you
+forward your mail into.
 
-Gmail:       Einstellungen > "Weiterleitung und POP/IMAP" > "Weiterleitungsadresse
-             hinzufügen" > Adresse des Mirror-Postfachs > Bestätigungscode aus der
-             dort eintreffenden Mail eintragen > "Eingehende Nachrichten weiterleiten"
-             aktivieren und "Gmail-Kopie im Posteingang behalten" wählen.
-posteo:      Einstellungen > "E-Mail" > "Filterregeln" > neue Regel > Aktion
-             "Weiterleiten an" + "Nachricht zusätzlich im Postfach behalten".
-mailbox.org: Einstellungen > "E-Mail" > "Filter" > neue Regel > "Umleiten nach"
-             plus Aktion "Behalten".
-sonst:       Gesucht ist eine serverseitige Weiterleitung oder Filterregel. Eine
-             Regel im Mailprogramm (Outlook/Thunderbird) reicht nicht — die greift
-             nur, wenn dein Rechner läuft.
+Gmail:       Settings > "Forwarding and POP/IMAP" > "Add a forwarding address" >
+             address of the mirror mailbox > enter the confirmation code from the mail
+             that arrives there > enable "Forward a copy of incoming mail" and choose
+             "keep Gmail's copy in the Inbox".
+Posteo:      Settings > "Email" > "Filter rules" > new rule > action "Forward to" plus
+             "keep a copy in the mailbox".
+mailbox.org: Settings > "Email" > "Filter" > new rule > "Redirect to" plus the action
+             "Keep".
+otherwise:   You are looking for a server-side forward or filter rule. A rule in your
+             mail program (Outlook/Thunderbird) is not enough — it only runs while your
+             computer is on.
 
-Wichtig: Keine Weiterleitung vom Mirror-Postfach zurück ins Hauptpostfach — das
-ergibt eine Schleife.
+Important: do not forward from the mirror mailbox back to your main mailbox — that
+creates a loop.
 """.strip()
 
 
 _HOST_EXPLANATION = """
-Der IMAP-Host ist die Serveradresse, unter der dein Anbieter die Mails zum Abruf
-bereitstellt — nicht deine Mailadresse. Bei den großen Anbietern lautet er:
+The IMAP host is the server address where your provider makes mail available for
+retrieval — it is not your mail address. For the large providers it is:
 
 {examples}
 
-Du kannst auch einfach die Mailadresse des Spiegel-Postfachs eintippen; der passende
-Host wird dann daraus abgeleitet.
+You can also simply type the mail address of the mirror mailbox; the matching host is
+derived from it.
 """.strip()
 
 
@@ -756,14 +756,14 @@ def _resolve_host(console: Console, entered: str) -> str:
         return entered
     host = provider.imap_host
     if entered.strip().lower() != host.lower():
-        console.out(f"  → IMAP-Host für {provider.name}: {host}")
+        console.out(f"  -> IMAP host for {provider.name}: {host}")
     return host
 
 
 def _username_example(provider: providers.Provider | None) -> str:
     """Beispiel-Benutzername — macht sichtbar, dass die volle Mailadresse gemeint ist."""
     domain = provider.domains[0] if provider and provider.domains else "example.org"
-    return f"volle Mailadresse des Spiegel-Postfachs, z. B. spiegel@{domain}"
+    return f"the full mail address of the mirror mailbox, e.g. mirror@{domain}"
 
 
 def _reject_unsupported(provider: providers.Provider) -> None:
@@ -772,7 +772,7 @@ def _reject_unsupported(provider: providers.Provider) -> None:
     Raises:
         CliError: Immer — der Aufruf erfolgt nur für nicht unterstützte Anbieter.
     """
-    text = f"{provider.name} kann MailDigest nicht lesen. {provider.unsupported_reason}"
+    text = f"MailDigest cannot read {provider.name}. {provider.unsupported_reason}"
     if provider.note:
         text = f"{text}\n\n{provider.note}"
     raise CliError(text, EXIT_USAGE)
@@ -784,7 +784,7 @@ def cmd_connect_mail(ctx: Context) -> int:
     config_file = ConfigFile.load(ctx.config_path)
     imap = config_file.section("imap")
 
-    console.out("Mirror-Postfach verbinden (nur IMAPS, Zertifikatsprüfung immer aktiv)")
+    console.out("Connecting the mirror mailbox (IMAPS only, certificate check always on)")
     configured_host = str(imap.get("host", ""))
     if console.interactive and not configured_host and not args.host:
         console.out("")
@@ -795,7 +795,7 @@ def cmd_connect_mail(ctx: Context) -> int:
     host = _resolve_host(
         console,
         args.host
-        or console.ask("IMAP-Host", default=configured_host, flag="--host", required=True),
+        or console.ask("IMAP host", default=configured_host, flag="--host", required=True),
     )
     provider = providers.find_by_host(host)
     if provider is not None and not provider.supported:
@@ -811,9 +811,9 @@ def cmd_connect_mail(ctx: Context) -> int:
         if args.port is not None
         else console.ask_int("Port", default=int(imap.get("port", fallback_port)))
     )
-    console.out(f"Benutzername = {_username_example(provider)}")
+    console.out(f"Username = {_username_example(provider)}")
     username = args.username or console.ask(
-        "Benutzername",
+        "Username",
         default=str(imap.get("username", "")),
         flag="--username",
         required=True,
@@ -831,29 +831,29 @@ def cmd_connect_mail(ctx: Context) -> int:
     _validate(ImapConfig, dict(imap), f"[imap] in {ctx.config_path}")
     if port == _PLAINTEXT_IMAP_PORT:
         raise CliError(
-            "Port 143 ist Klartext-IMAP und wird nicht unterstützt. MailDigest verbindet "
-            "ausschließlich per IMAPS (üblich: Port 993).",
+            "Port 143 is plaintext IMAP and is not supported. MailDigest connects over "
+            "IMAPS only (usually port 993).",
             EXIT_ERROR,
         )
 
     env_password = os.environ.get(ENV_IMAP_PASSWORD, "")
     if env_password:
-        console.out(f"Passwort: aus {ENV_IMAP_PASSWORD} (wird nicht in die Datei geschrieben)")
+        console.out(f"Password: from {ENV_IMAP_PASSWORD} (not written to the file)")
         imap.pop("password", None)
         password = env_password
     else:
         if provider is not None:
-            console.out(f"Passwort = {provider.password_kind}.")
+            console.out(f"Password = {provider.password_kind}.")
         entered = console.ask_secret(
-            f"Passwort (leer lassen, wenn {ENV_IMAP_PASSWORD} gesetzt werden soll)"
+            f"Password (leave empty to use {ENV_IMAP_PASSWORD} instead)"
         )
         if entered:
             imap["password"] = entered
         password = entered or str(imap.get("password", ""))
         if not password:
             raise CliError(
-                "Kein IMAP-Passwort angegeben. Entweder hier eingeben oder die "
-                f"Umgebungsvariable {ENV_IMAP_PASSWORD} setzen.",
+                "No IMAP password given. Either enter it here or set the environment "
+                f"variable {ENV_IMAP_PASSWORD}.",
                 EXIT_USAGE,
             )
 
@@ -862,13 +862,13 @@ def cmd_connect_mail(ctx: Context) -> int:
     section = _validate(ImapConfig, probe, f"[imap] in {ctx.config_path}")
 
     if args.no_test:
-        console.out("Verbindungstest übersprungen (--no-test).")
+        console.out("Connection test skipped (--no-test).")
     else:
         folder = _test_imap_and_choose_folder(ctx, section)
         imap["folder"] = folder
 
     config_file.save()
-    console.out(f"Gespeichert in {config_file.path} (Dateirechte 0600).")
+    console.out(f"Saved to {config_file.path} (file mode 0600).")
     console.out("")
     console.out(_FORWARDING_GUIDE)
     return EXIT_OK
@@ -884,23 +884,23 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
         CliError: Verbindung oder Login fehlgeschlagen.
     """
     console = ctx.console
-    console.out("Verbinde …")
+    console.out("Connecting ...")
     try:
         client = ctx.hooks.imap_client(section)
         client.connect()
     except IngestError as exc:
         hint = providers.auth_failure_hint(section.host)
         raise CliError(
-            f"{exc}\n\n{hint}\n\nMit --no-test lassen sich die Angaben auch ungetestet "
-            "speichern.",
+            f"{exc}\n\n{hint}\n\nWith --no-test the values can also be saved without "
+            "testing them.",
             EXIT_ERROR,
         ) from exc
     try:
-        console.step("Verbindung steht.")
+        console.step("Connection established.")
         try:
             folders = client.list_folders()
         except IngestError as exc:
-            console.err(f"Ordnerliste nicht abrufbar ({exc}); es bleibt bei der Vorgabe.")
+            console.err(f"Folder list unavailable ({exc}); keeping the current setting.")
             return section.folder
     finally:
         client.disconnect()
@@ -909,8 +909,8 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
         return section.folder
     names = [_safe_name(name) for name in folders]
     default_index = folders.index(section.folder) if section.folder in folders else 0
-    console.out("Welchen Ordner soll MailDigest lesen?")
-    index = console.choose("Ordner", names, default_index=default_index)
+    console.out("Which folder should MailDigest read?")
+    index = console.choose("Folder", names, default_index=default_index)
     return folders[index]
 
 
@@ -923,7 +923,7 @@ def cmd_connect_llm(ctx: Context) -> int:
     config_file = ConfigFile.load(ctx.config_path)
     llm = config_file.section("llm")
 
-    console.out("Sprachmodell verbinden")
+    console.out("Connecting the language model")
     provider = args.provider or console.ask(
         "Provider",
         default=str(llm.get("provider", "anthropic")),
@@ -939,7 +939,7 @@ def cmd_connect_llm(ctx: Context) -> int:
     console.out("")
 
     model = args.model or console.ask(
-        "Modellname (exakte Modell-ID des Anbieters)",
+        "Model name (exact model ID used by the provider)",
         default=str(llm.get("model", "")),
         flag="--model",
         required=True,
@@ -948,28 +948,28 @@ def cmd_connect_llm(ctx: Context) -> int:
 
     if provider == "openai_compatible":
         base_url = args.base_url if args.base_url is not None else console.ask(
-            "Basis-URL des Endpunkts (z. B. http://localhost:11434/v1)",
+            "Base URL of the endpoint (e.g. http://localhost:11434/v1)",
             default=str(llm.get("base_url", "")),
             flag="--base-url",
         )
         llm["base_url"] = base_url
         if base_url and not base_url.startswith(("https://", "http://localhost", "http://127.")):
             console.err(
-                "Hinweis: Diese Basis-URL ist unverschlüsselt und nicht lokal — "
-                "Mail-Inhalte gingen im Klartext über das Netz."
+                "Note: this base URL is unencrypted and not local — mail content would "
+                "travel over the network in the clear."
             )
     elif args.base_url is not None:
         llm["base_url"] = args.base_url
 
     env_key = os.environ.get(ENV_LLM_API_KEY, "")
     if env_key:
-        console.out(f"API-Key: aus {ENV_LLM_API_KEY} (wird nicht in die Datei geschrieben)")
+        console.out(f"API key: from {ENV_LLM_API_KEY} (not written to the file)")
         llm.pop("api_key", None)
         api_key = env_key
     else:
         entered = console.ask_secret(
-            f"API-Key (leer lassen, wenn {ENV_LLM_API_KEY} gesetzt werden soll oder der "
-            "Endpunkt keinen Key braucht)"
+            f"API key (leave empty to use {ENV_LLM_API_KEY}, or if the endpoint needs no "
+            "key)"
         )
         if entered:
             llm["api_key"] = entered
@@ -981,7 +981,7 @@ def cmd_connect_llm(ctx: Context) -> int:
     section = _validate(LlmConfig, probe, f"[llm] in {ctx.config_path}")
 
     if args.no_test:
-        console.out("Testaufruf übersprungen (--no-test).")
+        console.out("Test call skipped (--no-test).")
     else:
         _test_llm(ctx, section)
 
@@ -1000,7 +1000,7 @@ def _test_llm(ctx: Context, section: LlmConfig) -> None:
         CliError: Provider nicht erreichbar, Key abgelehnt oder leere Antwort.
     """
     console = ctx.console
-    console.out("Testaufruf …")
+    console.out("Test call ...")
     try:
         provider = ctx.hooks.build_provider(
             provider=section.provider,
@@ -1009,22 +1009,22 @@ def _test_llm(ctx: Context, section: LlmConfig) -> None:
             api_key=section.api_key,
         )
         answer = provider.complete(
-            "Du beantwortest einen Verbindungstest.",
-            "Antworte ausschliesslich mit dem Wort OK.",
+            "You are answering a connection test.",
+            "Reply with the single word OK and nothing else.",
             max_tokens=16,
         )
     except ConfigError as exc:
         raise CliError(str(exc), EXIT_ERROR) from exc
     except LLMError as exc:
         raise CliError(
-            f"Testaufruf fehlgeschlagen ({type(exc).__name__}): {exc}\n"
-            "Modellname, API-Key und Basis-URL prüfen.",
+            f"Test call failed ({type(exc).__name__}): {exc}\n"
+            "Check the model name, API key and base URL.",
             EXIT_ERROR,
         ) from exc
     if not answer.strip():
-        raise CliError("Der Provider hat eine leere Antwort geliefert.", EXIT_ERROR)
+        raise CliError("The provider returned an empty response.", EXIT_ERROR)
     marker = "erwartete Antwort" if "OK" in answer.upper() else "unerwartete Antwort"
-    console.step(f"Antwort erhalten ({len(answer)} Zeichen, {marker}).")
+    console.step(f"Response received ({len(answer)} characters, {marker}).")
 
 
 # --- Kommando: connect-messenger ---------------------------------------------------------------
@@ -1036,7 +1036,7 @@ def cmd_connect_messenger(ctx: Context) -> int:
     config_file = ConfigFile.load(ctx.config_path)
     messenger_section = config_file.section("messenger")
 
-    console.out("Messenger verbinden")
+    console.out("Connecting the messenger")
     active = args.messenger or console.ask(
         "Messenger",
         default=str(messenger_section.get("active", "telegram")),
@@ -1056,7 +1056,7 @@ def cmd_connect_messenger(ctx: Context) -> int:
     section = _validate(MessengerConfig, probe, f"[messenger] in {ctx.config_path}")
 
     if args.no_test:
-        console.out("Testnachricht übersprungen (--no-test).")
+        console.out("Test message skipped (--no-test).")
     else:
         _send_test_message(ctx, section)
 
@@ -1083,22 +1083,22 @@ def _setup_telegram(ctx: Context, config_file: ConfigFile) -> None:
 
     env_token = os.environ.get(ENV_TELEGRAM_TOKEN, "")
     if env_token:
-        console.out(f"Bot-Token: aus {ENV_TELEGRAM_TOKEN} (wird nicht in die Datei geschrieben)")
+        console.out(f"Bot token: from {ENV_TELEGRAM_TOKEN} (not written to the file)")
         telegram.pop("token", None)
         token = env_token
     else:
         console.out(providers.TELEGRAM_GUIDE)
         console.out("")
         entered = console.ask_secret(
-            f"Bot-Token (leer lassen, wenn {ENV_TELEGRAM_TOKEN} gesetzt werden soll)"
+            f"Bot token (leave empty to use {ENV_TELEGRAM_TOKEN} instead)"
         )
         if entered:
             telegram["token"] = entered
         token = entered or str(telegram.get("token", ""))
     if not token:
         raise CliError(
-            "Kein Bot-Token angegeben. Entweder hier eingeben oder die Umgebungsvariable "
-            f"{ENV_TELEGRAM_TOKEN} setzen.",
+            "No bot token given. Either enter it here or set the environment variable "
+            f"{ENV_TELEGRAM_TOKEN}.",
             EXIT_USAGE,
         )
 
@@ -1113,7 +1113,7 @@ def _discover_chat_id(
 ) -> str:
     """Wartet auf eine Nachricht an den Bot und liest die Chat-ID daraus (F-MSG-2)."""
     console = ctx.console
-    console.out("Schreib deinem Bot jetzt in Telegram eine Nachricht (z. B. /start).")
+    console.out("Now send your bot a message in Telegram (e.g. /start).")
     attempts = _CHAT_ID_ATTEMPTS if console.interactive else 1
     candidates: list[ChatCandidate] = []
     for attempt in range(1, attempts + 1):
@@ -1121,30 +1121,30 @@ def _discover_chat_id(
             candidates = ctx.hooks.discover_chat_ids(token=token)
         except MessengerError as exc:
             raise CliError(
-                f"Telegram-Abfrage fehlgeschlagen: {exc}\nIst das Bot-Token richtig?",
+                f"Telegram request failed: {exc}\nIs the bot token correct?",
                 EXIT_ERROR,
             ) from exc
         if candidates:
             break
         if attempt < attempts:
-            console.step(f"Noch keine Nachricht empfangen — warte ({attempt}/{attempts}) …")
+            console.step(f"No message received yet — waiting ({attempt}/{attempts}) ...")
             ctx.hooks.sleep(_CHAT_ID_WAIT_SECONDS)
 
     if not candidates:
         existing = str(telegram.get("chat_id", ""))
         if existing:
-            console.err("Keine neue Nachricht gefunden — die bisherige Chat-ID bleibt stehen.")
+            console.err("No new message found — keeping the existing chat ID.")
             return existing
         raise CliError(
-            "Keine Nachricht an den Bot gefunden. Schreib dem Bot eine Nachricht und "
-            "starte `maildigest connect-messenger` erneut — oder gib die Chat-ID mit "
-            "--chat-id an.",
+            "No message to the bot found. Send the bot a message and run "
+            "`maildigest connect-messenger` again — or pass the chat ID with "
+            "--chat-id.",
             EXIT_ERROR,
         )
     if len(candidates) == 1:
-        console.step(f"Chat-ID gefunden: {candidates[0].chat_id}")
+        console.step(f"Chat ID found: {candidates[0].chat_id}")
         return candidates[0].chat_id
-    console.out("Mehrere Chats gefunden — welcher soll es sein?")
+    console.out("Several chats found — which one should it be?")
     labels = [f"{item.chat_id} ({item.chat_type})" for item in candidates]
     return candidates[console.choose("Chat", labels)].chat_id
 
@@ -1155,13 +1155,13 @@ def _setup_discord(ctx: Context, config_file: ConfigFile) -> None:
     discord = config_file.section("messenger.discord")
     console.out(providers.DISCORD_GUIDE)
     console.out("")
-    url = args.webhook_url or console.ask_secret("Webhook-URL")
+    url = args.webhook_url or console.ask_secret("Webhook URL")
     if url:
         discord["webhook_url"] = url
     if not str(discord.get("webhook_url", "")):
         raise CliError(
-            "Keine Webhook-URL angegeben. Die URL ist zugleich das Secret; sie wird in "
-            "der Konfigurationsdatei mit Dateirechten 0600 abgelegt.",
+            "No webhook URL given. The URL is itself the secret; it is stored in the "
+            "configuration file with file mode 0600.",
             EXIT_USAGE,
         )
 
@@ -1172,9 +1172,9 @@ def _setup_signal(ctx: Context, config_file: ConfigFile) -> None:
     signal_section = config_file.section("messenger.signal")
     console.out(providers.SIGNAL_GUIDE)
     console.out("")
-    console.out("Voraussetzung: `signal-cli --daemon --socket <pfad>` läuft bereits.")
+    console.out("Prerequisite: `signal-cli --daemon --socket <path>` is already running.")
     socket_path = args.signal_socket or console.ask(
-        "Pfad des signal-cli-Sockets",
+        "Path of the signal-cli socket",
         default=str(signal_section.get("signal_cli_socket", "")),
         flag="--signal-socket",
         required=True,
@@ -1186,23 +1186,23 @@ def _setup_signal(ctx: Context, config_file: ConfigFile) -> None:
 def _send_test_message(ctx: Context, section: MessengerConfig) -> None:
     """Healthcheck + eine im Code formulierte Testnachricht (I3: über `compose_plain`)."""
     console = ctx.console
-    console.out("Testnachricht senden …")
+    console.out("Sending test message ...")
     try:
         messenger = ctx.hooks.build_messenger(section)
     except ConfigError as exc:
         raise CliError(str(exc), EXIT_ERROR) from exc
     if not messenger.healthcheck():
         raise CliError(
-            f"Der Dienst „{section.active}“ ist nicht erreichbar oder die Zugangsdaten "
-            "werden abgelehnt.",
+            f'The service "{section.active}" is unreachable or the credentials are '
+            "rejected.",
             EXIT_ERROR,
         )
     composer = DigestComposer(part_limit=part_limit_for(section.active))
     try:
         messenger.send(composer.compose_plain(_TEST_MESSAGE))
     except MessengerError as exc:
-        raise CliError(f"Testnachricht konnte nicht zugestellt werden: {exc}", EXIT_ERROR) from exc
-    console.step("Testnachricht zugestellt — schau in deinen Messenger.")
+        raise CliError(f"The test message could not be delivered: {exc}", EXIT_ERROR) from exc
+    console.step("Test message delivered — check your messenger.")
 
 
 # --- Kommando: test ------------------------------------------------------------------------
@@ -1266,10 +1266,10 @@ def cmd_test(ctx: Context) -> int:
     """Ende-zu-Ende-Selbsttest mit einer `.eml`-Datei statt aus dem Postfach (F-OPS-2)."""
     console, args = ctx.console, ctx.args
     config = _load_full_config(ctx.config_path)
-    console.out(f"1/5 Konfiguration geladen: {ctx.config_path}")
+    console.out(f"1/5 Configuration loaded: {ctx.config_path}")
 
     raw_bytes, source = _read_test_mail(args.eml)
-    console.out(f"2/5 Testmail gelesen: {source} ({len(raw_bytes)} Bytes)")
+    console.out(f"2/5 Test mail read: {source} ({len(raw_bytes)} bytes)")
     raw = _build_raw_mail(raw_bytes)
 
     # Für den Selbsttest zählt „kommt etwas an“, nicht die Wichtigkeits-Schwelle des
@@ -1287,7 +1287,7 @@ def cmd_test(ctx: Context) -> int:
 
     collector = _CollectingMessenger() if args.dry_run else None
     if collector is not None:
-        console.out("    Trockenlauf: es wird nichts an den Messenger geschickt (--dry-run).")
+        console.out("    Dry run: nothing is sent to the messenger (--dry-run).")
 
     with tempfile.TemporaryDirectory(prefix="maildigest-test-") as tmp:
         # Eigene State-Datei: Der Selbsttest darf weder den Dedupe-Stand noch die
@@ -1310,7 +1310,7 @@ def cmd_test(ctx: Context) -> int:
             except (ConfigError, StateError) as exc:
                 raise CliError(str(exc), EXIT_ERROR) from exc
             db.claim(raw.dedupe_key)
-            console.out("3/5 Pipeline läuft (Sanitizer → Summarizer → Kritiker → Zustellung) …")
+            console.out("3/5 Pipeline running (sanitizer -> summarizer -> critic -> delivery) ...")
             result = runner.process(raw)
             runner.outbox.flush()
             pending = runner.outbox.pending
@@ -1330,31 +1330,33 @@ def _report_stages(
     """Meldet je Stufe **nur Zahlen und Aufzählungswerte** — nie Mail- oder Modelltext."""
     mail = sanitizer.result
     if mail is None:
-        console.out("4/5 Sanitizer: fehlgeschlagen.")
+        console.out("4/5 Sanitizer: failed.")
         return
     report = mail.sanitization_report
     processed = sum(1 for item in mail.attachments if item.processed)
     console.out(
-        f"4/5 Sanitizer: {_count(len(mail.body_text), 'Zeichen', 'Zeichen')} Klartext, "
-        f"{_count(len(mail.attachments), 'Anhang', 'Anhänge')} ({processed} verarbeitet), "
-        f"{_count(report.links_removed, 'Link', 'Links')} entfernt, "
-        f"{_count(report.control_chars_removed, 'Steuerzeichen', 'Steuerzeichen')} entfernt"
+        f"4/5 Sanitizer: {_count(len(mail.body_text), 'character', 'characters')} of text, "
+        f"{_count(len(mail.attachments), 'attachment', 'attachments')} "
+        f"({processed} processed), "
+        f"{_count(report.links_removed, 'link', 'links')} removed, "
+        f"{_count(report.control_chars_removed, 'control character', 'control characters')} "
+        "removed"
     )
     summary = summarizer.result
     if summary is None:
-        console.step("Summarizer: fehlgeschlagen.")
+        console.step("Summarizer: failed.")
         return
     console.step(
-        f"Summarizer: Wichtigkeit={summary.importance}, "
-        f"Injection-Verdacht={'ja' if summary.injection_suspected else 'nein'}"
+        f"Summarizer: importance={summary.importance}, "
+        f"injection suspected={'yes' if summary.injection_suspected else 'no'}"
     )
     verdict = critic.result
     if verdict is None:
-        console.step("Kritiker: fehlgeschlagen.")
+        console.step("Critic: failed.")
         return
     console.step(
-        f"Kritiker: Phishing-Risiko={verdict.phishing_risk}, "
-        f"Zusammenfassung korrekt={'ja' if verdict.summary_accurate else 'nein'}"
+        f"Critic: phishing risk={verdict.phishing_risk}, "
+        f"summary accurate={'yes' if verdict.summary_accurate else 'no'}"
     )
 
 
@@ -1368,37 +1370,37 @@ def _report_test_result(
     console = ctx.console
     if isinstance(result, FailedNotice):
         console.out(
-            f"5/5 Fail-closed: Stufe {result.notice.stage}, Grund {result.notice.reason_class}."
+            f"5/5 Fail-closed: stage {result.notice.stage}, reason {result.notice.reason_class}."
         )
         if collector is not None:
             # Trockenlauf: Es ging nichts an den Messenger — und die Notiz ist genau
             # das, was der Nutzer hier sehen will (SPEC-CLI.md §4 `test --dry-run`).
-            console.out("    Metadaten-Notiz erzeugt — Trockenlauf, nicht gesendet:")
+            console.out("    Metadata notice created — dry run, not sent:")
             console.out("")
             for message in collector.messages:
                 for part in message.parts:
                     console.out(part)
             console.out("")
             console.err(
-                "Selbsttest fehlgeschlagen — es wurde nur die Metadaten-Notiz erzeugt "
-                "(zugestellt: nein — Trockenlauf)."
+                "Self-test failed — only the metadata notice was created "
+                "(delivered: no — dry run)."
             )
             return EXIT_ERROR
         # `notice_delivered` sagt nur, dass die Warteschlange die Notiz angenommen hat.
         # Zugestellt ist sie erst, wenn danach nichts mehr wartet (CT-4).
         delivered = result.notice_delivered and not pending
         console.err(
-            "Selbsttest fehlgeschlagen — es wurde nur die Metadaten-Notiz erzeugt "
-            f"(zugestellt: {'ja' if delivered else 'nein'})."
+            "Self-test failed — only the metadata notice was created "
+            f"(delivered: {'yes' if delivered else 'no'})."
         )
         return EXIT_ERROR
     if isinstance(result, QueuedLow):  # pragma: no cover - Schwelle ist auf `low` gesetzt
-        console.err("Selbsttest: Mail landete im Sammel-Digest statt in einer Nachricht.")
+        console.err("Self-test: the mail went into the daily digest instead of a message.")
         return EXIT_ERROR
 
     parts = result.message.parts
     if collector is not None:
-        console.out(f"5/5 Nachricht erzeugt ({_parts_label(parts)}) — Trockenlauf, nicht gesendet:")
+        console.out(f"5/5 Message created ({_parts_label(parts)}) — dry run, not sent:")
         console.out("")
         for part in parts:
             console.out(part)
@@ -1406,18 +1408,18 @@ def _report_test_result(
         return EXIT_OK
     if pending:
         console.err(
-            "Selbsttest: Die Nachricht wurde erzeugt, aber nicht zugestellt — sie liegt in "
-            "der Warteschlange. Messenger-Zugangsdaten prüfen "
+            "Self-test: the message was created but not delivered — it is sitting in the "
+            "queue. Check the messenger credentials "
             "(`maildigest connect-messenger`)."
         )
         return EXIT_ERROR
-    console.out(f"5/5 Zugestellt ({_parts_label(parts)}). Schau in deinen Messenger.")
+    console.out(f"5/5 Delivered ({_parts_label(parts)}). Check your messenger.")
     return EXIT_OK
 
 
 def _parts_label(parts: Sequence[str]) -> str:
     """`1 Teil` / `3 Teile` — die Nachricht wird auf das Messenger-Limit gesplittet."""
-    return "1 Teil" if len(parts) == 1 else f"{len(parts)} Teile"
+    return "1 part" if len(parts) == 1 else f"{len(parts)} parts"
 
 
 def _count(number: int, singular: str, plural: str) -> str:
@@ -1429,13 +1431,13 @@ def _read_test_mail(eml: str | None) -> tuple[bytes, str]:
     """Liest die Testmail: eigene Datei oder die mitgelieferte Beispielmail."""
     if eml is None:
         data = resources.files("maildigest").joinpath("data/selftest.eml").read_bytes()
-        return data, "mitgelieferte Beispielmail"
+        return data, "bundled example mail"
     path = Path(eml)
     try:
         return path.read_bytes(), str(path)
     except OSError as exc:
         raise CliError(
-            f"Testmail {path} kann nicht gelesen werden: {exc.strerror}.", EXIT_ERROR
+            f"Test mail {path} cannot be read: {exc.strerror}.", EXIT_ERROR
         ) from exc
 
 
@@ -1445,8 +1447,8 @@ def _build_raw_mail(raw_bytes: bytes) -> RawMail:
         return build_raw_mail(MailMessage.from_bytes(raw_bytes))
     except Exception as exc:  # jede Parser-Panne ist hier ein Bedienfehler, kein Absturz
         raise CliError(
-            f"Die Datei ist keine lesbare E-Mail ({type(exc).__name__}). Erwartet wird eine "
-            "RFC-822-Datei (`.eml`) mit Headern und Body.",
+            f"The file is not a readable e-mail ({type(exc).__name__}). An RFC 822 file "
+            "(`.eml`) with headers and a body is expected.",
             EXIT_USAGE,
         ) from exc
 
@@ -1469,12 +1471,12 @@ def cmd_run(ctx: Context) -> int:
             try:
                 stats = runner.run_once()
             except IngestError as exc:
-                raise CliError(f"Postfach nicht erreichbar: {exc}", EXIT_ERROR) from exc
+                raise CliError(f"Mailbox unreachable: {exc}", EXIT_ERROR) from exc
             console.err(
-                f"Lauf beendet: {stats.ingest.fetched} Mails geholt, "
-                f"{stats.ingest.processed} verarbeitet, {stats.ingest.duplicates} Duplikate, "
-                f"{stats.ingest.failed} Fehler, {stats.delivery.delivered} Nachrichten "
-                f"zugestellt, {runner.outbox.pending} in der Warteschlange."
+                f"Run finished: {stats.ingest.fetched} mails fetched, "
+                f"{stats.ingest.processed} processed, {stats.ingest.duplicates} duplicates, "
+                f"{stats.ingest.failed} errors, {stats.delivery.delivered} messages "
+                f"delivered, {runner.outbox.pending} queued."
             )
             return EXIT_OK
         runner.run_forever()
@@ -1550,11 +1552,11 @@ def _port_value(raw: str) -> int:
         value = int(raw)
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"'{raw}' ist keine ganze Zahl (erlaubt: {_PORT_MIN} bis {_PORT_MAX})"
+            f"'{raw}' is not a whole number (allowed: {_PORT_MIN} to {_PORT_MAX})"
         ) from None
     if not _PORT_MIN <= value <= _PORT_MAX:
         raise argparse.ArgumentTypeError(
-            f"{value} liegt außerhalb des erlaubten Bereichs {_PORT_MIN} bis {_PORT_MAX}"
+            f"{value} is outside the allowed range {_PORT_MIN} to {_PORT_MAX}"
         )
     return value
 
@@ -1571,87 +1573,89 @@ def build_parser() -> argparse.ArgumentParser:
     common = _ArgumentParser(add_help=False)
     common.add_argument(
         "--config",
-        metavar="PFAD",
+        metavar="PATH",
         default=argparse.SUPPRESS,
-        help="Pfad der Konfigurationsdatei",
+        help="path of the configuration file",
     )
     common.add_argument(
         "--non-interactive",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Keine Rückfragen stellen; Defaults und Optionen verwenden",
+        help="ask nothing; use defaults and options",
     )
 
     parser = _ArgumentParser(
         prog="maildigest",
         description=(
-            "Fasst Mails aus einem Mirror-Postfach zusammen, prüft sie auf Phishing und "
-            "schickt reinen Text an einen Messenger."
+            "Summarises mail from a mirror mailbox, checks it for phishing and sends "
+            "plain text to a messenger."
         ),
         parents=[common],
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="KOMMANDO")
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     init = subparsers.add_parser(
-        "init", parents=[common], help="Konfigurationsdatei anlegen (0600)"
+        "init", parents=[common], help="create the configuration file (0600)"
     )
-    init.add_argument("--force", action="store_true", help="Vorhandene Datei überschreiben")
-    init.add_argument("--language", choices=list(_LANGUAGES), help="Sprache der Zusammenfassungen")
+    init.add_argument("--force", action="store_true", help="overwrite an existing file")
+    init.add_argument("--language", choices=list(_LANGUAGES), help="language of the summaries")
     init.add_argument(
-        "--summary-length", choices=list(_SUMMARY_LENGTHS), help="Länge der Zusammenfassungen"
+        "--summary-length", choices=list(_SUMMARY_LENGTHS), help="length of the summaries"
     )
     init.add_argument(
-        "--min-importance", choices=list(_IMPORTANCES), help="Schwelle für Einzelzustellung"
+        "--min-importance", choices=list(_IMPORTANCES), help="threshold for individual delivery"
     )
-    init.add_argument("--low-digest-time", metavar="HH:MM", help="Uhrzeit des Sammel-Digests")
-    init.add_argument("--instructions", metavar="TEXT", help="Custom-Instructions")
+    init.add_argument("--low-digest-time", metavar="HH:MM", help="time of the daily digest")
+    init.add_argument("--instructions", metavar="TEXT", help="custom instructions")
     init.set_defaults(func=cmd_init)
 
     mail = subparsers.add_parser(
-        "connect-mail", parents=[common], help="Mirror-Postfach verbinden und testen"
+        "connect-mail", parents=[common], help="connect and test the mirror mailbox"
     )
-    mail.add_argument("--host", metavar="HOST", help="IMAP-Host")
+    mail.add_argument("--host", metavar="HOST", help="IMAP host")
     mail.add_argument(
-        "--port", type=_port_value, metavar="PORT", help="IMAP-Port (Default 993)"
+        "--port", type=_port_value, metavar="PORT", help="IMAP port (default 993)"
     )
-    mail.add_argument("--username", metavar="NAME", help="IMAP-Benutzername")
-    mail.add_argument("--folder", metavar="ORDNER", help="Zu lesender Ordner")
+    mail.add_argument("--username", metavar="NAME", help="IMAP username")
+    mail.add_argument("--folder", metavar="FOLDER", help="folder to read")
     mail.add_argument(
-        "--move-processed-to", metavar="ORDNER", help="Verarbeitete Mails dorthin verschieben"
+        "--move-processed-to", metavar="FOLDER", help="move processed mail there"
     )
-    mail.add_argument("--no-test", action="store_true", help="Ohne Verbindungstest speichern")
+    mail.add_argument("--no-test", action="store_true", help="save without a connection test")
     mail.set_defaults(func=cmd_connect_mail)
 
     llm = subparsers.add_parser(
-        "connect-llm", parents=[common], help="Sprachmodell verbinden und testen"
+        "connect-llm", parents=[common], help="connect and test the language model"
     )
-    llm.add_argument("--provider", choices=list(_PROVIDERS), help="Provider")
-    llm.add_argument("--model", metavar="ID", help="Modell-ID des Anbieters")
-    llm.add_argument("--base-url", metavar="URL", help="Endpunkt für openai_compatible")
-    llm.add_argument("--no-test", action="store_true", help="Ohne Testaufruf speichern")
+    llm.add_argument("--provider", choices=list(_PROVIDERS), help="provider")
+    llm.add_argument("--model", metavar="ID", help="model ID of the provider")
+    llm.add_argument("--base-url", metavar="URL", help="endpoint for openai_compatible")
+    llm.add_argument("--no-test", action="store_true", help="save without a test call")
     llm.set_defaults(func=cmd_connect_llm)
 
     messenger = subparsers.add_parser(
-        "connect-messenger", parents=[common], help="Messenger verbinden und testen"
+        "connect-messenger", parents=[common], help="connect and test the messenger"
     )
-    messenger.add_argument("--messenger", choices=list(_MESSENGERS), help="Zielsystem")
-    messenger.add_argument("--chat-id", metavar="ID", help="Telegram-Chat-ID (statt getUpdates)")
-    messenger.add_argument("--webhook-url", metavar="URL", help="Discord-Webhook-URL")
-    messenger.add_argument("--signal-socket", metavar="PFAD", help="Pfad des signal-cli-Sockets")
-    messenger.add_argument("--no-test", action="store_true", help="Ohne Testnachricht speichern")
+    messenger.add_argument("--messenger", choices=list(_MESSENGERS), help="target system")
+    messenger.add_argument(
+        "--chat-id", metavar="ID", help="Telegram chat ID (instead of getUpdates)"
+    )
+    messenger.add_argument("--webhook-url", metavar="URL", help="Discord webhook URL")
+    messenger.add_argument("--signal-socket", metavar="PATH", help="path of the signal-cli socket")
+    messenger.add_argument("--no-test", action="store_true", help="save without a test message")
     messenger.set_defaults(func=cmd_connect_messenger)
 
     test = subparsers.add_parser(
-        "test", parents=[common], help="Ende-zu-Ende-Selbsttest mit einer Beispielmail"
+        "test", parents=[common], help="end-to-end self-test with an example mail"
     )
-    test.add_argument("--eml", metavar="PFAD", help="Eigene .eml-Datei statt der Beispielmail")
+    test.add_argument("--eml", metavar="PATH", help="your own .eml file instead of the example")
     test.add_argument(
-        "--dry-run", action="store_true", help="Nachricht nur anzeigen, nicht zustellen"
+        "--dry-run", action="store_true", help="only show the message, do not deliver it"
     )
     test.set_defaults(func=cmd_test)
 
-    run = subparsers.add_parser("run", parents=[common], help="Dauerbetrieb (Polling)")
-    run.add_argument("--once", action="store_true", help="Einmal verarbeiten und beenden")
+    run = subparsers.add_parser("run", parents=[common], help="continuous operation (polling)")
+    run.add_argument("--once", action="store_true", help="process once and exit")
     run.set_defaults(func=cmd_run)
 
     return parser
@@ -1706,7 +1710,7 @@ def main(
             context.hooks.configure_logging("WARNING", stream=streams_err)
         return command(context)
     except CliError as exc:
-        streams_err.write(f"Fehler: {exc}\n")
+        streams_err.write(f"Error: {exc}\n")
         return exc.code
     except KeyboardInterrupt:
         streams_err.write("Abgebrochen.\n")
@@ -1714,10 +1718,10 @@ def main(
     except (ConfigError, StateError, IngestError, MessengerError, LLMError) as exc:
         # Sicherheitsnetz: Eine hier durchgerutschte Ausnahme darf keinen Traceback mit
         # möglichen Inhalten auf das Terminal schreiben (I5).
-        streams_err.write(f"Fehler: {exc}\n")
+        streams_err.write(f"Error: {exc}\n")
         return EXIT_ERROR
     except httpx.HTTPError as exc:
-        streams_err.write(f"Fehler: Netzwerkproblem ({type(exc).__name__}).\n")
+        streams_err.write(f"Error: network problem ({type(exc).__name__}).\n")
         return EXIT_ERROR
 
 

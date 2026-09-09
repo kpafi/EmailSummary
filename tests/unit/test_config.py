@@ -182,7 +182,7 @@ def test_broken_toml_raises_german_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as excinfo:
         load_config(path, env={})
 
-    assert "kein gültiges TOML" in str(excinfo.value)
+    assert "not valid TOML" in str(excinfo.value)
 
 
 def test_missing_required_fields_are_listed(tmp_path: Path) -> None:
@@ -193,10 +193,10 @@ def test_missing_required_fields_are_listed(tmp_path: Path) -> None:
         load_config(path, env={})
 
     message = str(excinfo.value)
-    assert "Konfiguration ungültig" in message
-    assert "[imap] host: Pflichtfeld fehlt." in message
-    assert "[imap] username: Pflichtfeld fehlt." in message
-    assert "[llm] model: Pflichtfeld fehlt." in message
+    assert "Invalid configuration" in message
+    assert "[imap] host: required value missing." in message
+    assert "[imap] username: required value missing." in message
+    assert "[llm] model: required value missing." in message
 
 
 def test_unreadable_file_raises_german_error(tmp_path: Path) -> None:
@@ -207,7 +207,7 @@ def test_unreadable_file_raises_german_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as excinfo:
         load_config(directory, env={})
 
-    assert "kann nicht gelesen werden" in str(excinfo.value)
+    assert "cannot be read" in str(excinfo.value)
 
 
 def test_non_utf8_file_raises_german_error(tmp_path: Path) -> None:
@@ -218,7 +218,7 @@ def test_non_utf8_file_raises_german_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as excinfo:
         load_config(path, env={})
 
-    assert "nicht UTF-8-kodiert" in str(excinfo.value)
+    assert "is not UTF-8 encoded" in str(excinfo.value)
 
 
 def test_error_message_never_contains_secret_values(tmp_path: Path) -> None:
@@ -246,7 +246,7 @@ def test_env_override_does_not_mask_wrong_section_type() -> None:
         )
 
     message = str(excinfo.value)
-    assert "imap: Erwartet wird hier eine TOML-Sektion" in message
+    assert "imap: a TOML section (table) is expected" in message
     assert "geheim" not in message
 
 
@@ -256,8 +256,8 @@ def test_missing_whole_sections_are_reported() -> None:
         load_config_from_dict({}, env={})
 
     message = str(excinfo.value)
-    assert "imap: Pflichtfeld fehlt." in message
-    assert "llm: Pflichtfeld fehlt." in message
+    assert "imap: required value missing." in message
+    assert "llm: required value missing." in message
 
 
 def test_invalid_literal_value_lists_allowed_values(tmp_path: Path) -> None:
@@ -269,7 +269,7 @@ def test_invalid_literal_value_lists_allowed_values(tmp_path: Path) -> None:
 
     message = str(excinfo.value)
     assert "[general] summary_length" in message
-    assert "Ungültiger Wert" in message
+    assert "invalid value" in message
     assert "short" in message and "medium" in message and "long" in message
 
 
@@ -281,7 +281,7 @@ def test_invalid_time_format_is_reported(tmp_path: Path) -> None:
         load_config(path, env={})
 
     assert "[general] low_digest_time" in str(excinfo.value)
-    assert "Ungültiges Format" in str(excinfo.value)
+    assert "invalid format" in str(excinfo.value)
 
 
 def test_out_of_range_number_is_reported() -> None:
@@ -296,7 +296,7 @@ def test_out_of_range_number_is_reported() -> None:
         )
 
     assert "[imap] port" in str(excinfo.value)
-    assert "zu groß" in str(excinfo.value)
+    assert "too large" in str(excinfo.value)
 
 
 def test_unknown_field_is_rejected(tmp_path: Path) -> None:
@@ -308,7 +308,7 @@ def test_unknown_field_is_rejected(tmp_path: Path) -> None:
 
     message = str(excinfo.value)
     assert "[general] sprache" in message
-    assert "Unbekanntes Feld" in message
+    assert "unknown field" in message
 
 
 def test_ct2_fehlermeldung_verweist_auf_die_feldreferenz(tmp_path: Path) -> None:

@@ -269,7 +269,7 @@ def _format_location(location: tuple[int | str, ...]) -> str:
     """Baut aus einem pydantic-`loc` eine TOML-nahe Pfadangabe wie `[imap] host`."""
     parts = [str(item) for item in location]
     if not parts:
-        return "(Wurzel)"
+        return "(root)"
     if len(parts) == 1:
         return parts[0]
     return f"[{'.'.join(parts[:-1])}] {parts[-1]}"
@@ -280,33 +280,33 @@ def _translate_error(error: dict[str, Any]) -> str:
     error_type = str(error.get("type", ""))
     context = error.get("ctx") or {}
     if error_type == "missing":
-        return "Pflichtfeld fehlt."
+        return "required value missing."
     if error_type == "extra_forbidden":
-        return "Unbekanntes Feld — Tippfehler? (Feld entfernen oder Schreibweise prüfen)"
+        return "unknown field — typo? (remove the field or check the spelling)"
     if error_type == "literal_error":
-        return f"Ungültiger Wert; erlaubt ist {context.get('expected', 'ein anderer Wert')}."
+        return f"invalid value; allowed is {context.get('expected', 'a different value')}."
     if error_type == "string_pattern_mismatch":
-        return f"Ungültiges Format (erwartet: Muster {context.get('pattern', '')})."
+        return f"invalid format (expected pattern: {context.get('pattern', '')})."
     if error_type in {"string_too_short", "string_type"}:
-        return "Wert muss ein nicht-leerer Text sein."
+        return "value must be a non-empty string."
     if error_type in {"int_parsing", "int_type"}:
-        return "Wert muss eine ganze Zahl sein."
+        return "value must be a whole number."
     if error_type in {"bool_parsing", "bool_type"}:
-        return "Wert muss true oder false sein."
+        return "value must be true or false."
     if error_type in {"greater_than_equal", "greater_than"}:
-        return f"Wert ist zu klein (Minimum: {context.get('ge', context.get('gt', '?'))})."
+        return f"value is too small (minimum: {context.get('ge', context.get('gt', '?'))})."
     if error_type in {"less_than_equal", "less_than"}:
-        return f"Wert ist zu groß (Maximum: {context.get('le', context.get('lt', '?'))})."
+        return f"value is too large (maximum: {context.get('le', context.get('lt', '?'))})."
     if error_type in {"dict_type", "model_type"}:
-        return "Erwartet wird hier eine TOML-Sektion (Tabelle)."
+        return "a TOML section (table) is expected here."
     if error_type == "list_type":
-        return "Erwartet wird hier eine Liste."
-    return str(error.get("msg", "Ungültiger Wert."))
+        return "a list is expected here."
+    return str(error.get("msg", "invalid value."))
 
 
 def _validation_error_message(exc: ValidationError, source: str) -> str:
     """Baut die vollständige, mehrzeilige deutsche Fehlermeldung für alle Einzelfehler."""
-    lines = [f"Konfiguration ungültig ({source}):"]
+    lines = [f"Invalid configuration ({source}):"]
     lines += [
         f"  - {_format_location(tuple(error['loc']))}: {_translate_error(dict(error))}"
         for error in exc.errors()
@@ -314,9 +314,9 @@ def _validation_error_message(exc: ValidationError, source: str) -> str:
     lines.append(
         # Die Feldreferenz steht in SPEC-CLI.md §5 — dorthin verweist auch der Kopf der
         # von `init` erzeugten config.toml. ARCHITECTURE §5 war schlicht falsch (CT-2).
-        "Referenz aller Felder: docs/SPEC-CLI.md §5. "
-        "Secrets können alternativ über die Umgebungsvariablen "
-        f"{ENV_IMAP_PASSWORD}, {ENV_LLM_API_KEY}, {ENV_TELEGRAM_TOKEN} gesetzt werden."
+        "Reference for all fields: docs/SPEC-CLI.md §5. "
+        "Secrets can alternatively be set through the environment variables "
+        f"{ENV_IMAP_PASSWORD}, {ENV_LLM_API_KEY}, {ENV_TELEGRAM_TOKEN}."
     )
     return "\n".join(lines)
 
@@ -349,18 +349,18 @@ def load_config(path: str | Path, *, env: dict[str, str] | None = None) -> Confi
         ) from exc
     except OSError as exc:
         raise ConfigError(
-            f"Konfigurationsdatei {config_path} kann nicht gelesen werden: {exc.strerror}."
+            f"Configuration file {config_path} cannot be read: {exc.strerror}."
         ) from exc
 
     try:
         data = tomllib.loads(raw_bytes.decode("utf-8"))
     except UnicodeDecodeError as exc:
         raise ConfigError(
-            f"Konfigurationsdatei {config_path} ist nicht UTF-8-kodiert."
+            f"Configuration file {config_path} is not UTF-8 encoded."
         ) from exc
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(
-            f"Konfigurationsdatei {config_path} ist kein gültiges TOML: {exc}"
+            f"Configuration file {config_path} is not valid TOML: {exc}"
         ) from exc
 
     return load_config_from_dict(data, env=env, source=str(config_path))

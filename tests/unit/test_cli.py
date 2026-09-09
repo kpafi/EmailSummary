@@ -49,13 +49,13 @@ def run(
 def test_ohne_kommando_zeigt_hilfe_und_exit_2() -> None:
     code, out, _err = run([])
     assert code == EXIT_USAGE
-    assert "KOMMANDO" in out
+    assert "COMMAND" in out
 
 
 def test_unbekanntes_kommando_ist_bedienfehler() -> None:
     code, _out, err = run(["gibtsnicht"])
     assert code == EXIT_USAGE
-    assert "Fehler:" in err
+    assert "Error:" in err
 
 
 def test_unbekannte_option_ist_bedienfehler() -> None:
@@ -87,7 +87,7 @@ def test_init_legt_datei_mit_0600_an(tmp_path: Path) -> None:
     assert code == EXIT_OK
     assert target.exists()
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
-    assert "Nächste Schritte" in out
+    assert "Next steps" in out
 
     data = tomllib.loads(target.read_text(encoding="utf-8"))
     assert data["general"]["language"] == "de"
@@ -230,7 +230,7 @@ def test_laden_von_kaputtem_toml_meldet_klartext(tmp_path: Path) -> None:
     target.write_text("[general\n", encoding="utf-8")
     code, _out, err = run(["connect-mail", "--config", str(target), "--non-interactive"])
     assert code == EXIT_ERROR
-    assert "kein gültiges" in err
+    assert "not valid" in err
 
 
 def test_section_meldet_falschen_typ(tmp_path: Path) -> None:
@@ -259,7 +259,7 @@ def test_ask_nimmt_default_bei_leerer_eingabe() -> None:
 def test_ask_wiederholt_bei_unerlaubtem_wert() -> None:
     console, err = _console("falsch\nde\n")
     assert console.ask("Sprache", allowed=("de", "en")) == "de"
-    assert "Ungültiger Wert" in err.getvalue()
+    assert "Invalid value" in err.getvalue()
 
 
 def test_ask_bricht_nach_drei_fehlversuchen_ab() -> None:
@@ -273,7 +273,7 @@ def test_ask_meldet_eof_als_abbruch() -> None:
     console, _err = _console("")
     with pytest.raises(CliError) as excinfo:
         console.ask("Frage")
-    assert "abgebrochen" in str(excinfo.value).lower()
+    assert "aborted" in str(excinfo.value).lower()
 
 
 def test_ask_nicht_interaktiv_verlangt_pflichtangabe() -> None:
@@ -287,7 +287,7 @@ def test_ask_nicht_interaktiv_verlangt_pflichtangabe() -> None:
 def test_ask_int_prueft_bereich() -> None:
     console, err = _console("abc\n99999\n993\n")
     assert console.ask_int("Port", default=1) == 993
-    assert "ganze Zahl" in err.getvalue()
+    assert "whole number" in err.getvalue()
 
 
 def test_choose_liefert_index() -> None:
@@ -307,12 +307,12 @@ def test_confirm_versteht_ja() -> None:
 
 def test_ask_secret_liest_ohne_terminal_aus_stdin() -> None:
     console, _err = _console("geheim\n")
-    assert console.ask_secret("Passwort") == "geheim"
+    assert console.ask_secret("Password") == "geheim"
 
 
 def test_ask_secret_fragt_nicht_ohne_interaktivitaet() -> None:
     console, _err = _console("geheim\n", interactive=False)
-    assert console.ask_secret("Passwort") == ""
+    assert console.ask_secret("Password") == ""
 
 
 # --- Parser-Struktur ---------------------------------------------------------------------
@@ -358,7 +358,7 @@ def test_nicht_schreibbares_verzeichnis_ist_ein_fehler(tmp_path: Path) -> None:
             ["init", "--config", str(gesperrt / "config.toml"), "--non-interactive"]
         )
         assert code == EXIT_ERROR
-        assert "kann nicht geschrieben werden" in err
+        assert "cannot be written" in err
     finally:
         gesperrt.chmod(0o700)
 
@@ -379,7 +379,7 @@ def test_render_toml_kann_listen_und_zahlen() -> None:
 def test_ask_wiederholt_bei_leerer_pflichtangabe() -> None:
     console, err = _console("\nwert\n")
     assert console.ask("Host", required=True) == "wert"
-    assert "Pflichtangabe" in err.getvalue()
+    assert "Required" in err.getvalue()
 
 
 def test_ask_int_nimmt_default_und_choose_meldet_leere_liste() -> None:
@@ -393,7 +393,7 @@ def test_choose_bricht_nach_drei_fehlversuchen_ab() -> None:
     console, err = _console("9\n0\n7\n")
     with pytest.raises(CliError):
         console.choose("Ordner", ["INBOX"])
-    assert "zwischen 1 und 1" in err.getvalue()
+    assert "between 1 and 1" in err.getvalue()
 
 
 def test_confirm_nimmt_default_bei_leerer_eingabe() -> None:
@@ -526,7 +526,7 @@ def test_ct3_init_nicht_interaktiv_druckt_keinen_fragehinweis(tmp_path: Path) ->
         ["init", "--config", str(tmp_path / "config.toml"), "--non-interactive"]
     )
     assert code == EXIT_OK
-    assert "leer lassen = keine" not in out
+    assert "leave empty for none" not in out
 
 
 def test_ct3_init_interaktiv_erklaert_die_custom_instructions(tmp_path: Path) -> None:
@@ -536,7 +536,7 @@ def test_ct3_init_interaktiv_erklaert_die_custom_instructions(tmp_path: Path) ->
         stdin="\n\n\n\n\n",
     )
     assert code == EXIT_OK
-    assert "leer lassen = keine" in out
+    assert "leave empty for none" in out
 
 
 @pytest.mark.parametrize("port", ["0", "99999", "-1", "keinezahl"])

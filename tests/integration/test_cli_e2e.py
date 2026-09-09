@@ -186,7 +186,7 @@ def test_selbsttest_trockenlauf_zeigt_die_nachricht(tmp_path: Path) -> None:
     assert code == EXIT_OK
     assert messenger.sent == []
     assert "Heizungsablesung" in out
-    assert "Trockenlauf" in out
+    assert "Dry run" in out
 
 
 def test_selbsttest_mit_eigener_eml(tmp_path: Path) -> None:
@@ -203,8 +203,8 @@ def test_selbsttest_mit_eigener_eml(tmp_path: Path) -> None:
     )
     assert code == EXIT_OK
     # Genau ein Anhang ⇒ deutsche Einzahlform (SPEC-CLI §4, WP12).
-    assert "1 Anhang (" in out
-    assert "1 Anhänge" not in out
+    assert "1 attachment (" in out
+    assert "1 attachments" not in out
 
 
 def test_selbsttest_mit_phishing_mail_zeigt_banner(tmp_path: Path) -> None:
@@ -225,7 +225,7 @@ def test_selbsttest_mit_phishing_mail_zeigt_banner(tmp_path: Path) -> None:
         hooks=make_hooks(messenger=messenger, verdict=verdict),
     )
     assert code == EXIT_OK
-    assert "Phishing-Risiko=high" in out
+    assert "phishing risk=high" in out
     assert "PHISHING-VERDACHT" in "\n".join(messenger.sent[0].parts)
 
 
@@ -238,7 +238,7 @@ def test_selbsttest_meldet_fail_closed_mit_exit_1(tmp_path: Path) -> None:
     assert code == EXIT_ERROR
     assert "Fail-closed" in out
     assert "llm_timeout" in out
-    assert "fehlgeschlagen" in err
+    assert "failed" in err
     # F-OPS-3: Die Metadaten-Notiz geht trotzdem raus.
     assert len(messenger.sent) == 1
     assert "nicht sicher verarbeitet" in messenger.sent[0].parts[0]
@@ -250,7 +250,7 @@ def test_selbsttest_meldet_gescheiterte_zustellung(tmp_path: Path) -> None:
         hooks=make_hooks(messenger=FakeMessenger(fail=True)),
     )
     assert code == EXIT_ERROR
-    assert "Warteschlange" in err
+    assert "queue" in err
 
 
 def test_selbsttest_ohne_config_nennt_init(tmp_path: Path) -> None:
@@ -269,7 +269,7 @@ def test_selbsttest_meldet_unvollstaendige_config(tmp_path: Path) -> None:
         ["test", "--config", str(path)], hooks=make_hooks(messenger=FakeMessenger())
     )
     assert code == EXIT_ERROR
-    assert "Pflichtfeld fehlt" in err
+    assert "required value missing" in err
 
 
 def test_selbsttest_mit_muell_datei_stuerzt_nicht_ab(tmp_path: Path) -> None:
@@ -303,7 +303,7 @@ def test_selbsttest_meldet_fehlende_eml_datei(tmp_path: Path) -> None:
         hooks=make_hooks(messenger=FakeMessenger()),
     )
     assert code == EXIT_ERROR
-    assert "kann nicht gelesen werden" in err
+    assert "cannot be read" in err
 
 
 # --- maildigest run -----------------------------------------------------------------------
@@ -339,7 +339,7 @@ def test_run_once_laeuft_und_meldet_die_bilanz(tmp_path: Path) -> None:
     )
     assert code == EXIT_OK
     assert client.polls == 1
-    assert "Lauf beendet" in err
+    assert "Run finished" in err
     assert (tmp_path / "state.db").exists()
 
 
@@ -351,7 +351,7 @@ def test_run_once_meldet_unerreichbares_postfach(tmp_path: Path) -> None:
         ),
     )
     assert code == EXIT_ERROR
-    assert "Postfach nicht erreichbar" in err
+    assert "Mailbox unreachable" in err
 
 
 def test_run_konfiguriert_das_logging(tmp_path: Path) -> None:
@@ -484,9 +484,9 @@ def test_ct4_trockenlauf_meldet_keine_zustellung_und_zeigt_die_notiz(tmp_path: P
     assert "nicht sicher verarbeitet" in out
     assert "Betreff:" in out
     # Und die Bilanz behauptet keine Zustellung mehr.
-    assert "zugestellt: ja" not in err
-    assert "zugestellt: nein" in err
-    assert "Trockenlauf" in err
+    assert "delivered: yes" not in err
+    assert "delivered: no" in err
+    assert "dry run" in err
 
 
 def test_ct4_ohne_trockenlauf_bleibt_die_zustellmeldung_ehrlich(tmp_path: Path) -> None:
@@ -498,7 +498,7 @@ def test_ct4_ohne_trockenlauf_bleibt_die_zustellmeldung_ehrlich(tmp_path: Path) 
         ),
     )
     assert code == EXIT_ERROR
-    assert "zugestellt: nein" in err
+    assert "delivered: no" in err
 
 
 @dataclass
@@ -553,9 +553,9 @@ def test_ct10_bilanz_zaehlt_direkt_zugestellte_nachrichten(tmp_path: Path) -> No
     )
     assert code == EXIT_OK
     assert len(messenger.sent) == 3
-    assert "3 Mails geholt, 3 verarbeitet" in err
-    assert "3 Nachrichten zugestellt" in err
-    assert "0 in der Warteschlange" in err
+    assert "3 mails fetched, 3 processed" in err
+    assert "3 messages delivered" in err
+    assert "0 queued" in err
 
 
 def test_ct10_leeres_postfach_meldet_weiterhin_null(tmp_path: Path) -> None:
@@ -565,7 +565,7 @@ def test_ct10_leeres_postfach_meldet_weiterhin_null(tmp_path: Path) -> None:
         hooks=make_hooks(messenger=FakeMessenger(), client_factory=lambda: FakeImapClient()),
     )
     assert code == EXIT_OK
-    assert "0 Nachrichten zugestellt" in err
+    assert "0 messages delivered" in err
 
 
 def test_ct10_gescheiterte_zustellung_wird_nicht_als_zugestellt_gezaehlt(
@@ -580,5 +580,5 @@ def test_ct10_gescheiterte_zustellung_wird_nicht_als_zugestellt_gezaehlt(
         ),
     )
     assert code == EXIT_OK
-    assert "0 Nachrichten zugestellt" in err
-    assert "2 in der Warteschlange" in err
+    assert "0 messages delivered" in err
+    assert "2 queued" in err

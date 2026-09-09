@@ -154,7 +154,7 @@ def test_connect_mail_interaktiv_mit_ordnerwahl(config_path: Path) -> None:
     assert data["imap"]["password"] == "geheim"
     assert data["imap"]["folder"] == "Archiv"
     assert clients[0].disconnected is True
-    assert "Weiterleitung" in out
+    assert "forwarding" in out
 
 
 def test_connect_mail_nutzt_passwort_aus_der_umgebung(
@@ -231,7 +231,7 @@ def test_connect_mail_no_test_verlangt_trotzdem_ein_passwort(config_path: Path) 
     )
     # Ohne Test darf auch das fehlende Passwort nicht durchrutschen:
     assert code == EXIT_USAGE
-    assert "Passwort" in _err_text(out, _err)
+    assert "password" in _err_text(out, _err).lower()
 
 
 def _err_text(out: str, err: str) -> str:
@@ -274,7 +274,7 @@ def test_connect_mail_faellt_bei_fehlender_ordnerliste_auf_vorgabe_zurueck(
         hooks=hooks,
     )
     assert code == EXIT_OK
-    assert "Ordnerliste nicht abrufbar" in err
+    assert "Folder list unavailable" in err
     assert read(config_path)["imap"]["folder"] == "INBOX"
 
 
@@ -361,7 +361,7 @@ def test_connect_llm_warnt_bei_unverschluesselter_fremd_url(config_path: Path) -
         hooks=hooks,
     )
     assert code == EXIT_OK
-    assert "unverschlüsselt" in err
+    assert "unencrypted" in err
 
 
 def test_connect_llm_nutzt_key_aus_der_umgebung(config_path: Path, monkeypatch: Any) -> None:
@@ -401,7 +401,7 @@ def test_connect_messenger_telegram_findet_chat_id(config_path: Path) -> None:
     telegram = read(config_path)["messenger"]["telegram"]
     assert telegram["chat_id"] == "4711"
     assert telegram["token"] == "123:token"
-    assert "Chat-ID gefunden: 4711" in out
+    assert "Chat ID found: 4711" in out
     assert len(messenger.sent) == 1
     assert "Testnachricht" in messenger.sent[0].parts[0]
 
@@ -469,7 +469,7 @@ def test_connect_messenger_meldet_falsches_token(config_path: Path) -> None:
         hooks=hooks,
     )
     assert code == EXIT_ERROR
-    assert "Bot-Token" in err
+    assert "bot token" in err.lower()
 
 
 def test_connect_messenger_meldet_nicht_erreichbaren_dienst(config_path: Path) -> None:
@@ -483,7 +483,7 @@ def test_connect_messenger_meldet_nicht_erreichbaren_dienst(config_path: Path) -
         hooks=hooks,
     )
     assert code == EXIT_ERROR
-    assert "nicht erreichbar" in err
+    assert "unreachable" in err
 
 
 def test_connect_messenger_meldet_zustellfehler(config_path: Path) -> None:
@@ -499,7 +499,7 @@ def test_connect_messenger_meldet_zustellfehler(config_path: Path) -> None:
         hooks=hooks,
     )
     assert code == EXIT_ERROR
-    assert "Testnachricht konnte nicht zugestellt werden" in err
+    assert "The test message could not be delivered" in err
 
 
 def test_connect_messenger_discord(config_path: Path) -> None:
@@ -537,7 +537,7 @@ def test_connect_messenger_discord_ohne_url_ist_bedienfehler(config_path: Path) 
         ]
     )
     assert code == EXIT_USAGE
-    assert "Webhook-URL" in err
+    assert "webhook URL" in err
 
 
 def test_connect_messenger_signal_schaltet_frei(config_path: Path) -> None:
@@ -599,4 +599,4 @@ def test_connect_messenger_no_test_sendet_nichts(config_path: Path) -> None:
     )
     assert code == EXIT_OK
     assert messenger.sent == []
-    assert "übersprungen" in out
+    assert "skipped" in out

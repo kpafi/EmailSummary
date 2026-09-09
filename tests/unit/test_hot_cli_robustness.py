@@ -58,7 +58,7 @@ def run(argv: list[str], *, stdin: str = "") -> tuple[int, str, str]:
 def assert_clean_error(code: int, out: str, err: str) -> None:
     """Definierter Fehler-Exit, deutsche Meldung, kein Traceback, keine Secrets."""
     assert code in (EXIT_ERROR, EXIT_USAGE), f"unerwarteter Exit-Code {code}"
-    assert "Fehler:" in err, f"keine Fehlermeldung: {err!r}"
+    assert "Error:" in err, f"keine Fehlermeldung: {err!r}"
     assert "Traceback" not in err and "Traceback" not in out
     for secret in SECRETS:
         assert secret not in err and secret not in out, "Secret in der Ausgabe (I5)"
@@ -192,7 +192,7 @@ def test_unknown_command_is_a_usage_error() -> None:
     """Unbekanntes Kommando ⇒ Exit 2, kein Traceback."""
     code, _out, err = run(["voellig-erfunden"])
     assert code == EXIT_USAGE
-    assert "Fehler:" in err
+    assert "Error:" in err
 
 
 def test_test_command_with_missing_eml(tmp_path: Path) -> None:

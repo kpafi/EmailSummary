@@ -174,4 +174,4 @@ def test_connect_mail_zeigt_host_beispiele(tmp_path) -> None:
         ]
     )
     assert "imap.gmail.com" in out
-    assert "nicht deine Mailadresse" in out
+    assert "not your mail address" in out
