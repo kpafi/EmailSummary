@@ -257,7 +257,7 @@ class Console:
                 self.err(f"Please enter a value between {minimum} and {maximum}.")
                 continue
             return value
-        raise CliError("Zu viele ungültige Eingaben — abgebrochen.", EXIT_USAGE)
+        raise CliError("Too many invalid entries — aborted.", EXIT_USAGE)
 
     def ask_secret(self, prompt: str) -> str:
         """Fragt ein Secret ab — ohne Echo, sobald ein Terminal vorhanden ist (I5).
@@ -301,7 +301,7 @@ class Console:
             if 1 <= number <= len(options):
                 return number - 1
             self.err(f"Please enter a number between 1 and {len(options)}.")
-        raise CliError("Zu viele ungültige Eingaben — abgebrochen.", EXIT_USAGE)
+        raise CliError("Too many invalid entries — aborted.", EXIT_USAGE)
 
 
 def _isatty(stream: TextIO) -> bool:
@@ -1040,7 +1040,7 @@ def cmd_connect_llm(ctx: Context) -> int:
         _test_llm(ctx, section)
 
     config_file.save()
-    console.out(f"Gespeichert in {config_file.path} (Dateirechte 0600).")
+    console.out(f"Saved to {config_file.path} (file mode 0600).")
     return EXIT_OK
 
 
@@ -1086,7 +1086,7 @@ def _test_llm(ctx: Context, section: LlmConfig) -> None:
         ) from exc
     if not answer.strip():
         raise CliError("The provider returned an empty response.", EXIT_ERROR)
-    marker = "erwartete Antwort" if "OK" in answer.upper() else "unerwartete Antwort"
+    marker = "expected reply" if "OK" in answer.upper() else "unexpected reply"
     console.step(f"Response received ({len(answer)} characters, {marker}).")
 
 
@@ -1124,7 +1124,7 @@ def cmd_connect_messenger(ctx: Context) -> int:
         _send_test_message(ctx, section)
 
     config_file.save()
-    console.out(f"Gespeichert in {config_file.path} (Dateirechte 0600).")
+    console.out(f"Saved to {config_file.path} (file mode 0600).")
     return EXIT_OK
 
 

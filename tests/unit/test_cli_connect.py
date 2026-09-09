@@ -294,7 +294,7 @@ def test_connect_llm_interaktiv_mit_testaufruf(config_path: Path) -> None:
     data = read(config_path)["llm"]
     assert data["model"] == "claude-modell"
     assert data["api_key"] == "schluessel"
-    assert "erwartete Antwort" in out
+    assert "expected reply" in out
     # Der Testaufruf darf nie Mail-Inhalt enthalten und ist knapp gedeckelt.
     assert provider.calls[0][2] == 16
 
@@ -317,7 +317,7 @@ def test_connect_llm_zeigt_die_modellantwort_nicht_an(config_path: Path) -> None
     )
     assert code == EXIT_OK
     assert "IGNORIERE" not in out
-    assert "unerwartete Antwort" in out
+    assert "unexpected reply" in out
 
 
 def test_connect_llm_meldet_transportfehler(config_path: Path) -> None:
