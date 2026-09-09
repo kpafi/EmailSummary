@@ -286,7 +286,8 @@ def test_connect_llm_interaktiv_mit_testaufruf(config_path: Path) -> None:
     hooks = Hooks(build_provider=lambda **kwargs: provider)
     code, out, _err = run(
         ["connect-llm", "--config", str(config_path)],
-        stdin="anthropic\nclaude-modell\nschluessel\n",
+        # 6 = Anthropic in der Auswahlliste (providers.LLM_PRESETS)
+        stdin="6\nclaude-modell\nschluessel\n",
         hooks=hooks,
     )
     assert code == EXIT_OK

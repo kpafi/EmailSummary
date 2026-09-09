@@ -176,13 +176,22 @@ vorhandene Konfigurationsdatei voraus.
 
 Abfragen in dieser Reihenfolge:
 
-1. `Provider (anthropic/openai_compatible) [anthropic]: `
+1. Eine nummerierte **Auswahlliste der Betriebsarten** (interaktiv; mit `--provider` oder
+   `--non-interactive` entfällt sie und die Option entscheidet):
 
-Danach folgt eine Anleitung passend zum gewählten Provider: für `anthropic`, wo der
-API-Key herkommt (samt des häufigen Fehlers, dass ein gültiger Schlüssel ohne Guthaben
-abgewiesen wird) und welche Modell-IDs mit welchen Preisen zur Wahl stehen; für
-`openai_compatible` die üblichen Basis-URLs lokaler Server und der Hinweis, dass dort meist
-gar kein Schlüssel nötig ist.
+   1. kein Sprachmodell — funktioniert sofort, keine Anmeldung nötig (Vorgabe)
+   2. Groq — Gratis-Kontingent ohne Kreditkarte
+   3. OpenRouter — Gratis-Modelle ohne Kreditkarte
+   4. Cerebras — Gratis-Kontingent ohne Kreditkarte
+   5. lokales Modell (Ollama/LM Studio/vLLM) — gratis und vollständig privat
+   6. Anthropic — kostenpflichtig, beste Qualität
+   7. anderer OpenAI-kompatibler Endpunkt — Basis-URL selbst eintragen
+
+   Danach folgt die Anleitung zur gewählten Option: woher der Schlüssel kommt, welche
+   Stolperfalle dort typisch ist und — bei den Gratis-Anbietern — wo die aktuellen
+   Modell-IDs stehen. Bei Auswahl 1 endet das Kommando sofort mit Exit-Code 0: Es gibt
+   weder Modellnamen noch Schlüssel noch Testaufruf, `[llm] model` und `base_url` werden
+   geleert und ein etwaiger gespeicherter Schlüssel entfernt.
 
 2. `Modellname (exakte Modell-ID des Anbieters) [<bisheriger Wert>]: ` — Pflichtangabe, es
    gibt bewusst keinen Default
@@ -205,7 +214,7 @@ Schlägt der Aufruf fehl, endet das Kommando mit Exit-Code 1 und schreibt nichts
 
 | Option | Wert | Bedeutung |
 |---|---|---|
-| `--provider` | `anthropic` \| `openai_compatible` | Antwort auf Frage 1 |
+| `--provider` | `none` \| `anthropic` \| `openai_compatible` | Antwort auf Frage 1; überspringt die Auswahlliste |
 | `--model` | ID | Antwort auf Frage 2 |
 | `--base-url` | URL | Antwort auf Frage 3 |
 | `--no-test` | – | Ohne Testaufruf speichern |
@@ -398,8 +407,8 @@ Alle Felder mit ihren Defaults:
 | `[imap] folder` | Text | `"INBOX"` | Gelesener Ordner |
 | `[imap] poll_interval_seconds` | ≥ 5 | `120` | Abrufintervall im Dauerbetrieb |
 | `[imap] move_processed_to` | Text | `""` | Leer = nur Gelesen-Flag setzen. Der Ordner muss auf dem Server existieren, und der Server muss die MOVE-Erweiterung beherrschen. Fehlt eines von beidem, bleibt die Mail als gelesen im Quellordner liegen und der Lauf protokolliert `imap_postprocess_failed` mit dem Grund — der Zyklus läuft weiter (ADR-064/ADR-065) |
-| `[llm] provider` | `anthropic`/`openai_compatible` | `"anthropic"` | Anbieter |
-| `[llm] model` | Text | — | **Pflicht.** Exakte Modell-ID; bewusst kein Default |
+| `[llm] provider` | `none`/`anthropic`/`openai_compatible` | `"none"` | Anbieter. `none` = Betrieb ohne Sprachmodell (ADR-076): zugestellt wird ein beschrifteter Auszug statt einer Zusammenfassung, alle deterministischen Warnungen bleiben |
+| `[llm] model` | Text | `""` | **Pflicht, sobald `provider` nicht `none` ist.** Exakte Modell-ID; bewusst kein Default |
 | `[llm] api_key` | Text | — | Alternativ `MAILDIGEST_LLM_API_KEY`. Für `anthropic` erforderlich, für lokale Server meist nicht |
 | `[llm] base_url` | URL | `""` | Endpunkt für `openai_compatible` |
 | `[llm] max_tokens` | ≥ 1 | `1024` | Obergrenze je Antwort |

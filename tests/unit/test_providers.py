@@ -175,3 +175,45 @@ def test_connect_mail_zeigt_host_beispiele(tmp_path) -> None:
     )
     assert "imap.gmail.com" in out
     assert "not your mail address" in out
+
+
+# --- Auswahl des Sprachmodells (ADR-076) ------------------------------------------------------
+
+
+def test_erste_option_ist_die_ohne_anmeldung() -> None:
+    """Der Standard muss ohne Konto funktionieren — sonst tut das Werkzeug anfangs nichts."""
+    first = providers.LLM_PRESETS[0]
+    assert first.key == "none"
+    assert first.provider == "none"
+    assert not first.needs_key
+    assert not first.needs_model
+
+
+def test_es_gibt_kostenlose_optionen_mit_erklaerung() -> None:
+    """„Gratis" ohne Anleitung, wo man den Schlüssel herbekommt, hilft niemandem."""
+    free = [p for p in providers.LLM_PRESETS if p.key in {"groq", "openrouter", "cerebras"}]
+    assert len(free) == 3
+    for preset in free:
+        assert preset.provider == "openai_compatible"
+        assert preset.base_url.startswith("https://")
+        assert preset.detail
+
+
+def test_lokale_option_braucht_keinen_schluessel() -> None:
+    """Ollama & Co. laufen ohne Konto — die Abfrage darf keinen Schlüssel verlangen."""
+    local = next(p for p in providers.LLM_PRESETS if p.key == "ollama")
+    assert not local.needs_key
+    assert local.base_url.startswith("http://localhost")
+
+
+def test_jede_option_traegt_einen_gueltigen_provider_wert() -> None:
+    """Die Vorlage schreibt direkt in `[llm] provider` — ein Tippfehler wäre fatal."""
+    for preset in providers.LLM_PRESETS:
+        assert preset.provider in {"none", "anthropic", "openai_compatible"}
+        assert preset.label
+
+
+def test_intro_nennt_den_grund_fuer_den_fehlenden_mitgelieferten_schluessel() -> None:
+    """Ehrlichkeit an der Stelle, an der Nutzer „warum nicht einfach gratis?" fragen."""
+    assert "open source" in providers.LLM_CHOICE_INTRO
+    assert "no key of its own" in providers.LLM_CHOICE_INTRO

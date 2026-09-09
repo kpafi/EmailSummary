@@ -41,6 +41,7 @@ from types import FrameType
 from typing import Final, TypeVar
 
 from maildigest.agents.critic import CriticAgent
+from maildigest.agents.offline import OfflineCritic, OfflineSummarizer
 from maildigest.agents.summarizer import SummarizerAgent
 from maildigest.config import Config, resolve_state_db_path
 from maildigest.delivery import DeliveryStats, OutboxMessenger
@@ -521,15 +522,31 @@ def build_runner(
     real_messenger = messenger if messenger is not None else build_messenger(config)
     outbox = OutboxMessenger(state, real_messenger)  # type: ignore[arg-type]
     digest_composer = composer if composer is not None else DigestComposer.from_config(config)
+    # `provider = "none"`: Betrieb ohne Sprachmodell (ADR-076). Nur die *selbst gebauten*
+    # Offline-Stufen laufen ohne Retry-Wrapper — es gibt keinen Netzaufruf, der scheitern
+    # könnte. Eine von außen injizierte Stufe steht dagegen für ein echtes LLM (Tests,
+    # Sonderfälle) und behält ihre Wiederholungen.
+    offline = config.llm.provider == "none"
+    stage_summarizer: Summarizer
+    if summarizer is not None:
+        stage_summarizer = RetryingSummarizer(summarizer, sleep=sleep)
+    elif offline:
+        stage_summarizer = OfflineSummarizer()
+    else:
+        stage_summarizer = RetryingSummarizer(SummarizerAgent.from_config(config), sleep=sleep)
+
+    stage_critic: Critic
+    if critic is not None:
+        stage_critic = RetryingCritic(critic, sleep=sleep)
+    elif offline:
+        stage_critic = OfflineCritic()
+    else:
+        stage_critic = RetryingCritic(CriticAgent.from_config(config), sleep=sleep)
+
     deps = PipelineDeps(
         sanitizer=sanitizer if sanitizer is not None else MailSanitizer.from_config(config),
-        summarizer=RetryingSummarizer(
-            summarizer if summarizer is not None else SummarizerAgent.from_config(config),
-            sleep=sleep,
-        ),
-        critic=RetryingCritic(
-            critic if critic is not None else CriticAgent.from_config(config), sleep=sleep
-        ),
+        summarizer=stage_summarizer,
+        critic=stage_critic,
         composer=digest_composer,
         messenger=outbox,
         deliver_min_importance=config.general.deliver_min_importance,

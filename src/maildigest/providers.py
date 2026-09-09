@@ -29,10 +29,12 @@ __all__ = [
     "DISCORD_GUIDE",
     "LLM_ANTHROPIC_GUIDE",
     "LLM_LOCAL_GUIDE",
+    "LLM_PRESETS",
     "MIRROR_RECOMMENDATION",
     "PROVIDERS",
     "SIGNAL_GUIDE",
     "TELEGRAM_GUIDE",
+    "LlmPreset",
     "Provider",
     "auth_failure_hint",
     "find_by_address",
@@ -471,4 +473,117 @@ Setting up Signal (extra effort)
   signal-cli in JSON-RPC mode, registered with your phone number. Messages are delivered
   to "Note to Self" — deliberately the smallest possible scope.
   If you want it simple, use Telegram or Discord instead.
+""".strip()
+
+
+# --- Auswahl für `connect-llm` ---------------------------------------------------------------
+#
+# Endpunkte am 2026-09-09 geprüft (POST ohne Schlüssel -> 401/403, also erreichbar und
+# OpenAI-förmig). Modell-IDs stehen bewusst NICHT drin: Sie wechseln bei den Gratis-Anbietern
+# im Monatsrhythmus, ein hartkodierter Name wäre schneller falsch als die Dokumentation.
+
+
+@dataclass(frozen=True)
+class LlmPreset:
+    """Eine wählbare Option in `maildigest connect-llm`.
+
+    Attributes:
+        key: Stabiler Bezeichner (Testreferenz).
+        label: Zeile in der Auswahlliste.
+        provider: Wert für `[llm] provider`.
+        base_url: Vorbelegung für `[llm] base_url` (leer = Anbieter-Default).
+        needs_key: Ob ein API-Schlüssel nötig ist.
+        needs_model: Ob ein Modellname eingetragen werden muss.
+        detail: Erklärung, die vor der Abfrage gedruckt wird.
+    """
+
+    key: str
+    label: str
+    provider: str
+    base_url: str = ""
+    needs_key: bool = True
+    needs_model: bool = True
+    detail: str = ""
+
+
+LLM_PRESETS: tuple[LlmPreset, ...] = (
+    LlmPreset(
+        key="none",
+        label="No language model — works immediately, nothing to sign up for (default)",
+        provider="none",
+        needs_key=False,
+        needs_model=False,
+        detail=(
+            "MailDigest then delivers no summary, but an honestly labelled excerpt of the "
+            "mail plus everything the program determines on its own: sender, defanged "
+            "links, blocked attachments, failed SPF/DKIM checks, punycode domains and "
+            "hidden-text findings. The phishing warnings keep working — they are computed "
+            "in code, never by a model. Good enough to answer \"did anything important "
+            "arrive?\"; connect a model later for real summaries."
+        ),
+    ),
+    LlmPreset(
+        key="groq",
+        label="Groq — free tier, no credit card (fast, OpenAI-compatible)",
+        provider="openai_compatible",
+        base_url="https://api.groq.com/openai/v1",
+        detail=(
+            "Sign up at console.groq.com and create an API key; no card required. The free "
+            "tier is rate-limited per minute and per day, which is ample for a private "
+            "mailbox. Pick a model from the list in the Groq console and enter its exact ID."
+        ),
+    ),
+    LlmPreset(
+        key="openrouter",
+        label="OpenRouter — free models, no credit card",
+        provider="openai_compatible",
+        base_url="https://openrouter.ai/api/v1",
+        detail=(
+            "Sign up at openrouter.ai and create a key. Models whose ID ends in \":free\" "
+            "cost nothing — openrouter.ai/models lists which ones currently do. Enter the "
+            "full ID including the \":free\" suffix."
+        ),
+    ),
+    LlmPreset(
+        key="cerebras",
+        label="Cerebras — free tier, no credit card",
+        provider="openai_compatible",
+        base_url="https://api.cerebras.ai/v1",
+        detail=(
+            "Sign up at cloud.cerebras.ai and create a key. Generous daily token budget; "
+            "model IDs are listed in the console."
+        ),
+    ),
+    LlmPreset(
+        key="ollama",
+        label="Local model (Ollama, LM Studio, vLLM) — free and fully private",
+        provider="openai_compatible",
+        base_url="http://localhost:11434/v1",
+        needs_key=False,
+        detail=(
+            "Nothing leaves your machine — the strongest option for mail content. Requires "
+            "installing Ollama (ollama.com) and pulling a model once, which needs a few "
+            "gigabytes of disk and RAM. Then `ollama list` shows the model name to enter "
+            "here. No API key needed. Adjust the base URL for LM Studio (port 1234) or "
+            "vLLM (port 8000)."
+        ),
+    ),
+    LlmPreset(
+        key="anthropic",
+        label="Anthropic — paid, best summary quality",
+        provider="anthropic",
+        detail=LLM_ANTHROPIC_GUIDE,
+    ),
+    LlmPreset(
+        key="openai_compatible",
+        label="Other OpenAI-compatible endpoint — enter the base URL yourself",
+        provider="openai_compatible",
+        detail=LLM_LOCAL_GUIDE,
+    ),
+)
+
+LLM_CHOICE_INTRO = """
+How should mail be summarised? Every option except the first needs an account with the
+respective provider — MailDigest deliberately ships no key of its own: this program is
+open source, so an embedded key would be scraped and revoked within days.
 """.strip()

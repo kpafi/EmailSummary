@@ -50,6 +50,7 @@ from pydantic import BaseModel, SecretStr
 
 from maildigest import providers
 from maildigest.agents.critic import CriticAgent
+from maildigest.agents.offline import OfflineCritic, OfflineSummarizer
 from maildigest.agents.summarizer import SummarizerAgent
 from maildigest.config import (
     ENV_IMAP_PASSWORD,
@@ -101,7 +102,7 @@ DEFAULT_CONFIG_NAME = "config.toml"
 _LANGUAGES = ("de", "en")
 _SUMMARY_LENGTHS = ("short", "medium", "long")
 _IMPORTANCES = ("low", "normal", "high")
-_PROVIDERS = ("anthropic", "openai_compatible")
+_PROVIDERS = ("none", "anthropic", "openai_compatible")
 _MESSENGERS = ("telegram", "discord", "signal")
 
 #: Obergrenze der Custom-Instructions bei der interaktiven Eingabe (der Prompt-Builder
@@ -387,7 +388,7 @@ _KEY_COMMENTS: dict[str, str] = {
     "general.log_level": "DEBUG | INFO | WARNING | ERROR",
     "imap.port": "993 = IMAPS; port 143 is rejected",
     "imap.move_processed_to": "empty = only mark as read",
-    "llm.provider": "anthropic | openai_compatible",
+    "llm.provider": "none (no model) | anthropic | openai_compatible",
     "llm.base_url": "only for openai_compatible / local servers",
     "messenger.active": "telegram | discord | signal",
 }
@@ -400,7 +401,7 @@ _PLACEHOLDERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("password", f'"..."   # or environment variable {ENV_IMAP_PASSWORD}'),
     ),
     "llm": (
-        ("model", '"..."   # required; there is deliberately no default'),
+        ("model", '"..."   # required unless provider = "none"; no default on purpose'),
         ("api_key", f'"..."   # or environment variable {ENV_LLM_API_KEY}'),
     ),
     # Der Kritiker erbt alles von `[llm]`; die Datei zeigt trotzdem den vollständigen
@@ -584,6 +585,20 @@ def _set_or_clear(section: dict[str, Any], key: str, value: str) -> None:
 # --- Injizierbare Bausteine -----------------------------------------------------------------
 
 
+def _summarizer_for(config: Config) -> Any:
+    """Summarizer passend zur Config — ohne Modell die Offline-Stufe (ADR-076)."""
+    if config.llm.provider == "none":
+        return OfflineSummarizer()
+    return SummarizerAgent.from_config(config)
+
+
+def _critic_for(config: Config) -> Any:
+    """Kritiker passend zur Config — ohne Modell die Offline-Stufe (ADR-076)."""
+    if config.llm.provider == "none":
+        return OfflineCritic()
+    return CriticAgent.from_config(config)
+
+
 @dataclass
 class Hooks:
     """Die Außenwelt der CLI, gebündelt und ersetzbar (Tests reichen Attrappen herein)."""
@@ -591,8 +606,8 @@ class Hooks:
     build_runner: Callable[..., Runner] = build_runner
     build_messenger: Callable[..., Messenger] = build_messenger_from_section
     build_provider: Callable[..., Any] = build_provider_from_settings
-    build_summarizer: Callable[[Config], Any] = SummarizerAgent.from_config
-    build_critic: Callable[[Config], Any] = CriticAgent.from_config
+    build_summarizer: Callable[[Config], Any] = _summarizer_for
+    build_critic: Callable[[Config], Any] = _critic_for
     imap_client: Callable[[ImapConfig], ImapClient] = ImapClient
     discover_chat_ids: Callable[..., list[ChatCandidate]] = discover_chat_ids
     configure_logging: Callable[..., Any] = configure_logging
@@ -671,7 +686,7 @@ def cmd_init(ctx: Context) -> int:
             "poll_interval_seconds": 120,
             "move_processed_to": "",
         },
-        "llm": {"provider": "anthropic", "base_url": "", "max_tokens": 1024, "critic": {}},
+        "llm": {"provider": "none", "model": "", "base_url": "", "max_tokens": 1024, "critic": {}},
         "summarizer": {"instructions": instructions},
         "links": {"footnote": False},
         "messenger": {
@@ -699,10 +714,16 @@ def cmd_init(ctx: Context) -> int:
     console.out("")
     console.out("Next steps:")
     console.out("  1) maildigest connect-mail        (mirror mailbox)")
-    console.out("  2) maildigest connect-llm         (language model)")
-    console.out("  3) maildigest connect-messenger   (Telegram/Discord/Signal)")
-    console.out("  4) maildigest test                (self-test)")
-    console.out("  5) maildigest run                 (continuous operation)")
+    console.out("  2) maildigest connect-messenger   (Telegram/Discord/Signal)")
+    console.out("  3) maildigest test                (self-test)")
+    console.out("  4) maildigest run                 (continuous operation)")
+    console.out("")
+    console.out(
+        "No language model is configured, so MailDigest starts out delivering a labelled "
+        "excerpt of each mail plus all the warnings it works out in code. That needs no "
+        "account anywhere. `maildigest connect-llm` adds real summaries later — it also "
+        "lists the providers that are free of charge."
+    )
     return EXIT_OK
 
 
@@ -917,6 +938,31 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
 # --- Kommando: connect-llm --------------------------------------------------------------------
 
 
+def _choose_llm_preset(ctx: Context, *, current: str) -> providers.LlmPreset:
+    """Lässt die Betriebsart wählen und liefert die passende Vorlage.
+
+    Im nicht-interaktiven Modus (und wenn `--provider` gesetzt ist) wird nicht gefragt: Dann
+    entscheidet die Option, und die Vorlage dient nur noch als Quelle für Erklärtext und
+    Basis-URL-Vorbelegung.
+    """
+    console, args = ctx.console, ctx.args
+    wanted = args.provider or current
+    if args.provider or not console.interactive:
+        for preset in providers.LLM_PRESETS:
+            if preset.provider == wanted:
+                return preset
+        return providers.LLM_PRESETS[0]
+
+    console.out("")
+    console.out(providers.LLM_CHOICE_INTRO)
+    console.out("")
+    labels = [preset.label for preset in providers.LLM_PRESETS]
+    default_index = next(
+        (index for index, p in enumerate(providers.LLM_PRESETS) if p.provider == wanted), 0
+    )
+    return providers.LLM_PRESETS[console.choose("Option", labels, default_index=default_index)]
+
+
 def cmd_connect_llm(ctx: Context) -> int:
     """Wählt Provider und Modell, speichert den Key und macht einen Testaufruf (F-LLM-2)."""
     console, args = ctx.console, ctx.args
@@ -924,19 +970,27 @@ def cmd_connect_llm(ctx: Context) -> int:
     llm = config_file.section("llm")
 
     console.out("Connecting the language model")
-    provider = args.provider or console.ask(
-        "Provider",
-        default=str(llm.get("provider", "anthropic")),
-        allowed=_PROVIDERS,
-        flag="--provider",
-    )
+    preset = _choose_llm_preset(ctx, current=str(llm.get("provider", "none")))
+    provider = args.provider or preset.provider
     llm["provider"] = provider
 
-    console.out("")
-    console.out(
-        providers.LLM_ANTHROPIC_GUIDE if provider == "anthropic" else providers.LLM_LOCAL_GUIDE
-    )
-    console.out("")
+    if preset.detail:
+        console.out("")
+        console.out(preset.detail)
+        console.out("")
+
+    if provider == "none":
+        # Ohne Modell gibt es weder Modellname noch Schlüssel noch Testaufruf.
+        llm["model"] = ""
+        _set_or_clear(llm, "base_url", "")
+        llm.pop("api_key", None)
+        config_file.save()
+        console.out(f"Saved to {config_file.path} (file mode 0600).")
+        console.out(
+            "MailDigest now runs without a language model. Run this command again at any "
+            "time to connect one."
+        )
+        return EXIT_OK
 
     model = args.model or console.ask(
         "Model name (exact model ID used by the provider)",
@@ -949,7 +1003,7 @@ def cmd_connect_llm(ctx: Context) -> int:
     if provider == "openai_compatible":
         base_url = args.base_url if args.base_url is not None else console.ask(
             "Base URL of the endpoint (e.g. http://localhost:11434/v1)",
-            default=str(llm.get("base_url", "")),
+            default=str(llm.get("base_url", "")) or preset.base_url,
             flag="--base-url",
         )
         llm["base_url"] = base_url

@@ -52,8 +52,9 @@ steht in [docs/SPEC-CLI.md](docs/SPEC-CLI.md), der Betrieb als Dienst in
 * ein zweites, leeres IMAP-Postfach (das „Mirror-Postfach") — am besten bei einem anderen
   Anbieter als dein Hauptpostfach, mit eigenem, einmaligem Passwort oder App-Passwort
   (welcher Anbieter sich eignet: siehe [Das Spiegel-Postfach](#das-spiegel-postfach))
-* ein Zugang zu einem Sprachmodell: Anthropic-API oder ein OpenAI-kompatibler Endpunkt
-  (damit auch lokale Modelle über Ollama, vLLM oder LM Studio)
+* **optional** ein Zugang zu einem Sprachmodell — ohne ihn läuft MailDigest ebenfalls,
+  liefert dann aber Auszüge statt Zusammenfassungen (siehe
+  [Mit oder ohne Sprachmodell](#mit-oder-ohne-sprachmodell))
 * ein Telegram-Bot, ein Discord-Webhook oder ein laufendes `signal-cli`
 
 ## Das Spiegel-Postfach
@@ -99,6 +100,39 @@ Programm gilt und sich einzeln widerrufen lässt. Das ist der mit Abstand häufi
 für „Anmeldung fehlgeschlagen", obwohl Host, Benutzername und Passwort scheinbar stimmen.
 Der Benutzername ist dabei fast immer die **vollständige Mailadresse**, nicht nur der Teil
 davor.
+
+## Mit oder ohne Sprachmodell
+
+MailDigest läuft **ab Werk ohne jedes Sprachmodell**. Nach `maildigest init` ist
+`[llm] provider = "none"` gesetzt, und du kannst sofort loslegen — ohne Konto, ohne
+Kreditkarte, ohne API-Schlüssel.
+
+**Was du in diesem Modus bekommst:** Betreff, Absender, einen ausdrücklich als solchen
+beschrifteten Auszug des Mailtextes, die Liste der geblockten Anhänge — und **alle
+Warnungen**. Der Phishing-Schutz hängt nämlich gar nicht am Sprachmodell: Fehlgeschlagene
+SPF/DKIM-Prüfungen, abweichende Antwortadressen, Punycode-Domains, versteckter Text im
+HTML und entfernte Links berechnet das Programm selbst, in Code. Was ohne Modell fehlt,
+ist der zusammenfassende Text und die Einschätzung „wichtig oder nicht" — nicht der Schutz.
+
+**Was du mit Modell dazubekommst:** echte Zusammenfassungen statt Auszügen, eine
+Wichtigkeits-Einstufung (und damit einen sinnvollen Sammel-Digest für Unwichtiges), sowie
+den Kritiker, der die Zusammenfassung gegen den Mailtext prüft.
+
+`maildigest connect-llm` stellt die Betriebsarten als Auswahlliste vor:
+
+| Option | Kosten | Aufwand |
+|---|---|---|
+| **kein Sprachmodell** (Vorgabe) | keine | keiner |
+| **Groq**, **OpenRouter**, **Cerebras** | Gratis-Kontingent, keine Kreditkarte | Anmeldung + Schlüssel einfügen |
+| **lokales Modell** (Ollama, LM Studio, vLLM) | keine | Ollama installieren, Modell laden (einige GB) — dafür verlässt kein Mailinhalt deinen Rechner |
+| **Anthropic** | kostenpflichtig | Anmeldung + Guthaben |
+
+### Warum liegt kein Schlüssel bei?
+
+Weil dieses Programm quelloffen ist. Ein mitgelieferter Zugang stünde für jeden lesbar im
+Quelltext, wäre binnen Tagen abgegriffen und gesperrt — und die Rechnung ginge an jemand
+anderen als dich. Deshalb der ehrliche Weg: Ohne Anmeldung geht es ohne Modell, und wer
+Zusammenfassungen will, verbindet in zwei Minuten ein eigenes (auch gratis).
 
 ## Installation
 
@@ -148,7 +182,7 @@ python3 -m maildigest --help
 ```bash
 maildigest init                # Konfiguration anlegen (Datei bekommt Rechte 0600)
 maildigest connect-mail        # Mirror-Postfach: Zugang testen, Ordner wählen
-maildigest connect-llm         # Provider + Modell, Testaufruf
+maildigest connect-llm         # OPTIONAL: Sprachmodell (auch gratis) verbinden
 maildigest connect-messenger   # Telegram/Discord/Signal, Testnachricht
 maildigest test                # Ende-zu-Ende-Selbsttest mit einer Beispielmail
 maildigest run                 # Dauerbetrieb (Strg-C beendet sauber)

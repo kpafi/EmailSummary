@@ -13,7 +13,12 @@ from maildigest.llm.openai import OpenAICompatibleProvider
 
 BASE_CONFIG: dict[str, Any] = {
     "imap": {"host": "imap.example.org", "username": "mirror@example.org"},
-    "llm": {"model": "haupt-modell", "api_key": "sk-test", "max_tokens": 900},
+    "llm": {
+        "provider": "anthropic",
+        "model": "haupt-modell",
+        "api_key": "sk-test",
+        "max_tokens": 900,
+    },
 }
 
 
@@ -81,7 +86,8 @@ def test_openai_compatible_without_api_key_is_allowed() -> None:
 def test_anthropic_without_api_key_raises_config_error() -> None:
     """Fehlender Key ⇒ verständliche ConfigError mit Hinweis auf die Env-Variable."""
     config = load_config_from_dict(
-        {"imap": dict(BASE_CONFIG["imap"]), "llm": {"model": "m"}}, env={}
+        {"imap": dict(BASE_CONFIG["imap"]), "llm": {"provider": "anthropic", "model": "m"}},
+        env={},
     )
     with pytest.raises(ConfigError) as excinfo:
         build_provider(config)

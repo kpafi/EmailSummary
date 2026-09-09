@@ -94,7 +94,8 @@ def test_init_legt_datei_mit_0600_an(tmp_path: Path) -> None:
     assert data["summarizer"]["instructions"] == "Rechnungen sind wichtig"
     # Pflichtfelder bleiben bewusst als Kommentar-Platzhalter stehen.
     assert "host" not in data["imap"]
-    assert "model" not in data["llm"]
+    assert data["llm"]["provider"] == "none"  # läuft sofort, ohne Anmeldung (ADR-076)
+    assert data["llm"]["model"] == ""
 
 
 def test_init_uebernimmt_antworten(tmp_path: Path) -> None:

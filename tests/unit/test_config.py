@@ -98,7 +98,7 @@ def test_minimal_config_uses_documented_defaults(tmp_path: Path) -> None:
     assert config.imap.folder == "INBOX"
     assert config.imap.poll_interval_seconds == 120
     assert config.imap.password is None
-    assert config.llm.provider == "anthropic"
+    assert config.llm.provider == "none"  # Standard: läuft ohne Modell (ADR-076)
     assert config.llm.max_tokens == 1024
     assert config.links.footnote is False
     assert config.messenger.active == "telegram"
@@ -147,7 +147,7 @@ def test_critic_without_override_inherits_everything(tmp_path: Path) -> None:
     config = load_config(_write(tmp_path, MINIMAL_TOML), env={})
 
     assert config.critic_model() == "test-model-1"
-    assert config.critic_provider() == "anthropic"
+    assert config.critic_provider() == "none"
     assert config.critic_max_tokens() == 1024
     assert config.critic_base_url() == ""
 
@@ -196,7 +196,7 @@ def test_missing_required_fields_are_listed(tmp_path: Path) -> None:
     assert "Invalid configuration" in message
     assert "[imap] host: required value missing." in message
     assert "[imap] username: required value missing." in message
-    assert "[llm] model: required value missing." in message
+    assert 'model is required for provider "anthropic"' in message
 
 
 def test_unreadable_file_raises_german_error(tmp_path: Path) -> None:

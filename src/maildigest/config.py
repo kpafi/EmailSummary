@@ -21,7 +21,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
 
 from maildigest.models import Importance
 
@@ -112,16 +112,40 @@ class CriticLLMConfig(_Section):
 class LlmConfig(_Section):
     """`[llm]` — Provider-Auswahl und Modellparameter (F-LLM-1).
 
+    `provider = "none"` ist der Standard: MailDigest läuft dann ohne jedes Sprachmodell und
+    stellt statt einer Zusammenfassung einen beschrifteten Auszug samt aller
+    deterministischen Warnsignale zu (siehe :mod:`maildigest.agents.offline`). Das ist die
+    einzige Betriebsart, die ohne Anmeldung bei irgendjemandem funktioniert — ein
+    mitgelieferter Schlüssel scheidet bei quelloffener Software aus (ADR-076).
+
     `model` hat bewusst keinen Default: Modell-IDs veralten, ein hartkodierter Default würde
-    stillschweigend ein falsches Modell verwenden (docs/ARCHITECTURE.md §5).
+    stillschweigend ein falsches Modell verwenden (docs/ARCHITECTURE.md §5). Bei
+    `provider = "none"` bleibt das Feld leer.
     """
 
-    provider: Literal["anthropic", "openai_compatible"] = "anthropic"
-    model: str = Field(min_length=1)
+    provider: Literal["none", "anthropic", "openai_compatible"] = "none"
+    model: str = ""
     api_key: SecretStr | None = None
     base_url: str = ""
     max_tokens: int = Field(default=1024, ge=1)
     critic: CriticLLMConfig = Field(default_factory=CriticLLMConfig)
+
+    @model_validator(mode="after")
+    def _model_required_unless_offline(self) -> LlmConfig:
+        """Erzwingt `model`, sobald ein echter Provider gewählt ist.
+
+        Ohne diese Prüfung wäre ein leeres `model` bei `provider = "anthropic"` erst beim
+        ersten Mail-Eingang aufgefallen — also im Dauerbetrieb statt bei der Einrichtung.
+
+        Raises:
+            ValueError: Provider gesetzt, aber kein Modellname.
+        """
+        if self.provider != "none" and not self.model.strip():
+            raise ValueError(
+                f'model is required for provider "{self.provider}" — or set '
+                'provider = "none" to run without a language model at all'
+            )
+        return self
 
 
 class SummarizerConfig(_Section):
@@ -301,7 +325,10 @@ def _translate_error(error: dict[str, Any]) -> str:
         return "a TOML section (table) is expected here."
     if error_type == "list_type":
         return "a list is expected here."
-    return str(error.get("msg", "invalid value."))
+    message = str(error.get("msg", "invalid value."))
+    # pydantic stellt eigenen Validatoren „Value error, " voran — das ist Innenleben und
+    # verwirrt in einer Meldung, die auf eine Konfigurationsdatei zeigt.
+    return message.removeprefix("Value error, ")
 
 
 def _validation_error_message(exc: ValidationError, source: str) -> str:

@@ -158,6 +158,29 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   den zweiten Untrusted-Block des Kritikers (ADR-041). `PROMPT_VERSION` steht auf
   `wp6/2026-09-02`.
 
+### Betrieb ohne Sprachmodell (`agents/offline.py`)
+
+**Stand 2026-09-09 (ADR-076).** `[llm] provider = "none"` ist der Standard nach
+`maildigest init`. `build_runner` und `cli.Hooks` setzen dann statt `SummarizerAgent`/
+`CriticAgent` die Stufen `OfflineSummarizer`/`OfflineCritic` ein:
+
+- **OfflineSummarizer** baut die `Summary` allein aus `SanitizedMail`: Betreff als
+  Headline, ein auf 400 Zeichen gekürzter Auszug des bereits sanitisierten Textes mit
+  fester Beschriftung (`Excerpt, not a summary …`), `importance = "normal"` (ein geratenes
+  `low` würde Mails stillschweigend in den Sammel-Digest schieben). Danach läuft dieselbe
+  `enforce_output_policy` wie bei einer Modellausgabe — inklusive
+  `detect_injection_evidence` (F-SEC-5/CT-6).
+- **OfflineCritic** startet bei `phishing_risk = "none"` und überlässt die Anhebung
+  vollständig `enforce_verdict_policy(collect_signals(mail))` — denselben Code-Signalen wie
+  im Modellbetrieb (ADR-043/ADR-063). `summary_accurate` ist immer wahr: Der Text stammt
+  aus dem Sanitizer, es gibt nichts zu halluzinieren.
+- **Retries:** Nur die selbst gebauten Offline-Stufen laufen ohne `RetryingSummarizer`/
+  `RetryingCritic` — es gibt keinen Netzaufruf. Eine von außen injizierte Stufe (Tests)
+  behält ihre Wiederholungen.
+- **Sicherheitslage:** strenger als der Modellbetrieb, nicht lockerer — es existiert keine
+  untrusted Modellausgabe. I2 ist trivial erfüllt (kein Modellaufruf), I1/I3/I4/I6
+  unverändert.
+
 ### Agenten (`agents/`)
 - `summarizer.py`: baut Prompt (System + gelabelte Custom-Instructions + delimitierter
   Datenblock), ruft `complete_json`, führt deterministische Nachkontrolle aus.

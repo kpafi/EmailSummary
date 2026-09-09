@@ -1829,3 +1829,42 @@
   Datum. Ein unbekannter Anbieter verhält sich wie bisher — es wird nichts geraten. Der
   Anbieter wird ausschließlich für Text und Vorbelegungen benutzt: Kein Sicherheitsverhalten
   hängt daran (IMAPS bleibt Pflicht, die Zertifikatsprüfung bleibt aktiv, I5 unberührt).
+
+
+## ADR-076: Betrieb ohne Sprachmodell als Standard
+- Status: accepted
+- WP / Datum: Nachlauf zum Feldtest, 2026-09-09
+- Kontext: Bis hierher tat MailDigest ohne Zugang zu einem Sprachmodell **nichts**. Der
+  erste Versuch scheiterte damit an einer Kreditkarte oder mindestens einer Anmeldung —
+  bevor der Nutzer je gesehen hat, ob ihm das Werkzeug überhaupt nützt. Die naheliegende
+  Abkürzung, einen Zugang mitzuliefern, scheidet aus: Das Programm ist quelloffen, ein
+  eingebetteter Schlüssel wäre binnen Tagen abgegriffen und gesperrt — und die Kosten
+  trüge jemand anderes als der Nutzer.
+- Entscheidung: `[llm] provider = "none"` wird der **Standard** nach `maildigest init`.
+  In diesem Modus laufen `agents.offline.OfflineSummarizer` und `OfflineCritic`: Statt
+  einer Zusammenfassung wird ein ausdrücklich beschrifteter Auszug des bereits
+  sanitisierten Textes zugestellt, dazu Betreff, Absender, geblockte Anhänge und
+  **sämtliche deterministischen Warnsignale**. `connect-llm` bietet die Betriebsarten
+  danach als Auswahlliste an: kein Modell, drei Anbieter mit echtem Gratis-Kontingent
+  (Groq, OpenRouter, Cerebras — Endpunkte am 2026-09-09 geprüft), lokal über Ollama & Co.,
+  Anthropic, oder ein beliebiger OpenAI-kompatibler Endpunkt.
+- Warum das trägt: Die Architektur trennt seit PLAN §1 Leitprinzip 4 sauber zwischen dem,
+  was Code entscheidet, und dem, was ein Modell beisteuert. Der Sanitizer, die
+  Fälschungssignale (`critic.collect_signals`) und die Injection-Indizien
+  (`summarizer.detect_injection_evidence`) sind sämtlich modellfrei. Was ohne Modell
+  fehlt, ist der zusammenfassende Text und die Einschätzung der Wichtigkeit — nicht der
+  Schutz. Der Modus ist deshalb **strenger** als der Modellbetrieb, nicht lockerer: Es
+  gibt keine untrusted Modellausgabe, die geprüft werden müsste, und I2 ist trivial
+  erfüllt, weil kein Modell aufgerufen wird.
+- Bewusste Details: Die Wichtigkeit ist immer `normal` — ein geratenes `low` würde Mails
+  stillschweigend in den Sammel-Digest schieben, `normal` stellt einzeln zu und ist damit
+  die vorsichtige Richtung. Der Auszug trägt eine feste Beschriftung, sonst könnte man ihn
+  für eine geprüfte Zusammenfassung halten. Injizierte Stufen behalten ihre Retry-Wrapper;
+  nur die selbst gebauten Offline-Stufen laufen ohne, weil es keinen Netzaufruf gibt.
+- Alternativen: (a) Einen Schlüssel mitliefern — siehe Kontext, nicht vertretbar.
+  (b) Ein Modell mitliefern (llama.cpp o. ä. im Paket) — widerspricht NF-1 (leichtgewichtig)
+  um Größenordnungen. (c) Beim Fehlen eines Modells schlicht abbrechen — der bisherige
+  Zustand, der die Einstiegshürde erzeugt hat.
+- Konsequenzen: `[llm] model` ist nur noch Pflicht, wenn ein echter Provider gewählt ist
+  (Validator in `config.py`). Wer den Modus produktiv nutzt, bekommt Auszüge statt
+  Zusammenfassungen — das steht so in README und in jeder erzeugten Nachricht.
