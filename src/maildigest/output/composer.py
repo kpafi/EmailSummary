@@ -306,12 +306,18 @@ class DigestComposer:
     def compose_plain(self, text: str) -> DigestMessage:
         """Baut eine **im Code formulierte** Betriebsnachricht (WP9, ADR-054).
 
-        Einziger Aufrufer ist die CLI: `connect-messenger` schickt damit die
-        Testnachricht. Der Text stammt nicht aus einer Mail und nicht aus einem Modell —
-        er läuft trotzdem durch :meth:`_finalize`, damit `DigestMessage.parts` weiterhin
-        auf genau einem Weg entsteht (docs/SECURITY.md §5, I3/I4). Es gibt bewusst keinen
-        Parameter für Wichtigkeit oder Warn-Flag: Betriebsnachrichten sind immer
-        `normal`/keine Warnung.
+        Drei Aufrufer: die beiden Testnachrichten von `connect-messenger` und `test`
+        (`cli.py`) sowie die Antwort auf `/status` (`runner.Runner.handle_command`). Der
+        Text stammt nie aus einer Mail und nie aus einem Modell — er läuft trotzdem durch
+        :meth:`_finalize`, damit `DigestMessage.parts` weiterhin auf genau einem Weg
+        entsteht (docs/SECURITY.md §5, I3/I4). Es gibt bewusst keinen Parameter für
+        Wichtigkeit oder Warn-Flag: Betriebsnachrichten sind immer `normal`/keine Warnung.
+
+        **Regel für Aufrufer (HC-28):** `_finalize` ist Nachbrenner und Split, **kein**
+        Feld-Scrub. Wer einen variablen Anteil einsetzt — `/status` interpoliert den
+        Ordnernamen aus der Konfiguration —, schickt ihn vorher durch
+        :func:`~maildigest.output.sanitizer.scrub_plain` bzw. `scrub_field`. Sonst
+        überleben Struktur-Emoji am Zeilenanfang und Messenger-Markup (ADR-062, CT-8).
         """
         return DigestMessage(
             parts=self._finalize(text),

@@ -76,6 +76,7 @@ from maildigest.sanitize.sanitizer import MailSanitizer
 from maildigest.state.db import MailState, StateDB, dedupe_hash
 
 __all__ = [
+    "COMMAND_POLL_SECONDS",
     "LLM_MAX_ATTEMPTS",
     "RetryingCritic",
     "RetryingSummarizer",
@@ -101,6 +102,13 @@ LLM_RETRY_BACKOFF_SECONDS: Final = (2.0, 4.0)
 #: ein weiterer Aufruf würde nur Zeit und Tokens kosten (ADR-050).
 _RETRYABLE_LLM_ERRORS: Final = (LLMTimeout, LLMRateLimited, LLMTransportError)
 
+#: Längster Abschnitt, den der Dauerbetrieb am Stück wartet (ADR-080). Nach jedem
+#: Abschnitt wird der Befehlskanal abgefragt — die Latenz von `/digest` ist damit nach
+#: oben durch diesen Wert begrenzt, statt durch `[imap] poll_interval_seconds` (HC-12).
+#: Bewusst keine Konfigurationsoption: Der Wert ist ein Kompromiss zwischen Reaktionszeit
+#: und der Zahl der `getUpdates`-Aufrufe, den niemand sinnvoll selbst wählen muss.
+COMMAND_POLL_SECONDS: Final = 10.0
+
 #: `meta`-Schlüssel des Tages, an dem zuletzt ein Sammel-Digest zugestellt wurde.
 _META_LAST_LOW_DIGEST: Final = "last_low_digest_date"
 
@@ -108,6 +116,9 @@ _META_LAST_LOW_DIGEST: Final = "last_low_digest_date"
 _LOW_HEADLINE_CHARS: Final = 120
 _LOW_CATEGORY_CHARS: Final = 40
 _LOW_DOMAIN_CHARS: Final = 100
+
+#: Feldlimit des Ordnernamens in der `/status`-Antwort (HC-28).
+_STATUS_FOLDER_CHARS: Final = 80
 
 
 # --- Retry-Wrapper der LLM-Stufen -------------------------------------------------------
@@ -415,6 +426,23 @@ class Runner:
         logger.info("low_digest_sent", extra={"mails": len(entries)})
         return True
 
+    def _low_digest_guarded(self) -> bool:
+        """Wie :meth:`maybe_send_low_digest`, aber ohne eigene Ausnahme nach außen.
+
+        Gebraucht an den Stellen, an denen der Digest in einer ausnahmefesten Zone läuft
+        (HC-26): Dort würde ein Fehler des Digests den eigentlichen Grund des Abbruchs —
+        den `IngestError` — verdecken.
+        """
+        try:
+            return self.maybe_send_low_digest()
+        except Exception as exc:  # der Digest darf keinen Lauf kippen
+            logger.warning(
+                "low_digest_failed",
+                extra={"error": type(exc).__name__},
+                exc_info=traceback_enabled(logger),
+            )
+            return False
+
     # --- Läufe ------------------------------------------------------------------------
 
     def run_once(self) -> RunStats:
@@ -431,12 +459,16 @@ class Runner:
         try:
             stats.ingest = stats.ingest + self.ingest.run_once()
         finally:
-            # Auch bei IMAP-Ausfall darf eine fertige Nachricht nicht liegen bleiben.
+            # Auch bei IMAP-Ausfall dürfen weder eine fertige Nachricht noch der fällige
+            # Sammel-Digest liegen bleiben (HC-26): Der Digest liest nur aus der eigenen
+            # Warteschlange und schreibt in die Outbox — er braucht kein Postfach.
             stats.delivery = stats.delivery + self.outbox.flush()
-        if self.maybe_send_low_digest():
-            stats.low_digests += 1
-        # Zum Schluss, damit alles zählt: Poll, zweiter Flush und Sammel-Digest.
-        stats.delivery = stats.delivery + self.take_direct_delivery_stats()
+            if self._low_digest_guarded():
+                stats.low_digests += 1
+            # Der Befehlskanal wird im Cron-Betrieb einmal am Ende bedient (E2/ADR-080 —
+            # verzögert, aber nicht tot); eine `/status`-Antwort zählt danach mit.
+            self._serve_commands_once()
+            stats.delivery = stats.delivery + self.take_direct_delivery_stats()
         return stats
 
     # --- Befehle aus dem Messenger (opt-in, ADR-077) --------------------------------
@@ -485,16 +517,77 @@ class Runner:
         if command == "/status":
             pending = self.outbox.pending
             queued = len(self.db.low_digest_entries())
+            # Der einzige variable Anteil ist der Ordnername aus der eigenen
+            # Konfiguration. Er wird **vor** der Interpolation gescrubbt (HC-28): So
+            # bleibt `compose_plain` eine reine Code-Nachricht, und der CT-8-Schutz
+            # (Struktur-Emoji, Messenger-Markup, Zeilenumbrüche) greift dort, wo
+            # ADR-062 ihn vorsieht.
+            folder = scrub_plain(self.config.imap.folder, max_chars=_STATUS_FOLDER_CHARS)
             text = (
-                f"MailDigest is running. Folder: {self.config.imap.folder}. "
+                f"MailDigest is running. Folder: {folder}. "
                 f"{pending} message(s) waiting to be delivered, "
                 f"{queued} mail(s) collected for the daily digest."
             )
-            # Der Text stammt vollständig aus Code und Zahlen; er läuft trotzdem durch
-            # denselben Ausgabe-Sanitizer wie jede andere Nachricht (I3).
             self.outbox.send(self.composer.compose_plain(text))
             return False
         return command == "/digest"
+
+    def _serve_commands(self) -> bool:
+        """Arbeitet einen Stapel Befehle **vollständig** ab (Dauerbetrieb).
+
+        Bewusst eine Liste statt `any(…)` über einen Generator: `any` bricht beim ersten
+        `True` ab und verwarf damit jeden Befehl hinter dem ersten `/digest` — still,
+        endgültig und ohne Logzeile (HC-13).
+
+        Returns:
+            True, wenn mindestens ein `/digest` dabei war und sofort ein weiterer
+            Abrufzyklus folgen soll. Mehrere `/digest` ergeben genau einen (ADR-077).
+        """
+        triggered = [self.handle_command(command) for command in self.poll_commands_once()]
+        return any(triggered)
+
+    def _serve_commands_once(self) -> None:
+        """Bedient den Befehlskanal am Ende eines `run --once` (E2, ADR-080).
+
+        `/status` wird beantwortet. `/digest` ist hier wirkungslos — der Abruf lief
+        gerade — und wird nur konsumiert, damit er sich nicht bis zum nächsten Cron-Lauf
+        staut; das hält den Offset in Bewegung und ist als `command_ignored_once`
+        sichtbar. Ein Fehler darf den Lauf nie kippen: Diese Methode läuft in der
+        ausnahmefesten Zone von :meth:`run_once`.
+        """
+        try:
+            for command in self.poll_commands_once():
+                if self.handle_command(command):
+                    logger.info("command_ignored_once", extra={"command": command})
+        except Exception as exc:  # Bequemlichkeit darf die Hauptaufgabe nie kippen
+            logger.warning(
+                "command_handling_failed",
+                extra={"error": type(exc).__name__},
+                exc_info=traceback_enabled(logger),
+            )
+
+    def _wait_for_next_cycle(self) -> bool:
+        """Wartet das Poll-Intervall ab und fragt dabei regelmäßig Befehle ab (HC-12).
+
+        Die Wartezeit zerfällt in Abschnitte von höchstens :data:`COMMAND_POLL_SECONDS`;
+        nach jedem Abschnitt wird der Befehlskanal bedient. Damit wartet ein `/digest`
+        höchstens einen Abschnitt statt eines vollen Poll-Intervalls, ohne dass ein
+        blockierendes Long-Polling `_stop.wait` aushebelt — `stop()` beendet jeden
+        Abschnitt sofort.
+
+        Returns:
+            True, wenn ein `/digest` den nächsten Zyklus sofort verlangt.
+        """
+        remaining = float(self.config.imap.poll_interval_seconds)
+        while remaining > 0 and not self.stopped:
+            chunk = min(COMMAND_POLL_SECONDS, remaining)
+            self._wait(chunk)
+            remaining -= chunk
+            if self.stopped:
+                break
+            if self._serve_commands():
+                return True
+        return False
 
     def run_forever(self, *, handle_signals: bool = True) -> RunStats:
         """Dauerbetrieb bis SIGINT/SIGTERM oder :meth:`stop`.
@@ -529,6 +622,12 @@ class Runner:
                         },
                         exc_info=traceback_enabled(logger),
                     )
+                    # Der Sammel-Digest hängt nicht am Postfach (HC-26): Er liest die
+                    # eigene Warteschlange und schreibt in die Outbox. Ein IMAP-Ausfall
+                    # über den Digest-Zeitpunkt hinweg darf ihn nicht mitreißen.
+                    if self._low_digest_guarded():
+                        total.low_digests += 1
+                    total.delivery = total.delivery + self.take_direct_delivery_stats()
                     self._wait(delay)
                     continue
                 failures = 0
@@ -540,9 +639,13 @@ class Runner:
                 # abzuwarten. Mehrere `/digest` in einem Zyklus lösen genau einen
                 # zusätzlichen Durchlauf aus — sonst könnte ein Tastendruck-Gewitter
                 # das LLM-Kontingent verbrennen.
-                if any(self.handle_command(command) for command in self.poll_commands_once()):
+                if self._serve_commands():
                     continue
-                self._wait(float(self.config.imap.poll_interval_seconds))
+                # Die Wartezeit wird in Abschnitte zerlegt, nach jedem wird der
+                # Befehlskanal bedient (ADR-080): `/digest` wartet höchstens
+                # `COMMAND_POLL_SECONDS`, nicht ein volles Poll-Intervall.
+                if self._wait_for_next_cycle():
+                    continue
             logger.info(
                 "runner_stopped",
                 extra={

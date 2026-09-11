@@ -108,6 +108,15 @@ Hinweise zum Cron-Betrieb:
   State-Datenbank schreiben:
   `*/10 * * * * maildigest /usr/bin/flock -n /var/lib/maildigest/run.lock /opt/…/maildigest run --once …`
 - `[imap] poll_interval_seconds` ist im Cron-Betrieb wirkungslos (kein Loop).
+- Der Befehlskanal (`[messenger.telegram] accept_commands`, ab Werk an) wird auch im
+  Cron-Betrieb bedient, aber nur **einmal am Ende** jedes Laufs: `/status` wird
+  beantwortet, `/digest` ist dort wirkungslos und wird lediglich konsumiert (Logzeile
+  `command_ignored_once`). Die Antwort kommt also mit bis zu einem Cron-Intervall
+  Verzögerung. Wer sofortige Reaktion will, nimmt den Dauerbetrieb — dort liegt die
+  Latenz bei höchstens zehn Sekunden (ADR-080).
+- Ein Postfach-Ausfall bricht den Lauf mit Exit-Code 1 ab, aber erst, nachdem die
+  Zustell-Warteschlange und der fällige Sammel-Digest abgearbeitet sind: Beide brauchen
+  kein IMAP (ADR-049 Nachtrag).
 
 ## 4. Wartung
 
@@ -135,5 +144,8 @@ nach der Fehlersuche wieder auf `INFO` stellen und die Journal-Einträge ggf. l�
 | `mail_delivery_queued` | Zustellung liegt in der Warteschlange, Mail bleibt auf `checked` |
 | `delivery_deferred` / `delivery_abandoned` | Zustellversuch verschoben bzw. nach 5 Versuchen/1 h aufgegeben |
 | `low_digest_sent` | Sammel-Digest erzeugt (Feld `mails`) |
+| `low_digest_failed` | Der Sammel-Digest ist in der ausnahmefesten Zone gescheitert (Feld `error` = Exception-Klasse). Der Lauf geht weiter; die Einträge bleiben liegen und gehen beim nächsten Versuch desselben Tages raus |
+| `command_ignored_once` | Bei `run --once` wurde ein `/digest` gelesen und verworfen — im Cron-Betrieb ist es wirkungslos, der Abruf lief gerade (ADR-080) |
+| `command_poll_failed` / `command_handling_failed` | Der Befehlskanal war nicht erreichbar bzw. ein Befehl scheiterte. Folgenlos: Die Zustellung ist die Hauptaufgabe, die Fernauslösung nur Bequemlichkeit |
 | `imap_reconnect_scheduled` / `ingest_failed` | IMAP-Problem, Reconnect mit Backoff |
 | `shutdown_requested` | SIGINT/SIGTERM empfangen, laufender Zyklus wird beendet |

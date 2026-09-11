@@ -38,7 +38,20 @@ from maildigest.sanitize.html_to_text import html_to_text
 from maildigest.sanitize.links import LinkCollector
 from maildigest.sanitize.unicode_clean import clean_text, is_mixed_script_domain
 
-__all__ = ["MailSanitizer", "SanitizeError"]
+__all__ = ["FORGED_MARKER_TOKEN", "MailSanitizer", "SanitizeError"]
+
+#: Ersatztext für einen nachgebauten Datenblock-Marker (HC-5). Er muss die Tag-Löschung
+#: überleben (keine Winkelklammern) und darf selbst kein Marker-Wortlaut sein.
+FORGED_MARKER_TOKEN = "[forged data-block marker removed]"
+
+#: Ein in Winkelklammern gefasstes Konstrukt beliebiger Klammertiefe (`<…>`, `<<<…>>>`).
+#: Ob es ein Marker-Nachbau ist, entscheidet :func:`neutralize_forged_markers` an den
+#: Wörtern im Inneren — nicht die Regex. Das hält die Suche linear und die Regel lesbar.
+_RE_ANGLE_CHUNK = re.compile(r"<+[^<>\n]{0,300}>+")
+
+#: Beide Wörter müssen (case-insensitiv) im Inneren stehen, damit aus `<…>` ein Nachbau
+#: des Prompt-Datenblocks wird. Die Reihenfolge ist egal, die Nonce beliebig.
+_FORGED_MARKER_WORDS = ("MAILDIGEST", "UNTRUSTED")
 
 #: Marker, der ans Ende gekürzter Texte gesetzt wird (SECURITY §4).
 _TRUNCATION_MARKER = "[gekürzt]"
@@ -93,6 +106,7 @@ class _WalkState:
     control_chars_removed: int = 0
     truncated: bool = False
     html_divergent: bool = False
+    forged_markers: int = 0
 
 
 class MailSanitizer:
@@ -154,7 +168,9 @@ class MailSanitizer:
 
         body_clean, removed = clean_text(body_raw)
         state.control_chars_removed += removed
-        body_scrubbed = _strip_tag_like(links.scrub(body_clean))
+        body_unforged, forged = neutralize_forged_markers(body_clean)
+        state.forged_markers += forged
+        body_scrubbed = _strip_tag_like(links.scrub(body_unforged))
 
         budget = self._limits.max_text_chars
         body_text, budget, truncated = _take_budget(body_scrubbed, budget)
@@ -167,7 +183,9 @@ class MailSanitizer:
             if info.processed and raw_text is not None:
                 cleaned, removed = clean_text(raw_text)
                 state.control_chars_removed += removed
-                scrubbed = _strip_tag_like(links.scrub(cleaned))
+                unforged, forged = neutralize_forged_markers(cleaned)
+                state.forged_markers += forged
+                scrubbed = _strip_tag_like(links.scrub(unforged))
                 final, budget, truncated = _take_budget(scrubbed, budget)
                 state.truncated = state.truncated or truncated
                 attachment_texts[info.filename_sanitized] = final
@@ -364,7 +382,9 @@ class MailSanitizer:
     ) -> str:
         cleaned, removed = clean_text(value)
         state.control_chars_removed += removed
-        scrubbed = _strip_tag_like(links.scrub(cleaned))
+        unforged, forged = neutralize_forged_markers(cleaned)
+        state.forged_markers += forged
+        scrubbed = _strip_tag_like(links.scrub(unforged))
         collapsed = " ".join(scrubbed.split())
         if len(collapsed) > max_chars:
             collapsed = collapsed[: max_chars - 1] + "…"
@@ -409,6 +429,7 @@ class MailSanitizer:
             reply_to_mismatch=_reply_to_mismatch(raw),
             return_path_mismatch=_return_path_mismatch(raw),
             id_collision=raw.id_collision,
+            forged_markers=state.forged_markers,
             auth_results=_parse_auth_results(raw.auth_results_header),
         )
 
@@ -419,6 +440,31 @@ class MailSanitizer:
 def _strip_tag_like(text: str) -> str:
     """Neutralisiert HTML-Tag-artige Sequenzen in bereits konvertiertem Klartext."""
     return _RE_TAG_LIKE.sub(" ", text)
+
+
+def neutralize_forged_markers(text: str) -> tuple[str, int]:
+    """Ersetzt nachgebaute Datenblock-Marker durch :data:`FORGED_MARKER_TOKEN` (HC-5).
+
+    Muss **vor** :func:`_strip_tag_like` laufen: Der Tag-Stripper greift ab dem dritten
+    `<` und löscht `<MAILDIGEST-END-UNTRUSTED-DATA nonce>` restlos — ausgerechnet der
+    perfekte Nachbau verschwände damit spurlos, und der modellunabhängige Detektor in
+    `agents/summarizer.py` fände nichts mehr (F-SEC-5). Die Zahl der Funde geht als
+    `SanitizationReport.forged_markers` weiter; das Token ist die zweite, textliche Spur.
+
+    Returns:
+        `(Text mit ersetzten Markern, Anzahl der Funde)`.
+    """
+    found = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal found
+        inner = match.group(0).upper()
+        if all(word in inner for word in _FORGED_MARKER_WORDS):
+            found += 1
+            return FORGED_MARKER_TOKEN
+        return match.group(0)
+
+    return _RE_ANGLE_CHUNK.sub(replace, text), found
 
 
 def _content_words(text: str) -> set[str]:

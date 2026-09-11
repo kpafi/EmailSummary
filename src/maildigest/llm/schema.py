@@ -30,7 +30,7 @@ from pydantic import BaseModel, ValidationError
 
 from maildigest.llm.base import LLMInvalidResponse, LLMProvider
 
-__all__ = ["complete_json", "extract_json_object"]
+__all__ = ["EXTRA_FIELD_PLACEHOLDER", "complete_json", "extract_json_object"]
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -39,6 +39,10 @@ DEFAULT_MAX_TOKENS = 1024
 
 #: Höchstzahl der Fehlerzeilen im Reparaturhinweis (hält den Prompt kurz).
 _MAX_REPORTED_ERRORS = 8
+
+#: Ersatz für den Feldpfad eines vom Modell erfundenen Zusatzfeldes (HC-11, E9). Der Name
+#: kann Mail-Inhalt tragen; er darf weder ins Protokoll noch in den Reparatur-Prompt.
+EXTRA_FIELD_PLACEHOLDER = "<extra field>"
 
 
 def extract_json_object(raw: str) -> str | None:
@@ -130,9 +134,17 @@ def _error_summary(exc: ValidationError) -> str:
     """
     lines: list[str] = []
     for error in exc.errors()[:_MAX_REPORTED_ERRORS]:
-        # Der Pfad kann bei `extra_forbidden` ein vom Modell erfundener Schlüssel sein
-        # und damit theoretisch Mail-Inhalt tragen — deshalb auf eine Zeichen-Allowlist
-        # reduziert, bevor er in Prompt oder Protokoll wandert (I5).
+        if error["type"] == "extra_forbidden":
+            # Der Pfad ist hier ein vom Modell **erfundener** Schlüssel; er kann Mail-
+            # Inhalt tragen und landet über `failure_detail` im Protokoll des Betreibers
+            # (I5/NF-5, HC-11). Zeichen-Allowlist und 60-Zeichen-Schnitt hielten ihn nicht
+            # auf. Diagnosewert über „es gab ein Extrafeld" hinaus hat er nicht, und auch
+            # der Reparaturversuch braucht ihn nicht: Das Modell sieht seine eigene
+            # Antwort. Deshalb dieselbe Platzhalter-Fassung für Log **und** Prompt (E9).
+            lines.append(f"- field `{EXTRA_FIELD_PLACEHOLDER}`: {error['type']}")
+            continue
+        # Alle übrigen Fehlertypen tragen schema-eigene, im Code erzeugte Pfade. Die
+        # Allowlist bleibt als Gürtel-und-Hosenträger stehen.
         raw_location = ".".join(str(part) for part in error["loc"]) or "(root)"
         location = re.sub(r"[^A-Za-z0-9_.\[\]-]", "?", raw_location)[:60]
         lines.append(f"- field `{location}`: {error['type']}")

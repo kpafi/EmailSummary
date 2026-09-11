@@ -112,6 +112,11 @@ class SanitizationReport(BaseModel):
     #: belegt (ADR-079). Kopie von `RawMail.id_collision`; ohne diese Weitergabe bliebe die
     #: unterdrückte Mail für den Nutzer unsichtbar (HC-10).
     id_collision: bool = False
+    #: So viele nachgebaute Datenblock-Marker (`<<<MAILDIGEST-…-UNTRUSTED-…>>>`) standen im
+    #: Mail- oder Anhangstext (HC-5, ADR-061). Der Sanitizer erhebt das Faktum **vor** dem
+    #: Tag-Stripper, der den Nachbau sonst spurlos entfernt; `> 0` setzt den
+    #: Injection-Verdacht unabhängig von jeder Modellantwort (F-SEC-5).
+    forged_markers: int = Field(default=0, ge=0)
     auth_results: dict[str, str] = Field(default_factory=dict)
 
 

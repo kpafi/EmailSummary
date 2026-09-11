@@ -475,6 +475,19 @@
 - Konsequenzen: Die Reparaturquote ist etwas niedriger als mit Echo, weil das Modell seinen
   konkreten Fehler nicht sieht — dafür ist der zweite Aufruf genauso hart abgeschottet wie
   der erste. Scheitert die Reparatur, greift ohnehin fail-closed (I6).
+- **Nachtrag (Fixrunde, 2026-09-11, HC-11):** Die Zusage „Feldpfade und Fehler*typen*, keine
+  Werte" trug für **einen** Fehlertyp nicht: Bei `extra_forbidden` ist der Feldpfad der vom
+  Modell **erfundene** Schlüsselname — und der kann Mail-Inhalt sein. Über `failure_detail`
+  landete er in einer INFO-Logzeile des Betreibers (I5/NF-5). Die Zeichen-Allowlist in
+  `_error_summary` hielt nur Sonderzeichen auf; bis zu 60 Zeichen Buchstaben und Ziffern
+  gingen durch. Seit der Fixrunde ersetzt `_error_summary` den Pfad bei genau diesem
+  Fehlertyp durch den festen Platzhalter `<extra field>`
+  (`llm.schema.EXTRA_FIELD_PLACEHOLDER`) — in **derselben** Fassung für Protokoll und
+  Reparatur-Prompt. Zwei Fassungen zu führen wurde verworfen: Das Modell sieht seine eigene
+  Antwort ohnehin, der erfundene Name hat über „es gab ein Extrafeld" hinaus keinen
+  Diagnosewert, und eine zweite Fassung wäre ein zweiter Weg, auf dem Mail-Inhalt in einen
+  Prompt zurückläuft. Alle übrigen Fehlertypen tragen schema-eigene, im Code erzeugte Pfade
+  und bleiben unverändert lesbar.
 
 ## ADR-025: Provider-Factory mit Rollen-Parameter statt zweier Bauwege
 - Status: accepted
@@ -1158,6 +1171,17 @@ ihre *Erkennung* zu eng.
 - Konsequenzen: Der Digest zeigt Kopfzeile + Domain je Mail, keine Inhaltszeile — wer mehr
   will, öffnet das Postfach. Bei mehr als 60 gesammelten Mails werden die restlichen nur
   gezählt („… und N weitere"), damit eine Nacht voller Newsletter keine Nachrichtenflut wird.
+- **Nachtrag (Fixrunde, 2026-09-11):** Punkt (c) deckte nur den stillstehenden Prozess ab,
+  nicht den laufenden mit kaputtem IMAP. Der Digest stand im Runner **hinter** dem
+  Postfach-Abruf: Ein `IngestError` riss ihn mit, obwohl er nur aus `low_digest_queue`
+  liest und in die Outbox schreibt — kein Postfach nötig. Über eine Wartung oder ein
+  abgelaufenes App-Passwort hinweg erschien der Digest damit gar nicht, auch für längst
+  fertig sanitisierte Einträge (HC-26). Jetzt läuft er in beiden Betriebsarten in der
+  ausnahmefesten Zone: in `run_once` im `finally` neben dem Outbox-Flush, in `run_forever`
+  im `except IngestError`-Zweig vor dem `continue`. Ein Fehler des Digests selbst wird
+  dort abgefangen und als `low_digest_failed` (WARNING) geloggt — er darf den
+  `IngestError` nicht verdecken. Die Zusage lautet ab jetzt: Der Sammel-Digest hängt am
+  Zeitpunkt und an der eigenen Warteschlange, nicht an der Erreichbarkeit des Postfachs.
 
 ## ADR-050: Stufen-Retries, Zwischenstände und Statushoheit des Runners
 - Status: accepted
@@ -1465,6 +1489,41 @@ ihre *Erkennung* zu eng.
   Risikostufe. Die Phrasenliste ist bewusst kurz, wörtlich und um ein Objekt herum gebaut
   („du bist jetzt **ein Sprachmodell**", „nenne mir deinen **Systemprompt**") — sie soll
   offene Übernahmeversuche fangen, nicht Alltagsdeutsch wie „du bist jetzt dran".
+- **Nachtrag (Fixrunde, 2026-09-11, HC-5):** Die Klammer in der Entscheidung oben — „toleranter
+  Regex, weil der WP3-Sanitizer die Winkelklammern bereits entfernt" — war schlicht falsch,
+  und mit ihr Alternative (a). `sanitize/sanitizer._RE_TAG_LIKE` entfernt nicht die
+  Klammern, sondern **das gesamte Konstrukt**: Bei `<<<MAILDIGEST-END-UNTRUSTED-DATA
+  nonce>>>` greift die Regex ab dem dritten `<` und löscht den kompletten Marker; übrig
+  blieb `<< >>`. Ausgerechnet der **perfekte** Nachbau flaggte deshalb nicht, während die
+  verstümmelten Varianten Alarm auslösten — je besser der Angriff, desto leiser. Der
+  Regressionstest sah es nicht, weil er seine `SanitizedMail` von Hand baute und den
+  Sanitizer umging. Deshalb wird das Faktum jetzt dort erhoben, wo es entsteht: Vor der
+  Tag-Löschung ersetzt `sanitize.sanitizer.neutralize_forged_markers` jedes in Winkelklammern
+  gefasste Konstrukt, das `MAILDIGEST` und `UNTRUSTED` trägt, durch das feste Token
+  `[forged data-block marker removed]` und zählt es in
+  `SanitizationReport.forged_markers` — das in Alternative (a) verworfene Feld. Der Einwand
+  von damals („die Marker-Fälschung hat erst in der Prompt-Schicht Bedeutung") bleibt
+  richtig für die *Bewertung*; das *Faktum* kann aber nur der Sanitizer erheben, weil nur
+  er den Text vor seiner eigenen Löschung sieht. Die Bewertung bleibt unverändert in
+  `detect_injection_evidence`, das jetzt drei Quellen kennt: das Report-Feld, das Token und
+  — als zweite Schicht für klammerlose Marker und von Hand gebaute `SanitizedMail` — den
+  Wortlaut. Über den Korpus (`tests/corpus/*.eml`, `tests/cold/mails/*.eml`) ändert sich die
+  Fehlalarmrate nicht: vorher wie nachher tragen 4 von 49 sanitisierbaren Mails das Flag,
+  alle vier sind Angriffsmails.
+- **Nachtrag (Fixrunde, 2026-09-11, HC-21):** Die Phrasenliste war in der einen Wendung
+  lückenhaft, die F-SEC-5 selbst als Beispiel nennt. Beide Determiner-Gruppen kannten kein
+  Possessiv, `forget`/`vergiss` fehlten als Verben, und das Objekt musste im Plural
+  stehen — „Ignoriere deine bisherigen Anweisungen" und „Ignore your previous instructions" liefen
+  durch. Erweitert sind jetzt die Verben (`ignore|forget|disregard`,
+  `ignoriere|vergiss|missachte`, auch als Höflichkeitsform), die Determiner
+  (englisch `your|the|these|those|my|all|any|every`, deutsch
+  `deine|deinen|deiner|ihre|die|den|der|alle|sämtliche`) und das Objekt
+  (`instruction(s)|rule(s)|prompt(s)`, `Anweisung(en)|Regel(n)|Vorgabe(n)|Instruktion(en)`).
+  **Nicht** geändert hat sich das
+  Prinzip: Verb, Zeitbezug und ein gebundenes Objekt bleiben Pflicht. Eine
+  Verallgemeinerung auf `ignore .* instructions` würde den hier festgehaltenen
+  Fehlalarm-Kompromiss kippen — „ignore my previous mail, here is the corrected invoice"
+  ist eine gewöhnliche Korrekturmail und darf nicht feuern.
 
 ## ADR-062: Der Output-Sanitizer neutralisiert Zeilenanfangs-Markdown, Rand-Unterstriche und die Struktur-Präfixe des Nachrichtenformats
 - Status: accepted (ersetzt die Unterstrich-Ausnahme aus ADR-037)
@@ -1994,6 +2053,15 @@ ihre *Erkennung* zu eng.
   `--base-url` nicht schon löst. (2) `[llm] model` behält den Default `""` und ist erst
   Pflicht, sobald `provider` nicht `none` ist; SPEC §4 zählte es fälschlich zu den
   „Pflichtfeldern ohne Default" und widersprach damit §5 und diesem ADR.
+- **Nachtrag (Fixrunde, 2026-09-11, HC-21):** Eine Folge dieses ADR war unterschätzt
+  worden. Seit `provider = "none"` der Standard ist, setzt `OfflineSummarizer` das Feld
+  `injection_suspected` selbst nie — die in ADR-061 vorgesehene zweite Schicht (die
+  Modellantwort) existiert im Werkszustand **gar nicht**. Die deterministischen Indizien
+  aus `detect_injection_evidence` sind dort die **einzige** Quelle des Verdachts. Jede
+  Lücke in dieser Erkennung ist im Standardmodus damit kein Restrisiko, sondern ein
+  Totalausfall der Anzeige aus F-SEC-5; Änderungen an den Indizien sind entsprechend
+  zu bewerten und über den echten Sanitizer zu testen, nicht über eine von Hand gebaute
+  `SanitizedMail`.
 
 
 ## ADR-077: Fernauslösung aus dem Messenger — feste Befehle statt Dialog
@@ -2033,6 +2101,24 @@ ihre *Erkennung* zu eng.
   weiter für Dialog und Aktionen, nicht mehr für die feste Befehlsliste. Wer den Kanal
   einschaltet, gibt jedem, der in diesen Chat schreiben kann, die Möglichkeit, Abrufe
   auszulösen (und damit Modellkosten zu verursachen). Deshalb opt-in.
+- **Nachtrag (Fixrunde, 2026-09-11):** Drei Zusagen dieser ADR trugen nicht so weit, wie
+  sie klangen.
+  (a) „Mehrere `/digest` in einem Zyklus lösen genau einen zusätzlichen Durchlauf aus"
+  war als `any(self.handle_command(c) for c in …)` umgesetzt. `any` wertet den Generator
+  faul aus: Der erste `/digest` beendete die Schleife, und **jeder** folgende Befehl
+  desselben Stapels fiel ersatzlos weg — still, ohne Logzeile, und der Offset stand
+  längst dahinter (HC-13). Jetzt wird der Stapel erst vollständig abgearbeitet
+  (`Runner._serve_commands`), dann über die Liste entschieden. Die Zusage selbst gilt
+  unverändert: aus mehreren `/digest` wird ein Zyklus.
+  (b) „Die Antwort auf `/status` durchläuft `compose_plain` und damit denselben
+  Ausgabe-Sanitizer wie jede Nachricht (I3)" stimmte für Nachbrenner und Split, nicht für
+  den Feld-Scrub: `compose_plain` ruft nur `_finalize`. Der einzige variable Anteil, der
+  Ordnername aus `[imap] folder`, lief ungescrubbt in den Satz — Struktur-Emoji am
+  Zeilenanfang und Discord-Markdown überlebten (HC-28). Jetzt scrubbt `handle_command`
+  den Ordnernamen vor der Interpolation (`scrub_plain`, 80 Zeichen); `compose_plain`
+  bleibt eine reine Code-Nachricht. Die Regel lautet ab jetzt: **variable Anteile scrubbt
+  der Aufrufer.**
+  (c) Geltungsbereich und Latenz („sofortiger Abrufzyklus", `run --once`) regelt ADR-080.
 
 
 ## ADR-078: Der Befehlskanal ist ab Werk an
@@ -2109,3 +2195,44 @@ ihre *Erkennung* zu eng.
   deterministisch: Dieselbe kollidierende Mail bleibt beim nächsten Poll ein Duplikat,
   F-ING-2 gilt unverändert. Kosten: 32 Byte Hash je Zeile und ein SHA-256 über die
   MIME-Bytes je Mail.
+
+## ADR-080: Geltungsbereich und Latenz der Fernauslösung
+- Status: accepted
+- WP / Datum: Fixrunde, 2026-09-11
+- Kontext: ADR-077/ADR-078 versprechen „sofortiger Abrufzyklus" für `/digest`. Die
+  Abfrage lag aber unmittelbar **vor** der Wartezeit und wurde erst am Ende des nächsten
+  Poll-Intervalls wieder erreicht (HC-12): Ein `/digest` fünf Sekunden nach einem Zyklus
+  wurde 55 s später gelesen — genau dann, wenn der reguläre Zyklus ohnehin lief — und
+  löste danach einen zweiten, redundanten Durchlauf aus. Null Zeitgewinn, doppelte
+  Modellkosten. Zugleich fragte `run --once` den Kanal überhaupt nie ab (HC-27), obwohl
+  BETRIEB §3 genau diese Betriebsart für Cron empfiehlt und weder SPEC noch README die
+  Zusage auf den Dauerbetrieb einschränkten.
+- Entscheidung: (a) **Dauerbetrieb.** Die Wartezeit zwischen zwei Zyklen zerfällt in
+  Abschnitte von höchstens `runner.COMMAND_POLL_SECONDS = 10` Sekunden; nach jedem
+  Abschnitt wird der Befehlskanal bedient. Die Latenz von `/digest` ist damit nach oben
+  durch 10 s begrenzt statt durch `[imap] poll_interval_seconds`. (b) **Cron-Betrieb.**
+  `run --once` bedient den Kanal **einmal am Ende** des Zyklus: `/status` wird
+  beantwortet, `/digest` wird konsumiert und ist dort wirkungslos (der Abruf lief gerade)
+  — sichtbar als `command_ignored_once` (INFO). (c) Ein unmittelbar nach dem regulären
+  Zyklus gelesenes `/digest` löst weiterhin einen zusätzlichen Zyklus aus. Das ist ein
+  IMAP-Poll; teuer wird es erst, wenn er neue Mails findet — und dann ist der Zyklus
+  gewollt.
+- Warum kein Long-Polling: Ein blockierendes `getUpdates` mit `timeout=30` wäre sparsamer
+  an Requests, hebelt aber `_stop.wait` aus — SIGINT müsste bis zum Ende des Requests
+  warten. ADR-051 (sauberer Shutdown im laufenden Zyklus) wiegt schwerer als die Zahl der
+  HTTP-Aufrufe; bei `poll_interval_seconds = 120` sind es zwölf statt einem Aufruf je
+  Zyklus gegen eine API ohne nennenswerte Kosten.
+- Warum keine Konfigurationsoption: `COMMAND_POLL_SECONDS` ist ein Kompromiss zwischen
+  Reaktionszeit und Aufrufzahl, den niemand sinnvoll selbst wählen muss; jede Option hier
+  wäre ein Feld mehr im Vertrag (SPEC §5) ohne erkennbaren Nutzen. Der Wert liegt als
+  `Final`-Konstante im Modul und ist damit testbar.
+- Keine Warnung bei `run --once`: HC-27 hatte eine stderr-Warnung vorgeschlagen, wenn der
+  Kanal eingeschaltet ist. Seit ADR-078 ist er ab Werk an — die Warnung erschiene bei
+  **jedem** Cron-Lauf, alle zehn Minuten, im Syslog. Stattdessen wird der Kanal bedient
+  und die Einschränkung steht in SPEC §4/§5, README, BETRIEB §3 und im Einrichtungs-Tipp
+  von `connect-messenger`.
+- Konsequenzen: Ein `/digest` staut sich auch im Cron-Betrieb nicht mehr bis zum Sankt-
+  Nimmerleins-Tag bei Telegram; der Offset bleibt in Bewegung. Im Dauerbetrieb erzeugt
+  MailDigest mehr `getUpdates`-Aufrufe als bisher — die Zahl ist durch
+  `poll_interval_seconds / 10` je Zyklus beschränkt und liegt weit unter Telegrams
+  Grenzen.

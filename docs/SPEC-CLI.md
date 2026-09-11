@@ -375,8 +375,20 @@ Der Betrieb. Ohne Optionen läuft MailDigest im Vordergrund und pollt das Postfa
 laufenden Zyklus sauber und danach den Prozess (Exit-Code 0).
 
 Mit `--once` wird genau ein Zyklus ausgeführt (Warteschlange leeren → einmal pollen →
-Warteschlange leeren → Sammel-Digest prüfen), dann endet der Prozess. Das ist die
-Cron-taugliche Form.
+Warteschlange leeren → Sammel-Digest prüfen → Befehlskanal bedienen), dann endet der
+Prozess. Das ist die Cron-taugliche Form.
+
+Zum Befehlskanal (`[messenger.telegram] accept_commands`, ADR-077/ADR-080): Im
+Dauerbetrieb wird er **während** der Wartezeit alle 10 Sekunden abgefragt — ein `/digest`
+wartet höchstens diese 10 Sekunden, nicht ein volles `poll_interval_seconds`. Bei `--once`
+wird er **einmal am Ende** des Laufs bedient: `/status` wird beantwortet, `/digest` ist
+dort wirkungslos (der Abruf lief gerade) und wird nur konsumiert, damit er sich nicht
+staut. Im Cron-Betrieb kommt die Antwort also beim nächsten Lauf, verzögert um höchstens
+das Cron-Intervall.
+
+Sammel-Digest und Zustell-Warteschlange hängen **nicht** an der Erreichbarkeit des
+Postfachs: Ist das Postfach ausgefallen, werden beide trotzdem abgearbeitet, bevor der
+Lauf mit Exit-Code 1 endet (ADR-049 Nachtrag).
 
 Ausgabe: strukturierte **JSON-Zeilen auf stdout** (ein Objekt je Ereignis, Felder `ts`,
 `level`, `logger`, `event` und ereignisabhängige Zusatzfelder). Der Schwellwert kommt aus
@@ -449,7 +461,7 @@ Alle Felder mit ihren Defaults:
 | `[messenger] active` | `telegram`/`discord`/`signal` | `"telegram"` | Aktiver Zustellweg |
 | `[messenger.telegram] token` | Text | — | Alternativ `MAILDIGEST_TELEGRAM_TOKEN` |
 | `[messenger.telegram] chat_id` | Text | `""` | Ziel-Chat; `connect-messenger` ermittelt ihn |
-| `[messenger.telegram] accept_commands` | true/false | `true` | Ob MailDigest Befehle aus dem Chat annimmt (ADR-077, Vorgabe seit ADR-078 `true`). Eingeschaltet reagiert `run` auf `/digest` (sofortiger Abrufzyklus) und `/status` (Kurzbericht), **nur** aus `chat_id` und **nur** auf diese beiden Wörter; jeder andere Text wird verworfen und erreicht kein Sprachmodell |
+| `[messenger.telegram] accept_commands` | true/false | `true` | Ob MailDigest Befehle aus dem Chat annimmt (ADR-077, Vorgabe seit ADR-078 `true`). Eingeschaltet reagiert `run` auf `/digest` (Abrufzyklus, Wartezeit höchstens 10 s) und `/status` (Kurzbericht), **nur** aus `chat_id`; bei `run --once` wird der Kanal einmal am Ende des Laufs bedient und `/digest` ist dort wirkungslos (ADR-080). Erkannt werden die beiden Wörter tolerant: Groß-/Kleinschreibung egal, umgebende Leerzeichen und ein `@botname`-Suffix werden abgetrennt, Zusatztext hinter dem Befehl wird ignoriert. Jeder andere Text wird verworfen; kein Zeichen aus dem Chat — weder Zusatztext noch Chat-Titel noch Absendername — erreicht jemals ein Sprachmodell oder eine zugestellte Nachricht |
 | `[messenger.discord] webhook_url` | URL | — | Webhook des Kanals (ist selbst ein Secret) |
 | `[messenger.signal] enabled` | `true`/`false` | `false` | Signal-Adapter freischalten |
 | `[messenger.signal] signal_cli_socket` | Pfad | `""` | Socket von `signal-cli --daemon` |

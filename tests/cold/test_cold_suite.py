@@ -385,6 +385,27 @@ def test_ct6_angriffsmail_wird_geflaggt_obwohl_das_modell_schweigt(
     ), f"{mail}: kein deterministisches Signal beim Nutzer"
 
 
+@pytest.mark.parametrize(
+    "mail", ["30_marker_nachbau.eml", "31_injection_variante.eml"]
+)
+def test_hc5_hc21_die_zwei_stillen_angriffe_erreichen_jetzt_den_nutzer(
+    tmp_path: Path, mail: str
+) -> None:
+    """HC-5/HC-21: Zwei Angriffe, die vorher ohne Hinweiszeile durchliefen.
+
+    `30_marker_nachbau.eml` baut die Datenblock-Marker vollstaendig nach — der
+    Tag-Stripper loeschte den Nachbau, bevor der Detektor ihn sehen konnte (HC-5).
+    `31_injection_variante.eml` benutzt die haeufigste Formulierung der Uebernahmeformel,
+    die in der Phrasenliste fehlte (HC-21). Bewertet wird wie im Cold-Test der Text, der
+    beim Messenger ankommt.
+    """
+    sink, code, _out, _err = feed(tmp_path, mail)
+    assert code == EXIT_OK
+    assert "🔍 Notes:" in sink.text, f"{mail}: keine Hinweiszeile"
+    assert "instructions aimed at the AI" in sink.text, f"{mail}: kein Injection-Hinweis"
+    assert_delivered_text_is_safe(sink.text)
+
+
 def test_ct6_harmlose_mail_bekommt_keinen_injection_hinweis(tmp_path: Path) -> None:
     """Gegenprobe: Ohne Angriffsspuren erscheint der Hinweis nicht (keine Warnmüdigkeit)."""
     sink, code, _out, _err = feed(tmp_path, "01_normal.eml")

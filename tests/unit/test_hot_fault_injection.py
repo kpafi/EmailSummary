@@ -48,6 +48,7 @@ from maildigest.pipeline import (
     Delivered,
     FailedNotice,
     PipelineDeps,
+    failure_detail,
     process_mail,
 )
 from maildigest.state.db import MailState, StateDB, StateError
@@ -413,6 +414,31 @@ def test_extra_fields_are_rejected_by_the_schema() -> None:
     )
     with pytest.raises(LLMInvalidResponse):
         SummarizerAgent(ScriptedProvider(payload, payload)).summarize(sanitized_mail())
+
+
+def test_hc11_der_name_eines_erfundenen_feldes_erreicht_die_notiz_nicht() -> None:
+    """HC-11: Der Schlüsselname eines Zusatzfeldes ist mittelbar Mail-Inhalt (I5/NF-5).
+
+    `failure_detail` ist genau der Wert, den `logging_setup` als Feld `detail` in die
+    INFO-Logzeile schreibt. Ein vom Modell erfundener Schlüssel darf dort nicht stehen.
+    """
+    poison = "Kontonummer DE89370400440532013000 Kunde Mueller Betrag 8430"
+    payload = json.dumps(
+        {
+            "headline": "Kopf",
+            "summary_text": "Text",
+            "importance": "normal",
+            poison: 1,
+        }
+    )
+    with pytest.raises(LLMInvalidResponse) as excinfo:
+        SummarizerAgent(ScriptedProvider(payload, payload)).summarize(sanitized_mail())
+
+    detail = failure_detail(excinfo.value)
+    assert "extra_forbidden" in detail
+    assert "<extra field>" in detail
+    assert "Kontonummer" not in detail
+    assert "DE89370400440532013000" not in detail
 
 
 def test_repair_attempt_can_still_succeed() -> None:

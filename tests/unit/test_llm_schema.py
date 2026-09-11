@@ -14,7 +14,11 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from maildigest.llm.base import LLMInvalidResponse, LLMTimeout
-from maildigest.llm.schema import complete_json, extract_json_object
+from maildigest.llm.schema import (
+    EXTRA_FIELD_PLACEHOLDER,
+    complete_json,
+    extract_json_object,
+)
 
 
 class Answer(BaseModel):
@@ -182,3 +186,42 @@ def test_provider_errors_propagate_unchanged() -> None:
     provider = ScriptedProvider(LLMTimeout("zu langsam"))
     with pytest.raises(LLMTimeout):
         complete_json(provider, "s", "u", Answer)
+
+
+# --- HC-11: Der erfundene Schlüsselname eines Zusatzfeldes ist Mail-Inhalt -------------
+
+
+def test_hc11_der_name_eines_zusatzfeldes_verlaesst_die_schicht_nicht() -> None:
+    """HC-11: `extra_forbidden` transportierte bis zu 60 Zeichen Fremdtext (I5/NF-5).
+
+    Der Schlüssel stammt aus der Modellantwort und damit mittelbar aus der Mail. Die
+    Zeichen-Allowlist ersetzte nur Sonderzeichen — Buchstaben und Ziffern blieben stehen
+    und landeten über `failure_detail` in der INFO-Logzeile des Betreibers.
+    """
+    poison = "Kontonummer DE89370400440532013000 Kunde Mueller Betrag 8430"
+    bad = f'{{"headline": "ok", "importance": "high", "{poison}": 1}}'
+    provider = ScriptedProvider(bad, bad)
+
+    with pytest.raises(LLMInvalidResponse) as excinfo:
+        complete_json(provider, "s", "u", Answer)
+
+    meldung = str(excinfo.value)
+    assert EXTRA_FIELD_PLACEHOLDER in meldung
+    assert "extra_forbidden" in meldung
+    assert "Kontonummer" not in meldung
+    assert "DE89370400440532013000" not in meldung
+    assert "Mueller" not in meldung
+    # E9: derselbe Platzhalter im Reparatur-Prompt. Das Modell sieht seine eigene
+    # Antwort — der erfundene Name hat auch dort keinen Wert.
+    assert "Kontonummer" not in provider.systems[1]
+    assert "DE89370400440532013000" not in provider.systems[1]
+    assert EXTRA_FIELD_PLACEHOLDER in provider.systems[1]
+
+
+def test_hc11_die_eigenen_schemapfade_bleiben_lesbar() -> None:
+    """Gegenprobe: Andere Fehlertypen tragen code-erzeugte Pfade und bleiben stehen."""
+    provider = ScriptedProvider('{"headline": "ok"}', '{"headline": "ok"}')
+    with pytest.raises(LLMInvalidResponse) as excinfo:
+        complete_json(provider, "s", "u", Answer)
+    assert "field `importance`" in str(excinfo.value)
+    assert EXTRA_FIELD_PLACEHOLDER not in str(excinfo.value)

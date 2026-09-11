@@ -251,6 +251,34 @@ nicht.
   mit `…`, Endung erhalten, Gesamtlänge ≤ 80 — bei einem geblockten Anhang ist die Endung
   die sicherheitsrelevante Information (ADR-040).
 
+**Nachgeschärft in der Fixrunde 2026-09-11 (Befunde HC-5, HC-11, HC-21, HC-29 in
+docs/TESTRUNDE-HOT-COLD.md):** Die modellunabhängige Erkennung aus ADR-061 hatte zwei
+Lücken, und Schicht 3 gab einen Namen preis, den sie nicht hätte kennen dürfen.
+
+- **Der Marker-Nachbau wird im Sanitizer erhoben, nicht erst in der Prompt-Schicht
+  (HC-5).** Der Tag-Stripper von WP3 löscht ein `<<<MAILDIGEST-…-UNTRUSTED-…>>>`
+  restlos — ausgerechnet der perfekte Nachbau verschwand also spurlos, und nur die
+  verstümmelten Formen lösten Alarm aus. `sanitize/sanitizer.neutralize_forged_markers`
+  läuft jetzt **vor** der Tag-Löschung, ersetzt den Fund durch das Token
+  `[forged data-block marker removed]` und zählt ihn in
+  `SanitizationReport.forged_markers`. Der Detektor liest zuerst dieses Feld; der
+  Wortlaut-Pfad bleibt als zweite Schicht.
+- **Die Phrasenliste kennt die naheliegenden Varianten (HC-21).** Possessiv (`your`,
+  `deine`), `forget`/`vergiss` und der Singular fehlten — genau die Formen, die ein
+  Angreifer zuerst schreibt. Die Bindung an Verb, Zeitbezug und Objekt bleibt: Ohne sie
+  fiele „ignore my previous mail" unter denselben Alarm wie ein Übernahmeversuch. Im
+  Werkszustand (`[llm] provider = "none"`) sind diese Indizien die **einzige** Quelle des
+  Verdachts, weil es keine Modellantwort gibt, die ihn setzen könnte (ADR-076).
+- **Schicht 3 nennt keinen erfundenen Feldnamen mehr (HC-11).** Bei `extra_forbidden`
+  stammt der Feldpfad aus der Modellantwort und kann Mail-Inhalt tragen; er stand über
+  `failure_detail` in der INFO-Logzeile. Er wird jetzt durch `<extra field>` ersetzt — in
+  Protokoll und Reparatur-Prompt gleichermaßen (ADR-024).
+- **Schicht 4 skaliert linear (HC-29).** Die Wortgrenzen-Suche in `_redact_tokens` war
+  quadratisch: Ein whitespace-freies Modellfeld von 32 000 Zeichen brauchte 9–12 s, und
+  `[llm] max_tokens` hat keine Obergrenze (T10). Die Suche läuft jetzt amortisiert linear
+  (dieselben Spannen, gemessen über 4 000 Zufallseingaben); 160 000 Zeichen bleiben unter
+  0,03 s.
+
 Die Zusage aus ADR-035 („die Invariante I3 hängt nicht an der Korrektheit der
 Segmentierungs-Regex") gilt damit auch für das, was der Nutzer tatsächlich sieht. Geprüft
 wird sie nicht mehr nur an Beispiel-Payloads, sondern als Allaussage über zufällige

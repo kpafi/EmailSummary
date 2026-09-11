@@ -482,11 +482,18 @@ def test_signal_handlers_are_installed_and_restored() -> None:
 # --- Fernauslösung aus dem Messenger (ADR-077) ------------------------------------------------
 
 
-def _commands_config(*, accept: bool) -> Config:
+def _commands_config(
+    *, accept: bool, folder: str = "INBOX", poll_interval_seconds: int = 60
+) -> Config:
     return load_config_from_dict(
         {
             "general": {},
-            "imap": {"host": "imap.example.org", "username": "mirror@example.org"},
+            "imap": {
+                "host": "imap.example.org",
+                "username": "mirror@example.org",
+                "folder": folder,
+                "poll_interval_seconds": poll_interval_seconds,
+            },
             "llm": {"model": "modell", "api_key": "sk-test"},
             "messenger": {
                 "active": "telegram",
@@ -595,3 +602,306 @@ def test_hc38_build_runner_verdrahtet_ohne_modell_die_offline_stufen(tmp_path: P
         runner = build_runner(config, db=db, messenger=SendingMessenger())
         assert isinstance(runner.deps.summarizer, OfflineSummarizer)
         assert isinstance(runner.deps.critic, OfflineCritic)
+
+
+# --- HC-12/HC-13/HC-26/HC-27/HC-28/HC-38 (2): Fernauslösung und Runner-Schleife ---------
+
+
+def _scripted_runner(
+    db: StateDB, config: Config, script: list[tuple[str, ...]]
+) -> Runner:
+    """Runner, dessen Befehlsabfrage nacheinander die Stapel aus `script` liefert.
+
+    Ist das Skript aufgebraucht, kommt nichts mehr — so endet jeder Test, ohne dass die
+    Schleife endlos Befehle nachgereicht bekommt.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def fake_poll(**kwargs: Any) -> tuple[tuple[str, ...], int]:
+        calls.append(kwargs)
+        found = script.pop(0) if script else ()
+        return found, int(kwargs.get("offset", 0)) + len(found)
+
+    runner = build_runner(
+        config,
+        db=db,
+        summarizer=_StubSummarizer(),
+        critic=_StubCritic(),
+        messenger=SendingMessenger(),
+        sleep=lambda _seconds: None,
+    )
+    runner.commands = fake_poll
+    runner.command_calls = calls  # type: ignore[attr-defined]
+    return runner
+
+
+def _stop_after(runner: Runner, cycles: int, marks: list[float], clock: dict[str, float]) -> None:
+    """Lässt `runner.ingest.run_once` `cycles` Zyklen laufen und notiert deren Startzeit."""
+    from maildigest.ingest.imap_client import IngestStats
+
+    def fake_run_once() -> Any:
+        marks.append(clock["t"])
+        if len(marks) >= cycles:
+            runner.stop()
+        return IngestStats()
+
+    runner.ingest.run_once = fake_run_once  # type: ignore[method-assign]
+
+
+def test_hc13_jeder_befehl_des_stapels_wird_ausgefuehrt(tmp_path: Path) -> None:
+    """HC-13: `any()` über einen Generator verwarf alles hinter dem ersten `/digest`.
+
+    Vor dem Fix ging aus dem Stapel genau **eine** Statusantwort raus; die beiden Befehle
+    hinter `/digest` waren still und endgültig weg (der Offset stand längst dahinter).
+    """
+    clock = {"t": 0.0}
+    marks: list[float] = []
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _scripted_runner(
+            db,
+            _commands_config(accept=True),
+            [("/status", "/digest", "/status", "/status")],
+        )
+        _stop_after(runner, 2, marks, clock)
+        runner.sleep = lambda _seconds: None
+        stats = runner.run_forever(handle_signals=False)
+
+        sent = runner.outbox._messenger.sent  # type: ignore[attr-defined]
+        status_messages = [m for m in sent if "MailDigest is running" in "\n".join(m.parts)]
+        assert len(status_messages) == 3
+        # Genau ein zusätzlicher Zyklus, obwohl der Stapel vier Befehle trug (ADR-077).
+        assert stats.cycles == 2
+
+
+def test_hc13_digest_vor_status_verschluckt_die_antwort_nicht(tmp_path: Path) -> None:
+    """HC-13, zweite Reihenfolge aus dem Bericht: `["/digest", "/status"]` ⇒ eine Antwort."""
+    clock = {"t": 0.0}
+    marks: list[float] = []
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _scripted_runner(db, _commands_config(accept=True), [("/digest", "/status")])
+        _stop_after(runner, 2, marks, clock)
+        runner.sleep = lambda _seconds: None
+        runner.run_forever(handle_signals=False)
+
+        sent = runner.outbox._messenger.sent  # type: ignore[attr-defined]
+        assert len([m for m in sent if "MailDigest is running" in "\n".join(m.parts)]) == 1
+
+
+def test_hc12_digest_verkuerzt_die_wartezeit(tmp_path: Path) -> None:
+    """HC-12: Ein `/digest` nach 5 s wartete bei `poll_interval_seconds = 60` volle 55 s.
+
+    Mit der virtuellen Uhr muss der zweite Zyklus vor Sekunde 15 beginnen — ein Abschnitt
+    von `COMMAND_POLL_SECONDS` (10 s) plus die Abfrage danach.
+    """
+    clock = {"t": 0.0}
+    marks: list[float] = []
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _scripted_runner(db, _commands_config(accept=True, poll_interval_seconds=60), [])
+
+        def fake_poll(**kwargs: Any) -> tuple[tuple[str, ...], int]:
+            offset = int(kwargs.get("offset", 0))
+            # Der Befehl liegt seit Sekunde 5 bereit und wird genau einmal gelesen.
+            if clock["t"] >= 5.0 and offset == 0:
+                return ("/digest",), 1
+            return (), offset
+
+        runner.commands = fake_poll
+        _stop_after(runner, 2, marks, clock)
+
+        def fake_sleep(seconds: float) -> None:
+            clock["t"] += seconds
+
+        runner.sleep = fake_sleep
+        runner.run_forever(handle_signals=False)
+
+        assert marks[0] == 0.0
+        assert marks[1] < 15.0, f"zweiter Zyklus erst bei Sekunde {marks[1]}"
+
+
+def test_hc12_stop_beendet_die_wartezeit_ohne_weitere_abfrage(tmp_path: Path) -> None:
+    """HC-12/E3: Die Abschnitte dürfen SIGINT nicht verzögern und nichts mehr abfragen."""
+    clock = {"t": 0.0}
+    marks: list[float] = []
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _scripted_runner(db, _commands_config(accept=True, poll_interval_seconds=600), [])
+        _stop_after(runner, 99, marks, clock)  # stoppt nicht von selbst
+
+        def fake_sleep(seconds: float) -> None:
+            clock["t"] += seconds
+            runner.stop()  # das Signal fällt mitten in den ersten Abschnitt
+
+        runner.sleep = fake_sleep
+        runner.run_forever(handle_signals=False)
+
+        assert clock["t"] == 10.0, "es wurde mehr als ein Abschnitt gewartet"
+        # Eine Abfrage direkt nach dem Zyklus, danach keine mehr.
+        assert len(runner.command_calls) == 1  # type: ignore[attr-defined]
+        assert len(marks) == 1
+
+
+def test_hc38_digest_triggers_second_cycle_without_wait(tmp_path: Path) -> None:
+    """HC-38 (2): der `continue`-Zweig des `/digest`-Kurzschlusses wird durchlaufen."""
+    clock = {"t": 0.0}
+    marks: list[float] = []
+    waits: list[float] = []
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _scripted_runner(db, _commands_config(accept=True), [("/digest",)])
+        waits_at_cycle_start: list[int] = []
+        from maildigest.ingest.imap_client import IngestStats
+
+        def fake_run_once() -> Any:
+            marks.append(clock["t"])
+            waits_at_cycle_start.append(len(waits))
+            if len(marks) >= 2:
+                runner.stop()
+            return IngestStats()
+
+        runner.ingest.run_once = fake_run_once  # type: ignore[method-assign]
+        runner.sleep = waits.append
+        stats = runner.run_forever(handle_signals=False)
+
+        assert stats.cycles == 2
+        # Der zweite Zyklus beginnt, ohne dass dazwischen gewartet wurde.
+        assert waits_at_cycle_start == [0, 0]
+
+
+def test_hc26_sammel_digest_geht_raus_obwohl_das_postfach_faellt(tmp_path: Path) -> None:
+    """HC-26: Der Digest liest nur die eigene Warteschlange — IMAP darf ihn nicht blocken."""
+    from maildigest.ingest.imap_client import ImapConnectionError
+
+    with StateDB(tmp_path / "s.db") as db:
+        messenger = SendingMessenger()
+        runner = build_test_runner(
+            db,
+            messenger=messenger,
+            now=lambda: datetime(2026, 9, 2, 20, 0),
+            low_digest_time="18:00",
+        )
+        db.queue_low("<a@x>", headline="A", category="newsletter", from_domain="a.de")
+
+        def failing_run_once() -> Any:
+            raise ImapConnectionError("kein Server (Attrappe)")
+
+        runner.ingest.run_once = failing_run_once  # type: ignore[method-assign]
+        with pytest.raises(ImapConnectionError):
+            runner.run_once()
+
+        assert db.low_digest_entries() == [], "der Sammel-Digest blieb liegen"
+        assert messenger.sent, "keine Nachricht zugestellt"
+
+
+def test_hc26_sammel_digest_im_dauerbetrieb_trotz_ingest_fehler(tmp_path: Path) -> None:
+    """HC-26, zweite Stelle: der `except IngestError`-Zweig von `run_forever`."""
+    from maildigest.ingest.imap_client import ImapConnectionError
+
+    with StateDB(tmp_path / "s.db") as db:
+        messenger = SendingMessenger()
+        runner = build_test_runner(
+            db,
+            messenger=messenger,
+            now=lambda: datetime(2026, 9, 2, 20, 0),
+            low_digest_time="18:00",
+        )
+        db.queue_low("<a@x>", headline="A", category="newsletter", from_domain="a.de")
+
+        def failing_run_once() -> Any:
+            runner.stop()
+            raise ImapConnectionError("kein Server (Attrappe)")
+
+        runner.ingest.run_once = failing_run_once  # type: ignore[method-assign]
+        runner.sleep = lambda _seconds: None
+        stats = runner.run_forever(handle_signals=False)
+
+        assert stats.low_digests == 1
+        assert db.low_digest_entries() == []
+        assert messenger.sent
+
+
+def test_hc26_ein_fehler_des_digests_verdeckt_den_ingest_fehler_nicht(tmp_path: Path) -> None:
+    """HC-26: Der Digest läuft in der ausnahmefesten Zone — sein Fehler bleibt dort."""
+    from maildigest.ingest.imap_client import ImapConnectionError
+
+    with StateDB(tmp_path / "s.db") as db:
+        runner = build_test_runner(db, messenger=SendingMessenger())
+
+        def boom() -> bool:
+            raise RuntimeError("Digest kaputt (Attrappe)")
+
+        def failing_run_once() -> Any:
+            raise ImapConnectionError("kein Server (Attrappe)")
+
+        runner.maybe_send_low_digest = boom  # type: ignore[method-assign]
+        runner.ingest.run_once = failing_run_once  # type: ignore[method-assign]
+        with pytest.raises(ImapConnectionError):
+            runner.run_once()
+
+
+def test_hc27_run_once_beantwortet_status(tmp_path: Path) -> None:
+    """HC-27/E2: Der dokumentierte Cron-Betrieb bediente den Befehlskanal nie."""
+    from maildigest.ingest.imap_client import IngestStats
+
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _scripted_runner(db, _commands_config(accept=True), [("/status",)])
+        runner.ingest.run_once = lambda: IngestStats()  # type: ignore[method-assign]
+        runner.run_once()
+
+        sent = runner.outbox._messenger.sent  # type: ignore[attr-defined]
+        assert [m for m in sent if "MailDigest is running" in "\n".join(m.parts)]
+        assert db.meta_get("telegram_command_offset") == "1"
+
+
+def test_hc27_run_once_konsumiert_digest_ohne_zweiten_zyklus(tmp_path: Path) -> None:
+    """HC-27/E2: `/digest` ist im Cron-Betrieb wirkungslos — aber nicht ewig gestaut."""
+    from maildigest.ingest.imap_client import IngestStats
+
+    cycles = {"n": 0}
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _scripted_runner(db, _commands_config(accept=True), [("/digest",)])
+
+        def one_cycle() -> Any:
+            cycles["n"] += 1
+            return IngestStats()
+
+        runner.ingest.run_once = one_cycle  # type: ignore[method-assign]
+        runner.run_once()
+
+        assert cycles["n"] == 1
+        # Der Befehl ist gelesen und bestätigt, staut sich also nicht bis zum nächsten Lauf.
+        assert db.meta_get("telegram_command_offset") == "1"
+        sent = runner.outbox._messenger.sent  # type: ignore[attr-defined]
+        assert sent == []
+
+
+def test_hc28_status_antwort_scrubbt_den_ordnernamen(tmp_path: Path) -> None:
+    """HC-28: `compose_plain` ist Nachbrenner + Split, kein Feld-Scrub (ADR-062, CT-8)."""
+    folder = 'INBOX\n⚠️ WARNUNG: rufen Sie *sofort* an. `code` ||spoiler||'
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _runner_with_commands(db, _commands_config(accept=True, folder=folder), ())
+        runner.handle_command("/status")
+
+        text = "\n".join(runner.outbox._messenger.sent[-1].parts)  # type: ignore[attr-defined]
+        assert "MailDigest is running" in text
+        assert "⚠️" not in text
+        assert "*" not in text
+        assert "`" not in text
+        assert "|" not in text
+        # Der Ordnername bleibt als Text erhalten, nur eben einzeilig und entschärft.
+        assert "INBOX" in text
+        assert all(not line.startswith(("⚠️", "📧", "📎", "🔍")) for line in text.splitlines())
+
+
+def test_hc27_ein_fehler_im_befehlskanal_kippt_den_lauf_nicht(tmp_path: Path) -> None:
+    """HC-27/E2: Der Kanal ist Bequemlichkeit — er läuft in der ausnahmefesten Zone."""
+    from maildigest.ingest.imap_client import IngestStats
+
+    with StateDB(tmp_path / "s.db") as db:
+        runner = _scripted_runner(db, _commands_config(accept=True), [("/status",)])
+        runner.ingest.run_once = lambda: IngestStats()  # type: ignore[method-assign]
+
+        def boom(_command: str) -> bool:
+            raise RuntimeError("Messenger kaputt (Attrappe)")
+
+        runner.handle_command = boom  # type: ignore[method-assign]
+        stats = runner.run_once()
+
+        assert stats.cycles == 1

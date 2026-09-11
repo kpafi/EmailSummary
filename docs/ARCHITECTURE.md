@@ -110,9 +110,12 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   kaputte Header) → manueller MIME-Walk mit Tiefenlimit (`message/rfc822` wird nie
   betreten, T13) → Body-Aggregation (alle Inline-`text/plain`, sonst alle
   Inline-`text/html` via `html_to_text`) → pro Text: `unicode_clean.clean_text` →
-  Link-Scrub (`links.LinkCollector`, eine Instanz pro Mail: `#n` läuft über Body,
-  Anhänge, Betreff, Anzeigename durch) → Tag-Strip auch für Klartext →
-  Gesamt-Klartext-Budget (`[gekürzt]`).
+  Marker-Neutralisierung (`neutralize_forged_markers`: ein nachgebauter
+  `<<<MAILDIGEST-…-UNTRUSTED-…>>>`-Block wird zum Token
+  `[forged data-block marker removed]` und in `forged_markers` gezählt — **vor** dem
+  Tag-Strip, der ihn sonst spurlos löscht, HC-5) → Link-Scrub (`links.LinkCollector`, eine
+  Instanz pro Mail: `#n` läuft über Body, Anhänge, Betreff, Anzeigename durch) → Tag-Strip
+  auch für Klartext → Gesamt-Klartext-Budget (`[gekürzt]`).
 - **Anhänge:** `attachments.detect_kind(declared_mime, data)` liefert
   `pdf|text|html|mismatch|unknown`; verarbeitet werden nur `text` (Datei) und `pdf`
   (Subprozess, `extract_pdf.extract_pdf_text(...) -> str | None`, `None` ⇒ unverarbeitet).
@@ -371,6 +374,19 @@ wieder rein additiv und wird beim Öffnen still vollzogen — neue Tabellen legt
   Warteschlange erneut leeren (auch im Fehlerfall, `finally`) → Sammel-Digest prüfen.
   `Runner.run_forever()`: derselbe Zyklus in einer Schleife mit Poll-Intervall,
   Reconnect-Backoff aus `ingest.backoff_delay` und Shutdown über SIGINT/SIGTERM (ADR-051).
+- **Befehlskanal in der Schleife (ADR-077/ADR-080, Stand Fixrunde 2026-09-11):** Nach
+  jedem Zyklus und danach nach **jedem** Warte-Abschnitt von höchstens
+  `runner.COMMAND_POLL_SECONDS = 10` Sekunden ruft `run_forever` `_serve_commands()`.
+  Das arbeitet den gelesenen Stapel vollständig ab (Liste statt `any(…)` über einen
+  Generator — sonst fielen alle Befehle hinter dem ersten `/digest` weg) und meldet, ob
+  sofort ein weiterer Zyklus folgen soll. `_wait_for_next_cycle()` ersetzt das frühere
+  einmalige `_wait(poll_interval)`; `stop()` beendet jeden Abschnitt sofort, damit SIGINT
+  nicht auf ein Long-Polling wartet. `run_once` bedient den Kanal einmal am Ende
+  (`_serve_commands_once`): `/status` antwortet, `/digest` wird nur konsumiert.
+- **Ausnahmefeste Zone (ADR-049 Nachtrag):** Zustell-Warteschlange **und** Sammel-Digest
+  laufen in `run_once` im `finally` und in `run_forever` auch im `except IngestError`-
+  Zweig — beide brauchen kein Postfach. Ein Fehler des Digests wird dort abgefangen
+  (`low_digest_failed`), damit er den `IngestError` nicht verdeckt.
 - Statusfolge: `pending` (Ingest-`claim`) → `sanitized` → `summarized` → `checked` →
   `delivered` | `skipped_low` | `failed`. `checked` wird **vor** dem Versand committet
   (ADR-008); solange die Nachricht in der `outbox` liegt, bleibt es dabei — erst die
@@ -467,6 +483,7 @@ class SanitizationReport(BaseModel, frozen=True):
     reply_to_mismatch: bool
     return_path_mismatch: bool
     id_collision: bool              # Kopie von RawMail.id_collision (ADR-079)
+    forged_markers: int             # nachgebaute Datenblock-Marker (ADR-061, HC-5)
     auth_results: dict[str, str]    # z. B. {"spf": "pass", "dkim": "fail"} best effort
 
 class Summary(BaseModel):

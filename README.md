@@ -239,8 +239,16 @@ Während `maildigest run` läuft, reagiert es auf genau zwei Wörter aus **deine
 
 | Befehl | Wirkung |
 |---|---|
-| `/digest` | Ruft sofort ab, statt das Poll-Intervall abzuwarten |
+| `/digest` | Ruft ab, statt das Poll-Intervall abzuwarten — spätestens zehn Sekunden später |
 | `/status` | Kurzbericht: gelesener Ordner, wartende Zustellungen, gesammelte Mails |
+
+Groß- und Kleinschreibung sind egal, Leerzeichen davor und dahinter auch; ein angehängtes
+`@deinbotname` (das Telegram in Gruppen anfügt) wird abgetrennt, und alles, was hinter dem
+Befehl steht, wird ignoriert — gelesen wird nur das erste Wort.
+
+Läufst du per Cron mit `maildigest run --once`, gibt es keine Wartezeit, die sich
+abkürzen ließe: Die Befehle werden dort am Ende des **nächsten** Laufs bedient. `/status`
+antwortet dann, `/digest` ist wirkungslos — dieser Lauf hat gerade abgerufen.
 
 **Was dieser Kanal ausdrücklich nicht kann:** Es gibt keinen Dialog. Schreibst du etwas
 anderes — auch „fasse mir die Mail von gestern zusammen" —, wird es verworfen, ohne es zu

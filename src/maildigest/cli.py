@@ -144,6 +144,8 @@ _TELEGRAM_SETUP_HINT = (
     "While `maildigest run` is running, this chat can also trigger it:\n"
     "  /digest   fetch and summarise right now\n"
     "  /status   short report on what is waiting\n"
+    "With `maildigest run --once` (cron) both are answered at the end of the next run;\n"
+    "an immediate fetch has no effect there — that run just fetched everything anyway.\n"
     "Anything else you write is discarded — there is no chat function.\n"
     "If the chat is a group where not everyone should be able to trigger runs, set\n"
     "accept_commands = false under [messenger.telegram] in your configuration."

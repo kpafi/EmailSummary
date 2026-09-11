@@ -37,6 +37,7 @@ from maildigest.llm.base import LLMProvider
 from maildigest.llm.factory import build_provider, max_tokens_for
 from maildigest.llm.schema import complete_json
 from maildigest.models import SanitizedMail, Summary
+from maildigest.sanitize.sanitizer import FORGED_MARKER_TOKEN
 
 __all__ = [
     "CONTROL_CHAR_BURST",
@@ -93,8 +94,12 @@ _URL_TOKEN_RE = re.compile(
 #: Ein im Mail-Text nachgebauter Datenblock-Marker (`<<<MAILDIGEST-END-UNTRUSTED-DATA>>>`).
 #: Die echten Marker tragen eine zufällige Kennung, ein Nachbau kann also nie passen — aber
 #: der **Versuch** ist ein Beweis für einen gezielten Angriff auf die Prompt-Struktur. Die
-#: Regex ist absichtlich tolerant: Der WP3-Sanitizer entfernt die Winkelklammern, und der
-#: Angreifer variiert Trennzeichen und Groß-/Kleinschreibung.
+#: Regex ist absichtlich tolerant, weil der Angreifer Trennzeichen und Groß-/Kleinschreibung
+#: variiert. Sie ist aber **nicht** die erste Verteidigungslinie: Ein *vollständiger*
+#: Nachbau mit Winkelklammern wird vom WP3-Tag-Stripper restlos gelöscht (nicht nur um die
+#: Klammern erleichtert, wie ADR-061 ursprünglich annahm) — deshalb erhebt der Sanitizer das
+#: Faktum selbst (`SanitizationReport.forged_markers`, HC-5). Dieser Textpfad bleibt als
+#: zweite Schicht für Marker ohne Klammern und für von Hand gebaute `SanitizedMail`.
 _FORGED_MARKER_RE = re.compile(r"(?i)MAILDIGEST[\s\-_]{0,3}(?:END[\s\-_]{0,3})?UNTRUSTED")
 
 #: Ab so vielen entfernten Steuer-/Unsichtbarzeichen ist die Ballung kein Zufall mehr,
@@ -106,10 +111,21 @@ CONTROL_CHAR_BURST = 8
 #: erkennen", sondern nur die offen ausgesprochenen Übernahmeversuche.
 _INSTRUCTION_PHRASES_RE = re.compile(
     r"(?i)"
-    r"ignore\s+(?:all\s+|any\s+)?(?:previous|prior|above|preceding)\s+instructions"
-    r"|disregard\s+(?:all\s+|the\s+)?(?:previous|prior|above)\s+(?:instructions|rules)"
-    r"|ignoriere\s+(?:alle\s+|die\s+)?(?:vorherigen|obigen|bisherigen)\s+"
-    r"(?:anweisungen|regeln)"
+    # Wörtliche Übernahmeformel, englisch. Verb, optionaler Determiner (auch das
+    # Possessiv „your" — es fehlte und ist die häufigste Variante, HC-21), Zeitbezug und
+    # ein **gebundenes Objekt**: nur Anweisungen/Regeln/Prompts, nie „mail" oder „noise".
+    # Bewusst nicht zu `ignore .* instructions` verallgemeinert (ADR-061).
+    r"(?:ignore|forget|disregard)\s+"
+    r"(?:all\s+(?:of\s+)?|any\s+|every\s+)?(?:your|the|these|those|my)?\s*"
+    r"(?:previous|prior|above|preceding|earlier)\s+"
+    r"(?:instructions?|rules?|prompts?)\b"
+    # Dieselbe Formel auf Deutsch. Der Zeitbezug bleibt Pflicht, Determiner und
+    # Possessiv sind optional.
+    r"|(?:ignoriere|ignorieren\s+sie|vergiss|vergessen\s+sie|missachte|missachten\s+sie)\s+"
+    r"(?:alle\s+|sämtliche\s+|saemtliche\s+)?"
+    r"(?:deine\s+|deinen\s+|deiner\s+|ihre\s+|die\s+|den\s+|der\s+)?"
+    r"(?:vorherigen|vorhergehenden|bisherigen|obigen|früheren|frueheren|oberen)\s+"
+    r"(?:anweisungen?|regeln?|vorgaben?|instruktionen?)\b"
     # „du bist jetzt …" allein ist Alltagsdeutsch („du bist jetzt dran"); erst die Anrede
     # eines Modells macht daraus eine Anweisung. Ebenso „System-Prompt": das Wort kommt in
     # legitimer Fachkorrespondenz vor, das *Ausgeben* oder *Überschreiben* nicht.
@@ -135,7 +151,10 @@ def detect_injection_evidence(mail: SanitizedMail) -> tuple[str, ...]:
     Gemeldet werden nur Indizien, die ein harmloser Absender praktisch nicht auslöst:
 
     ``forged_block_marker``
-        Der Mail-Text baut die Delimiter des Prompt-Datenblocks nach.
+        Der Mail-Text baut die Delimiter des Prompt-Datenblocks nach. Quelle ist zuerst
+        der Sanitizer (`report.forged_markers`, HC-5) — er sieht den Nachbau, bevor der
+        Tag-Stripper ihn löscht —, danach das von ihm gesetzte Token und zuletzt der
+        Wortlaut selbst.
     ``control_char_burst``
         Auffällig viele entfernte Unsichtbar-/Bidi-Zeichen (:data:`CONTROL_CHAR_BURST`).
     ``instruction_phrases``
@@ -156,7 +175,11 @@ def detect_injection_evidence(mail: SanitizedMail) -> tuple[str, ...]:
         [mail.subject, mail.from_display, mail.body_text, *mail.attachment_texts.values()]
     )
     evidence: list[str] = []
-    if _FORGED_MARKER_RE.search(haystack):
+    if (
+        mail.sanitization_report.forged_markers > 0
+        or FORGED_MARKER_TOKEN in haystack
+        or _FORGED_MARKER_RE.search(haystack)
+    ):
         evidence.append("forged_block_marker")
     if mail.sanitization_report.control_chars_removed >= CONTROL_CHAR_BURST:
         evidence.append("control_char_burst")
@@ -187,14 +210,25 @@ def _redact_tokens(text: str) -> tuple[str, bool]:
 
     Auf das ganze Wort ausgedehnt, damit aus `https://boese.example/pfad` nicht der Rest
     `boese.example/pfad` übrig bleibt.
+
+    Die Suche nach den Wortgrenzen ist **amortisiert linear** (HC-29): Ohne Whitespace im
+    Feld (`"a.co/" * n`) traf jeder der rund n/5 Treffer sonst eine Vorwärtssuche über den
+    ganzen Rest — quadratisch, 32 000 Zeichen brauchten 11,8 s. Jetzt begrenzt das Ende der
+    zuletzt gefundenen Spanne beide Suchrichtungen: vorwärts wird nie zweimal über dasselbe
+    Zeichen gelaufen, und rückwärts kann eine Suche höchstens bis zur vorigen Spanne
+    zurückgehen — die beiden werden ohnehin verschmolzen.
     """
     spans: list[tuple[int, int]] = []
+    scanned = 0
     for match in _URL_TOKEN_RE.finditer(text):
         start, end = match.start(), match.end()
-        while start > 0 and not text[start - 1].isspace():
+        floor = spans[-1][1] if spans else 0
+        while start > floor and not text[start - 1].isspace():
             start -= 1
+        end = max(end, scanned)
         while end < len(text) and not text[end].isspace():
             end += 1
+        scanned = end
         spans.append((start, end))
     if not spans:
         return text, False
