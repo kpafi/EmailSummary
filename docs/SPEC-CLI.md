@@ -80,12 +80,17 @@ Eine unerlaubte Eingabe bei 1–3 wird abgelehnt (`Ungültiger Wert. Erlaubt: �
 und erneut gefragt; nach drei Fehlversuchen endet das Kommando mit Exit-Code 2.
 
 Danach entsteht die Datei mit **Dateirechten 0600** und dem vollständigen Feldsatz aus
-Abschnitt 5. Pflichtfelder ohne Default (`[imap] host`, `[imap] username`, `[llm] model`),
-alle Secrets und alle Felder ohne Default — dazu gehören alle vier Overrides in
-`[llm.critic]` — stehen als auskommentierte Beispielzeilen darin; die Datei ist nach `init`
-also gültiges TOML, aber noch keine vollständige Konfiguration. Die Frage-Erläuterung zu den
-Custom-Instructions erscheint nur im interaktiven Modus. Die Ausgabe endet
-mit der Liste der nächsten Schritte.
+Abschnitt 5: Jedes Feld mit Default steht mit diesem Default darin. Pflichtfelder ohne
+Default (`[imap] host`, `[imap] username`), alle Secrets und alle übrigen Felder ohne
+Default — dazu gehören alle vier Overrides in `[llm.critic]` — stehen als auskommentierte
+Beispielzeilen darin; die Datei ist nach `init` also gültiges TOML, aber noch keine
+vollständige Konfiguration. `[llm] model` gehört **nicht** dazu: Es hat laut Abschnitt 5
+den Default `""` und ist erst Pflicht, sobald `provider` nicht `none` ist (ADR-076). Die
+Frage-Erläuterung zu den Custom-Instructions erscheint nur im interaktiven Modus.
+
+Danach folgt ein Absatz, der einordnet, was MailDigest ohne Sprachmodell zustellt; **zum
+Schluss** steht die Liste der nächsten Schritte (`connect-mail`, `connect-messenger`,
+`connect-llm` als optionaler Punkt, `test`, `run`). Die Ausgabe endet mit dieser Liste.
 
 Ein unzulässiger Wert (z. B. `--low-digest-time 25:99`) führt zu Exit-Code 1 mit einer
 feldbezogenen Meldung; die Datei wird dann **nicht** angelegt.
@@ -125,7 +130,9 @@ Anbieterliste geprüft (Datenstand 2026-09-09):
   derzeit Outlook.com/Hotmail/Live (OAuth2-Pflicht, `LOGINDISABLED`) und Proton Mail
   (kein offenes IMAP) —, endet das Kommando **vor** der Passwortfrage mit Exit-Code 2,
   nennt den Grund und den Ausweg (Spiegel-Postfach woanders anlegen und dorthin
-  weiterleiten). Es wird nichts gespeichert.
+  weiterleiten). Es wird nichts gespeichert. Das gilt für die blanke Domain **und** für
+  eine Mailadresse dieses Anbieters (`me@outlook.com`) gleichermaßen, auch zusammen mit
+  `--no-test`.
 
 Der Vorgabewert für Frage 2 ist der Port des erkannten Anbieters (bei allen bekannten
 Anbietern 993), sofern die Konfiguration noch keinen Port enthält. Vor Frage 3 wird ein
@@ -189,9 +196,16 @@ Abfragen in dieser Reihenfolge:
 
    Danach folgt die Anleitung zur gewählten Option: woher der Schlüssel kommt, welche
    Stolperfalle dort typisch ist und — bei den Gratis-Anbietern — wo die aktuellen
-   Modell-IDs stehen. Bei Auswahl 1 endet das Kommando sofort mit Exit-Code 0: Es gibt
-   weder Modellnamen noch Schlüssel noch Testaufruf, `[llm] model` und `base_url` werden
-   geleert und ein etwaiger gespeicherter Schlüssel entfernt.
+   Modell-IDs stehen. Wird die Liste mit `--provider` oder `--non-interactive`
+   übersprungen, entscheidet der Optionswert: `none` und `anthropic` führen zur jeweiligen
+   Anleitung, `openai_compatible` zur **generischen** Anleitung für OpenAI-kompatible
+   Endpunkte. Ein anbieterspezifischer Erklärtext und eine anbieterspezifische `base_url`
+   (Groq, OpenRouter, Cerebras, Ollama) kommen dann **nicht** zum Zug: `base_url` bleibt
+   auf dem bisherigen Dateiwert bzw. leer, sofern `--base-url` nichts anderes sagt.
+
+   Bei Auswahl 1 endet das Kommando sofort mit Exit-Code 0: Es gibt weder Modellnamen
+   noch Schlüssel noch Testaufruf, `[llm] model` und `base_url` werden geleert und ein
+   etwaiger gespeicherter Schlüssel entfernt.
 
 2. `Modellname (exakte Modell-ID des Anbieters) [<bisheriger Wert>]: ` — Pflichtangabe, es
    gibt bewusst keinen Default
@@ -214,7 +228,7 @@ Schlägt der Aufruf fehl, endet das Kommando mit Exit-Code 1 und schreibt nichts
 
 | Option | Wert | Bedeutung |
 |---|---|---|
-| `--provider` | `none` \| `anthropic` \| `openai_compatible` | Antwort auf Frage 1; überspringt die Auswahlliste |
+| `--provider` | `none` \| `anthropic` \| `openai_compatible` | Setzt `[llm] provider`; überspringt die Auswahlliste. Belegt **keine** anbieterspezifische `base_url` vor — dafür ist `--base-url` da |
 | `--model` | ID | Antwort auf Frage 2 |
 | `--base-url` | URL | Antwort auf Frage 3 |
 | `--no-test` | – | Ohne Testaufruf speichern |
@@ -245,7 +259,7 @@ nichts gefunden, endet das Kommando mit Exit-Code 1 (steht bereits eine Chat-ID 
 Datei, bleibt sie stehen und es gibt nur eine Warnung). Ein abgelehntes Token führt zu
 Exit-Code 1 mit dem Hinweis auf das Bot-Token.
 
-Nach erfolgreicher Einrichtung nennt die Ausgabe die optionalen Befehle `/digest` und `/status` samt des Schalters `accept_commands` (ADR-077), damit der Nutzer von ihrer Existenz erfaehrt; die zugestellte Testnachricht enthaelt dieselbe Auskunft.
+Nach jeder erfolgreichen Telegram-Einrichtung nennt die Ausgabe **genau einmal** die optionalen Befehle `/digest` und `/status` samt des Schalters `accept_commands` (ADR-077), damit der Nutzer von ihrer Existenz erfaehrt — auf dem getUpdates-Weg ebenso wie mit `--chat-id`; die zugestellte Testnachricht enthaelt dieselbe Auskunft. Fehlt `[messenger.telegram] accept_commands` in einer aelteren Datei, traegt `connect-messenger` den Default nach, damit der Feldsatz aus Abschnitt 5 vollstaendig bleibt.
 
 **Discord.** Hinweis zum Anlegen des Webhooks, dann `Webhook-URL: ` (ohne Echo, weil die
 URL selbst das Secret ist). Ohne URL: Exit-Code 2.
@@ -279,7 +293,7 @@ Für das Bot-Token gibt es keine Option; es kommt aus der Abfrage oder aus
 
 ### `maildigest test`
 
-Ohne `--dry-run` geht der eigentlichen Nachricht ein kurzer Vorspann voraus (Kennzeichnung als Selbsttest mit dem Hinweis, dass die Mail nicht aus dem Postfach stammt). Ohne ihn waere die zugestellte Zusammenfassung von einer echten nicht zu unterscheiden, und der Nutzer suchte im Postfach nach einer Mail, die es nie gab.
+Ohne `--dry-run` geht der eigentlichen Nachricht ein kurzer Vorspann voraus (Kennzeichnung als Selbsttest mit dem Hinweis, dass die Mail nicht aus dem Postfach stammt). Ohne ihn waere die zugestellte Zusammenfassung von einer echten nicht zu unterscheiden, und der Nutzer suchte im Postfach nach einer Mail, die es nie gab. Der Vorspann nennt die **Herkunft der Testmail** in zwei Fassungen — mitgelieferte Beispielmail oder die mit `--eml` uebergebene Datei —, aber nie den Dateipfad: Punkte im Pfad wuerde der Output-Sanitizer sichtbar entschaerfen.
 
 Ende-zu-Ende-Selbsttest: verarbeitet **eine `.eml`-Datei** durch dieselbe Pipeline wie im
 Betrieb (Sanitizer → Summarizer → Kritiker → Output-Sanitizer → Messenger) und stellt das
@@ -321,6 +335,12 @@ und 3 zusätzlich die Zeile `    Trockenlauf: es wird nichts an den Messenger ge
 (--dry-run).`, und Schritt 5 lautet
 `5/5 Nachricht erzeugt (N Teile) — Trockenlauf, nicht gesendet:`, gefolgt von der
 Nachricht selbst.
+
+Wurde die Nachricht erzeugt, aber nicht zugestellt (der Messenger nimmt sie nicht an, sie
+wartet in der Warteschlange), lautet Schritt 5
+`5/5 Nicht zugestellt (N Teile) — in der Warteschlange.`; die Erklärung dazu steht auf
+stderr, der Exit-Code ist 1. Damit hat die Schrittfolge in allen drei Ausgängen —
+zugestellt, nicht zugestellt, fail-closed — eine abschließende 5/5-Zeile.
 
 Exit-Codes: 0, wenn die Nachricht erzeugt **und** zugestellt wurde (bzw. bei `--dry-run`
 erzeugt und ausgegeben). 1, wenn die Pipeline fail-closed endete (dann steht in Schritt 5
@@ -376,7 +396,11 @@ verbleiben, zählen erst in dem Lauf, in dem sie durchgehen; bis dahin erscheine
 
 Exit-Codes: 0 bei sauberem Ende, 1 bei unvollständiger Konfiguration, unbenutzbarer
 State-Datenbank oder — nur bei `--once` — nicht erreichbarem Postfach
-(`Fehler: Postfach nicht erreichbar: …`). Ein fehlgeschlagenes Verschieben ist **kein**
+(`Fehler: Postfach nicht erreichbar: …`). Ein fehlendes IMAP-Passwort (weder `[imap]
+password` noch `MAILDIGEST_IMAP_PASSWORD`) zählt zum **ersten** Fall: Es wird vor dem
+Verbindungsaufbau erkannt und als Konfigurationsfehler gemeldet
+(`Fehler: Ungültige Konfiguration (<pfad>): [imap] password: Pflichtangabe fehlt …`),
+nicht als Erreichbarkeitsproblem. Ein fehlgeschlagenes Verschieben ist **kein**
 solcher Fall: Es betrifft eine einzelne Mail, wird als `imap_postprocess_failed`
 protokolliert und bricht den Lauf nicht ab (ADR-065). Im Dauerbetrieb ist ein Postfach-Ausfall kein
 Abbruch: Es wird mit wachsendem Abstand (5 s, 10 s, 20 s … maximal 10 Minuten) neu
@@ -460,6 +484,9 @@ Modelltext werden neutralisiert (ADR-062). Alle Domains und Dateinamen erscheine
 Punkt (`beispiel[.]de`, `rechnung[.]pdf`), weil Messenger nackte Domains automatisch
 verlinken. Ist die Nachricht länger als das Limit des Zielsystems (Telegram 4096, Discord
 2000, Signal 2000 Zeichen), wird sie an Zeilengrenzen auf mehrere Nachrichten aufgeteilt.
+Muss dabei eine einzelne Zeile geschnitten werden, beginnt jede Fortsetzung mit `… `; das
+Präfix macht sichtbar, dass die Zeile weiterläuft, und verhindert, dass ein Schnitt einen
+der reservierten Zeilenanfänge an den Anfang einer Nachricht schiebt.
 
 **Normale Zustellung**
 
@@ -476,10 +503,15 @@ Von: <Anzeigename> (<domain>) · <TT.MM. HH:MM>            ← ohne Date-Header:
 <Link-Fußnote (defanged), eine Adresse je Zeile>          ← nur bei [links] footnote = true
 ```
 
+Ohne Sprachmodell (`[llm] provider = "none"`) steht in der Anhangszeile statt der
+Zusammenfassung ein beschrifteter Auszug des gelesenen Anhangstextes
+(`— datei.txt: Excerpt: …`) — genau wie die Zusammenfassungszeile dort ein Auszug ist.
+
 Zeilen ohne Inhalt entfallen. Einzellimits: Kopfzeile 120, Zusammenfassung 3000,
 Anhangs-Zusammenfassung 400, Kritiker-Grund 200, Anzeigename 80, Domain 100, Dateiname
 80 Zeichen; höchstens 10 namentlich genannte Anhänge und 5 Banner-Gründe. Gekürzt wird
-mit `…`.
+mit `…`. Bei Dateinamen wird in der **Mitte** gekürzt, damit die Endung erhalten bleibt
+(`aaa…aaa.exe`) — bei einem nicht verarbeiteten Anhang ist sie die wichtigste Angabe.
 
 **Metadaten-Notiz (fail-closed)** — immer genau diese fünf Zeilen:
 

@@ -9,14 +9,14 @@ kein URL-Muster, kein HTML-Tag, keine Zero-Width-/Bidi-Steuerzeichen in `body_te
 from __future__ import annotations
 
 import email
-import email.header
 import re
 import unicodedata
-from email.utils import parseaddr
 from pathlib import Path
 
 import pytest
+from imap_tools import MailMessage
 
+from maildigest.ingest.imap_client import build_raw_mail
 from maildigest.models import RawMail, SanitizedMail
 from maildigest.sanitize import MailSanitizer
 
@@ -37,42 +37,18 @@ FORBIDDEN_PATTERNS = (
 )
 
 
-def _decode_header(value: str | None) -> str | None:
-    if value is None:
-        return None
-    try:
-        return str(email.header.make_header(email.header.decode_header(value)))
-    except Exception:
-        return value
-
-
 def load_corpus_mail(path: Path) -> RawMail:
-    """Baut aus einer Korpus-.eml eine `RawMail` (analog zu den Ingest-Konventionen)."""
+    """Baut aus einer Korpus-.eml eine `RawMail` — über den **echten** Ingest-Weg.
+
+    Früher stand hier ein Nachbau mit eigenem RFC-2047-Dekodier-Helfer für From/Reply-To.
+    Der hat einen `from_addr` erzeugt, den die Produktion nie geliefert hat (HC-23): Der
+    Korpus-Test prüfte gegen einen besseren Wert als den echten. Seit `build_raw_mail` den
+    Anzeigenamen selbst dekodiert, ist der Nachbau nicht nur überflüssig, sondern schädlich.
+    Nur der `dedupe_key` bleibt der Dateiname — er macht Testausgaben lesbar.
+    """
     data = path.read_bytes()
-    message = email.message_from_bytes(data)
-    from_addr = _decode_header(message.get("From")) or ""
-    address = parseaddr(from_addr)[1]
-    from_domain = address.rsplit("@", 1)[-1].lower() if "@" in address else ""
-    return_path = _decode_header(message.get("Return-Path"))
-    return_path_address = parseaddr(return_path)[1] if return_path else ""
-    return_path_domain = (
-        return_path_address.rsplit("@", 1)[-1].lower()
-        if "@" in return_path_address
-        else None
-    )
-    auth_headers = message.get_all("Authentication-Results") or []
-    return RawMail(
-        message_id=_decode_header(message.get("Message-ID")),
-        dedupe_key=path.name,
-        from_addr=from_addr,
-        from_domain=from_domain,
-        reply_to=_decode_header(message.get("Reply-To")),
-        return_path_domain=return_path_domain,
-        subject_raw=_decode_header(message.get("Subject")) or "",
-        auth_results_header="\n".join(auth_headers) or None,
-        mime_bytes=data,
-        size_bytes=len(data),
-    )
+    raw = build_raw_mail(MailMessage.from_bytes(data))
+    return raw.model_copy(update={"dedupe_key": path.name})
 
 
 def sanitize_corpus_mail(path: Path) -> SanitizedMail:

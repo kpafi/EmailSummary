@@ -36,12 +36,20 @@ from __future__ import annotations
 
 from maildigest.agents.critic import collect_signals, enforce_verdict_policy
 from maildigest.agents.summarizer import (
+    clamp_headline,
     describe_without_body,
     enforce_output_policy,
 )
 from maildigest.models import CriticVerdict, SanitizedMail, Summary
 
-__all__ = ["EXCERPT_MAX_CHARS", "NO_MODEL_NOTE", "OfflineCritic", "OfflineSummarizer"]
+__all__ = [
+    "ATTACHMENT_EXCERPT_LABEL",
+    "ATTACHMENT_EXCERPT_MAX_CHARS",
+    "EXCERPT_MAX_CHARS",
+    "NO_MODEL_NOTE",
+    "OfflineCritic",
+    "OfflineSummarizer",
+]
 
 #: Zeichen des Mail-Textes, die als Auszug übernommen werden. Bewusst kurz: Der Auszug
 #: soll die Nachricht nicht sprengen, sondern die Frage „lohnt sich Hinschauen?" beantworten.
@@ -52,8 +60,41 @@ EXCERPT_MAX_CHARS = 400
 #: Zusammenfassung halten.
 NO_MODEL_NOTE = "Excerpt, not a summary — no language model configured."
 
+#: Zeichen je Anhangs-Auszug — der Composer kürzt jeden Wert von `attachment_summaries`
+#: bei 400 Zeichen; länger einzutragen hieße, die Kürzung dem Ausgabesanitizer zu überlassen.
+ATTACHMENT_EXCERPT_MAX_CHARS = 400
+
+#: Beschriftung jedes Anhangs-Auszugs. Ohne sie liest sich die Zeile `— datei.txt: …` wie
+#: eine Zusammenfassung des Anhangs; es ist aber nur sein Anfang.
+ATTACHMENT_EXCERPT_LABEL = "Excerpt: "
+
 #: Kategorie ohne Modell: Eine Einordnung ist ohne Sprachverständnis nicht seriös möglich.
 _CATEGORY = "unclassified"
+
+
+def _clamp(text: str, limit: int) -> str:
+    """Kürzt auf `limit` Zeichen, gekürzt wird mit „…" (SPEC-CLI §6)."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _attachment_excerpts(mail: SanitizedMail) -> dict[str, str]:
+    """Je gelesenem Anhang ein beschrifteter, gekürzter Auszug (HC-2).
+
+    Ohne Modell gibt es niemanden, der den Anhangstext zusammenfasst — der Anhang darf
+    deshalb trotzdem nicht stumm verschwinden (F-OPS-3). `enforce_output_policy` behält
+    genau diese Schlüssel, weil sie aus `mail.attachment_texts` stammen, und der Composer
+    rendert daraus die Zeile `— <datei>: <Auszug>`.
+    """
+    excerpts: dict[str, str] = {}
+    for filename, raw in mail.attachment_texts.items():
+        text = " ".join(raw.split())
+        if not text:
+            continue
+        room = ATTACHMENT_EXCERPT_MAX_CHARS - len(ATTACHMENT_EXCERPT_LABEL)
+        excerpts[filename] = ATTACHMENT_EXCERPT_LABEL + _clamp(text, room)
+    return excerpts
 
 
 def _excerpt(mail: SanitizedMail) -> str:
@@ -65,9 +106,7 @@ def _excerpt(mail: SanitizedMail) -> str:
     text = " ".join(mail.body_text.split())
     if not text:
         return describe_without_body(mail)
-    if len(text) > EXCERPT_MAX_CHARS:
-        return text[: EXCERPT_MAX_CHARS - 1].rstrip() + "…"
-    return text
+    return _clamp(text, EXCERPT_MAX_CHARS)
 
 
 class OfflineSummarizer:
@@ -80,13 +119,16 @@ class OfflineSummarizer:
 
     def summarize(self, mail: SanitizedMail) -> Summary:
         """Baut eine `Summary` allein aus den Sanitizer-Daten."""
+        # Die Kürzung muss **vor** die Konstruktion: `Summary.headline` trägt
+        # `max_length=100`, ein längerer Betreff ließe Pydantic werfen und die Pipeline
+        # fail-closed abbrechen, bevor `enforce_output_policy` je gekürzt hätte (HC-1).
         summary = Summary(
-            headline=mail.subject or "Mail without subject",
+            headline=clamp_headline(mail.subject or "Mail without subject"),
             summary_text=f"{NO_MODEL_NOTE} {_excerpt(mail)}",
             importance="normal",
             importance_reason="no language model configured — not assessed",
             category=_CATEGORY,
-            attachment_summaries={},
+            attachment_summaries=_attachment_excerpts(mail),
             injection_suspected=False,
         )
         # Dieselbe Nachkontrolle wie bei einer Modellausgabe: Sie kürzt die Headline,

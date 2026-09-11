@@ -30,18 +30,21 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
 from typing import Final, ParamSpec, TypeVar
 
 __all__ = [
+    "OUTBOX_FUTURE_TOLERANCE_SECONDS",
     "SCHEMA_VERSION",
+    "ClaimResult",
     "LowDigestEntry",
     "MailState",
     "OutboxItem",
@@ -52,15 +55,33 @@ __all__ = [
 ]
 
 #: Version des DB-Schemas; steht in `meta` und wird beim Öffnen geprüft.
-#: 1 = WP2 (`seen_mails`, `meta`), 2 = WP8 (zusätzlich `low_digest_queue`, `outbox`).
-SCHEMA_VERSION: Final = 2
+#: 1 = WP2 (`seen_mails`, `meta`), 2 = WP8 (zusätzlich `low_digest_queue`, `outbox`),
+#: 3 = Fixrunde (zusätzlich `seen_mails.content_hash`, ADR-079).
+SCHEMA_VERSION: Final = 3
 
-#: Schema-Versionen, die rein additiv (nur neue Tabellen) auf SCHEMA_VERSION gehoben
-#: werden können — ohne Migrationswerkzeug (NF-3, ADR-048).
-_UPGRADABLE_FROM: Final = frozenset({"1"})
+#: Schema-Versionen, die rein additiv (nur neue Tabellen/Spalten, keine geänderte oder
+#: entfernte Spalte) auf SCHEMA_VERSION gehoben werden können — ohne Migrationswerkzeug
+#: (NF-3, ADR-048, ADR-079).
+_UPGRADABLE_FROM: Final = frozenset({"1", "2"})
+
+#: Spalten, die nach dem ersten Anlegen einer Tabelle dazugekommen sind: Tabelle → Spalte →
+#: SQL-Typ. `CREATE TABLE IF NOT EXISTS` legt sie in einer bestehenden Datei nicht nach,
+#: `ALTER TABLE … ADD COLUMN` schon — und zwar rein additiv (bestehende Zeilen bekommen
+#: ``NULL``, das für `content_hash` "unbekannt" heisst und nie eine Kollision auslöst).
+_ADDED_COLUMNS: Final = {"seen_mails": {"content_hash": "TEXT"}}
+
+#: Ab wann ein `next_attempt_at` in der Zukunft nicht mehr geplant, sondern unplausibel ist
+#: (HC-25). Der längste reguläre Backoff sind 35 Minuten; 2 Stunden lassen jeder geplanten
+#: Wartezeit reichlich Luft und fangen trotzdem jeden nennenswerten Uhr-Rücksprung ein.
+OUTBOX_FUTURE_TOLERANCE_SECONDS: Final = 7200.0
+
+#: Präfix des abgeleiteten Dedupe-Keys einer Mail mit kollidierender Message-ID (ADR-079).
+_COLLISION_PREFIX: Final = "collision:"
 
 #: Schlüssel der Schema-Version in der `meta`-Tabelle.
 _META_SCHEMA_VERSION: Final = "schema_version"
+
+logger = logging.getLogger("maildigest.state")
 
 #: Erlaubte Zeichen einer Fehlerklasse (alles andere wird verworfen, I5).
 _ERROR_CLASS_RE: Final = re.compile(r"[^a-z0-9_]+")
@@ -74,7 +95,8 @@ CREATE TABLE IF NOT EXISTS seen_mails (
     first_seen_at   TEXT NOT NULL,
     status          TEXT NOT NULL,
     error_class     TEXT,
-    retry_count     INTEGER NOT NULL DEFAULT 0
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    content_hash    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -158,6 +180,22 @@ class MailState(StrEnum):
     DELIVERED = "delivered"
     FAILED = "failed"
     SKIPPED_LOW = "skipped_low"
+
+
+class ClaimResult(StrEnum):
+    """Ergebnis von :meth:`StateDB.claim` — dreiwertig statt `bool` (ADR-079).
+
+    `Message-ID` ist ein vom Absender frei wählbarer Header. Die frühere `bool`-Antwort
+    konnte "kenne ich schon" nicht von "derselbe Schlüssel, anderer Inhalt" unterscheiden;
+    eine Mail mit gefälschter Message-ID hat damit die echte still unterdrückt (HC-10).
+    """
+
+    #: Neu — der Aufrufer darf verarbeiten.
+    CLAIMED = "claimed"
+    #: Schon bekannt (gleicher Inhalt oder Inhalt unbekannt) — überspringen.
+    DUPLICATE = "duplicate"
+    #: Schlüssel belegt, Inhalt nachweislich anders — unter abgeleitetem Key verarbeiten.
+    COLLISION = "collision"
 
 
 @dataclass(frozen=True)
@@ -268,10 +306,10 @@ class StateDB:
 
     Beispiel:
         >>> with StateDB(":memory:") as db:
-        ...     db.claim("<a@b>")
-        ...     db.claim("<a@b>")
-        True
-        False
+        ...     print(db.claim("<a@b>").value)
+        ...     print(db.claim("<a@b>").value)
+        claimed
+        duplicate
     """
 
     def __init__(self, path: str | Path) -> None:
@@ -302,6 +340,7 @@ class StateDB:
             self._conn.execute("PRAGMA synchronous=FULL")
             with self._conn:
                 self._conn.executescript(_SCHEMA_SQL)
+            self._add_missing_columns()
             self._check_schema_version()
         except sqlite3.Error as exc:
             self._close_quietly()
@@ -338,13 +377,37 @@ class StateDB:
     ) -> None:
         self.close()
 
+    def _add_missing_columns(self) -> None:
+        """Ergänzt nachträglich hinzugekommene Spalten in einer bestehenden Datei (ADR-079).
+
+        `CREATE TABLE IF NOT EXISTS` lässt eine vorhandene Tabelle unangetastet; eine
+        Datenbank der Version 2 hätte deshalb kein `seen_mails.content_hash`. `ADD COLUMN`
+        ist der additive Weg dorthin: Es schreibt keine Zeile um, bestehende Zeilen bekommen
+        ``NULL`` ("Inhalt unbekannt"). Der Aufruf ist idempotent — er prüft vorher, was da
+        ist, und ist damit auch für eine frisch angelegte Datei ein No-op.
+        """
+        for table, columns in _ADDED_COLUMNS.items():
+            present = {
+                str(row["name"])
+                for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            missing = [name for name in columns if name not in present]
+            if not missing:
+                continue
+            with self._conn:
+                for name in missing:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {name} {columns[name]}"
+                    )
+
     def _check_schema_version(self) -> None:
         """Legt die Schema-Version an oder prüft sie (NF-3: keine Migrationstools).
 
-        Rein additive Vorgängerversionen (nur neue Tabellen, keine geänderte Spalte —
-        derzeit Version 1 → 2, ADR-048) werden beim Öffnen stillschweigend hochgesetzt:
-        Die Tabellen sind durch ``CREATE TABLE IF NOT EXISTS`` bereits angelegt, Daten
-        müssen nicht angefasst werden. Alles andere ist ein Fehler.
+        Rein additive Vorgängerversionen (nur neue Tabellen oder neue, nullbare Spalten —
+        derzeit Version 1 → 2 → 3, ADR-048/ADR-079) werden beim Öffnen stillschweigend
+        hochgesetzt: Die Tabellen sind durch ``CREATE TABLE IF NOT EXISTS`` angelegt, die
+        Spalten durch :meth:`_add_missing_columns` ergänzt, Daten müssen nicht angefasst
+        werden. Alles andere ist ein Fehler.
         """
         stored = self.meta_get(_META_SCHEMA_VERSION)
         if stored is None:
@@ -362,26 +425,66 @@ class StateDB:
     # --- seen_mails -----------------------------------------------------------------------
 
     @_wrap_sqlite_errors
-    def claim(self, dedupe_key: str, *, now: datetime | None = None) -> bool:
+    def claim(
+        self,
+        dedupe_key: str,
+        *,
+        content_hash: str | None = None,
+        now: datetime | None = None,
+    ) -> ClaimResult:
         """Reserviert eine Mail zur Verarbeitung — der Kern der Idempotenz (F-ING-2).
+
+        Der Dedupe-Key stammt aus einem vom Absender frei wählbaren Header. Damit eine
+        gefälschte `Message-ID` keine echte Mail unterdrücken kann (ADR-079, HC-10), wird
+        neben dem Key ein inhaltsabgeleitetes Merkmal geführt: Ist der Key belegt, aber der
+        Inhalt ein anderer, ist das eine **Kollision** und kein Duplikat.
 
         Args:
             dedupe_key: Message-ID oder Fallback-Hash aus dem Ingest.
+            content_hash: SHA-256 über die MIME-Bytes (`RawMail.content_hash`). ``None``
+                oder leer heisst "unbekannt" — dann bleibt es beim alten Verhalten
+                (Duplikat), denn ohne Vergleichswert ist eine Kollision nicht beweisbar.
+                Das gilt auch für Zeilen aus einer Datenbank vor Schema-Version 3.
             now: Zeitstempel für `first_seen_at` (Default: jetzt, UTC).
 
         Returns:
-            ``True``, wenn die Mail neu ist und der Aufrufer sie verarbeiten darf;
-            ``False``, wenn sie bereits bekannt ist (Duplikat ⇒ überspringen).
+            :data:`ClaimResult.CLAIMED`, wenn die Mail neu ist und der Aufrufer sie
+            verarbeiten darf; :data:`ClaimResult.DUPLICATE`, wenn sie bereits bekannt ist
+            (⇒ überspringen); :data:`ClaimResult.COLLISION`, wenn der Key belegt ist, aber
+            von nachweislich anderem Inhalt (⇒ unter abgeleitetem Key verarbeiten).
         """
         timestamp = (now or datetime.now(UTC)).isoformat()
+        key_hash = dedupe_hash(dedupe_key)
+        stored_hash = content_hash or None
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT OR IGNORE INTO seen_mails "
-                "(message_id_hash, first_seen_at, status, error_class, retry_count) "
-                "VALUES (?, ?, ?, NULL, 0)",
-                (dedupe_hash(dedupe_key), timestamp, MailState.PENDING.value),
+                "(message_id_hash, first_seen_at, status, error_class, retry_count, "
+                "content_hash) VALUES (?, ?, ?, NULL, 0, ?)",
+                (key_hash, timestamp, MailState.PENDING.value, stored_hash),
             )
-        return cursor.rowcount == 1
+            if cursor.rowcount == 1:
+                return ClaimResult.CLAIMED
+            row = self._conn.execute(
+                "SELECT content_hash FROM seen_mails WHERE message_id_hash = ?", (key_hash,)
+            ).fetchone()
+        if row is None:  # pragma: no cover - zwischenzeitlich gelöscht
+            return ClaimResult.DUPLICATE
+        known = row["content_hash"]
+        if stored_hash is None or known is None or str(known) == stored_hash:
+            return ClaimResult.DUPLICATE
+        return ClaimResult.COLLISION
+
+    @staticmethod
+    def derived_collision_key(dedupe_key: str, content_hash: str) -> str:
+        """Ersatz-Dedupe-Key für eine kollidierende Mail (ADR-079).
+
+        ``sha256(message_id_hash + content_hash)``: deterministisch, damit dieselbe Mail
+        beim nächsten Poll wieder als Duplikat erkannt wird (F-ING-2 bleibt gültig), und
+        inhaltsgebunden, damit ein Angreifer ihn nicht vorwegnehmen kann.
+        """
+        digest = hashlib.sha256(f"{dedupe_hash(dedupe_key)}{content_hash}".encode())
+        return f"{_COLLISION_PREFIX}{digest.hexdigest()}"
 
     @_wrap_sqlite_errors
     def was_seen(self, dedupe_key: str) -> bool:
@@ -583,8 +686,25 @@ class StateDB:
 
     @_wrap_sqlite_errors
     def outbox_due(self, *, now: datetime | None = None, limit: int = 50) -> list[OutboxItem]:
-        """Alle fälligen Zustellungen (ältester Eintrag zuerst)."""
-        timestamp = (now or datetime.now(UTC)).isoformat()
+        """Alle fälligen Zustellungen (ältester Eintrag zuerst).
+
+        Eingesammelt werden auch Zeilen, deren `next_attempt_at` **absurd weit** in der
+        Zukunft liegt (mehr als :data:`OUTBOX_FUTURE_TOLERANCE_SECONDS`): Das kann keine
+        geplante Wartezeit sein — der längste Backoff sind 35 Minuten —, sondern nur ein
+        Rücksprung der Systemuhr (NTP-Erstsynchronisation, VM-Resume). Ohne diese
+        Plausibilitätsschranke bliebe die Nachricht für immer liegen, weil es keinen
+        Sweeper gibt (HC-25). Solche Zeilen werden auf `now` zurückgesetzt und protokolliert.
+        """
+        moment = now or datetime.now(UTC)
+        timestamp = moment.isoformat()
+        horizon = (moment + timedelta(seconds=OUTBOX_FUTURE_TOLERANCE_SECONDS)).isoformat()
+        with self._conn:
+            corrected = self._conn.execute(
+                "UPDATE outbox SET next_attempt_at = ? WHERE next_attempt_at > ?",
+                (timestamp, horizon),
+            ).rowcount
+        if corrected:
+            logger.warning("outbox_clock_skew_corrected", extra={"rows": int(corrected)})
         rows = self._conn.execute(
             "SELECT id, message_id_hash, kind, payload, attempts, first_queued_at, "
             "next_attempt_at FROM outbox WHERE next_attempt_at <= ? ORDER BY id LIMIT ?",
@@ -624,10 +744,15 @@ class StateDB:
         remaining_parts: list[str] | None = None,
         importance: str | None = None,
         is_warning: bool | None = None,
+        first_queued_at: datetime | None = None,
     ) -> None:
         """Zählt einen Fehlversuch und verschiebt den nächsten Versuch.
 
         Args:
+            first_queued_at: Wenn gesetzt, wird der Einreih-Zeitpunkt neu geschrieben. Das
+                braucht der Zustellpfad, wenn die Systemuhr gesprungen ist und das
+                gespeicherte `first_queued_at` deshalb ein unbrauchbares Alter ergibt
+                (HC-25): Statt die Nachricht sofort aufzugeben, beginnt die Stundenfrist neu.
             remaining_parts: Wenn gesetzt, wird die gespeicherte Nutzlast auf genau diese
                 Teile eingekürzt. Damit setzt der Retry eine mehrteilige Nachricht dort
                 fort, wo sie abgebrochen ist, statt bereits zugestellte Teile erneut zu
@@ -637,32 +762,27 @@ class StateDB:
                 nötig, weil die Nutzlast als Ganzes neu geschrieben wird).
             is_warning: Warn-Flag der Nachricht (dito).
         """
-        if remaining_parts is None:
-            with self._conn:
-                self._conn.execute(
-                    "UPDATE outbox SET attempts = attempts + 1, next_attempt_at = ?, "
-                    "last_error = ? WHERE id = ?",
-                    (next_attempt_at.isoformat(), _clean_error_class(error_class), item_id),
+        assignments = ["attempts = attempts + 1", "next_attempt_at = ?", "last_error = ?"]
+        values: list[object] = [next_attempt_at.isoformat(), _clean_error_class(error_class)]
+        if remaining_parts is not None:
+            assignments.append("payload = ?")
+            values.append(
+                json.dumps(
+                    {
+                        "parts": list(remaining_parts),
+                        "importance": importance if importance is not None else "normal",
+                        "is_warning": bool(is_warning),
+                    },
+                    ensure_ascii=False,
                 )
-            return
-        payload = json.dumps(
-            {
-                "parts": list(remaining_parts),
-                "importance": importance if importance is not None else "normal",
-                "is_warning": bool(is_warning),
-            },
-            ensure_ascii=False,
-        )
+            )
+        if first_queued_at is not None:
+            assignments.append("first_queued_at = ?")
+            values.append(first_queued_at.isoformat())
+        values.append(item_id)
         with self._conn:
             self._conn.execute(
-                "UPDATE outbox SET attempts = attempts + 1, next_attempt_at = ?, "
-                "last_error = ?, payload = ? WHERE id = ?",
-                (
-                    next_attempt_at.isoformat(),
-                    _clean_error_class(error_class),
-                    payload,
-                    item_id,
-                ),
+                f"UPDATE outbox SET {', '.join(assignments)} WHERE id = ?", tuple(values)
             )
 
     @_wrap_sqlite_errors

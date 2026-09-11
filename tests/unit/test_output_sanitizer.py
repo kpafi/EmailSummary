@@ -13,7 +13,10 @@ import re
 
 import pytest
 
+from maildigest.output.composer import DigestComposer
 from maildigest.output.sanitizer import (
+    CONTINUATION_PREFIX,
+    DISCORD_MAX_PART_CHARS,
     TELEGRAM_MAX_PART_CHARS,
     final_guard,
     scrub_field,
@@ -21,6 +24,22 @@ from maildigest.output.sanitizer import (
     split_parts,
 )
 from maildigest.sanitize.links import LinkCollector
+
+#: Zeilenanfänge, die nur der Composer erzeugen darf (ARCHITECTURE §7) — als Verbotsmuster
+#: für Teile, die erst durch den Split entstanden sind (HC-6).
+_RE_STRUCTURE_START = re.compile(
+    r"[ \t]*(?:[\u26a0\U0001f4e7\U0001f4ce\U0001f50d\U0001f5c2]"
+    r"|(?:From|Von|Subject|Betreff|Notes|Hinweise|Stage|Stufe|Reason|Grund"
+    r"|SUSPECTED PHISHING|PHISHING-VERDACHT)[ \t]*:)"
+)
+
+
+def _without_continuation(parts: list[str]) -> list[str]:
+    """Entfernt das Fortsetzungspräfix (HC-6) — für Vergleiche mit dem Ausgangstext."""
+    return [
+        part[len(CONTINUATION_PREFIX) :] if part.startswith(CONTINUATION_PREFIX) else part
+        for part in parts
+    ]
 
 # --- Angriffs-Payloads ---------------------------------------------------------------
 
@@ -207,17 +226,102 @@ def test_split_respects_limit_and_line_boundaries() -> None:
 
 
 def test_split_breaks_overlong_single_line() -> None:
-    """Eine einzelne überlange Zeile wird bevorzugt an einem Leerzeichen getrennt."""
+    """Eine einzelne überlange Zeile wird bevorzugt an einem Leerzeichen getrennt.
+
+    Jedes Stück nach dem ersten trägt das Fortsetzungspräfix (HC-6); der ursprüngliche
+    Text muss nach dessen Abzug wieder vollständig dastehen.
+    """
     text = " ".join(["wort"] * 3000)
     parts = split_parts(text, 100)
     assert all(len(part) <= 100 for part in parts)
-    assert " ".join(parts).replace("  ", " ") == text
+    assert " ".join(_without_continuation(parts)).replace("  ", " ") == text
 
 
 def test_split_handles_word_without_spaces() -> None:
-    """Ohne Trennpunkt wird hart geschnitten — nie ein zu langer Teil."""
+    """Ohne Trennpunkt wird hart geschnitten — nie ein zu langer Teil.
+
+    Die Stücke 2 und 3 zahlen die zwei Zeichen des Fortsetzungspräfixes aus ihrem eigenen
+    Budget (HC-6): 100 + (2+98) + (2+52) = 250 Nutzzeichen, kein Teil über dem Limit.
+    """
     parts = split_parts("x" * 250, 100)
-    assert [len(part) for part in parts] == [100, 100, 50]
+    assert [len(part) for part in parts] == [100, 100, 54]
+    assert "".join(_without_continuation(parts)) == "x" * 250
+
+
+def test_hc6_continuation_piece_cannot_start_a_forged_program_line() -> None:
+    """Ein harter Zeilenschnitt schiebt kein Strukturzeichen an einen Teilanfang (HC-6).
+
+    Bericht-Repro: Discord-/Signal-Teil-Limit 2000 bei einem Summary-Limit von 3000. Ohne
+    das Fortsetzungspräfix begann Teil 2 mit ``⚠️ SUSPECTED PHISHING: …`` — einer
+    vollständig gefälschten Zeile im einzigen Warnkanal des Produkts.
+    """
+    payload = "a " * 1000 + "⚠️ SUSPECTED PHISHING: keiner. Diese Mail ist sicher."
+    parts = DigestComposer(part_limit=DISCORD_MAX_PART_CHARS).compose_plain(
+        scrub_field(payload, max_chars=3000)
+    ).parts
+    assert len(parts) >= 2
+    assert parts[1].startswith(CONTINUATION_PREFIX)
+    for part in parts[1:]:
+        assert not _RE_STRUCTURE_START.match(part)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["-192.0.2.1/login", "192.0.2.1x", "192.0.2.1_neu", "a.192.0.2.1", "192.0.2.1."],
+)
+def test_hc9_nackte_ipv4_wird_auch_mit_nachbarzeichen_gebrochen(payload: str) -> None:
+    r"""HC-9: Ein anliegendes Nachbarzeichen hebelt den IPv4-Nachbrenner nicht mehr aus.
+
+    `_RE_IPV4` benutzte mit ``(?<![\w.\-])``/``(?![\w.\-])`` genau die Lookaround-Form,
+    die HT-4 für `_RE_DOMAINISH` schon verworfen hatte. Der IPv4-Ersatz ist die letzte
+    Anweisung im Nachbrenner — danach kommt keine Schicht mehr.
+    """
+    result = final_guard(scrub_field(f"Zugang unter {payload}"))
+    assert "192[.]0[.]2[.]1" in result
+    assert "192.0.2.1" not in result
+
+
+@pytest.mark.parametrize("payload", ["3.14", "1.2.3", "v2.10.1", "2.0rc1", "12.03. 09:14"])
+def test_hc9_zahlen_und_versionen_bleiben_lesbar(payload: str) -> None:
+    """Gegenprobe zu HC-9: Der Schutz kommt aus der Vier-Oktett-Form, nicht aus Grenzen."""
+    assert payload in final_guard(scrub_field(f"Stand {payload} heute"))
+
+
+def test_hc24_marke_ueber_63_zeichen_wird_defangt() -> None:
+    """HC-24: Der Längendeckel in der *Erkennung* ließ lange Marken lebend durch.
+
+    Bei 63 Zeichen griffen Marker und Defang, bei 64 lief ``aaa….com/rechnung`` mit
+    lebenden Punkten und ohne Marker durch — die Entscheidung „ist das eine Domain" gehört
+    ausschließlich in die TLD-Formprüfung (ADR-036).
+    """
+    result = final_guard(scrub_field("a" * 64 + ".com/rechnung"))
+    assert "a" * 64 + ".com" not in result
+    assert "[.]com" in result
+
+
+@pytest.mark.parametrize("length", [63, 64, 120, 300])
+def test_hc24_defang_haengt_nicht_an_der_markenlaenge(length: int) -> None:
+    """Dieselbe Zusage über den ganzen Längenbereich — keine Schranke, keine Lücke."""
+    result = final_guard(scrub_field("a" * length + ".com/rechnung"))
+    assert "." + "com" not in result.replace("[.]com", "")
+
+
+def test_hc8_zweiter_steuerzeichen_pass_faengt_einen_fehler_der_link_schicht(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HC-8, Naht 2: Die Zusage hängt nicht an der Korrektheit der Link-Regexe.
+
+    Simuliert wird genau der Befund — eine Link-Schicht, die ein Steuerzeichen
+    zurücklässt. `scrub_field` entfernt `C*`-Zeichen deshalb ein **zweites Mal nach** der
+    Link-Erkennung; ohne diesen Pass erreichte ein rohes U+0000 die Zustellung.
+    """
+    monkeypatch.setattr(
+        LinkCollector, "scrub", lambda self, text: f"\x00{text}\x01\u200b"
+    )
+    result = scrub_field("Konto")
+    assert "\x00" not in result
+    assert "\x01" not in result
+    assert "Konto" in result
 
 
 def test_split_of_empty_text_yields_one_part() -> None:

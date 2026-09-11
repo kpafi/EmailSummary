@@ -39,6 +39,7 @@ __all__ = [
     "auth_failure_hint",
     "find_by_address",
     "find_by_host",
+    "find_preset",
     "host_examples",
     "setup_guide",
 ]
@@ -592,6 +593,43 @@ LLM_PRESETS: tuple[LlmPreset, ...] = (
         detail=LLM_LOCAL_GUIDE,
     ),
 )
+
+
+def find_preset(wanted: str, *, base_url: str = "") -> LlmPreset:
+    """Wählt die Vorlage zu einem `--provider`- bzw. `[llm] provider`-Wert (HC-3).
+
+    Das Feld `provider` ist **mehrdeutig**: Fünf der sieben Vorlagen tragen
+    `openai_compatible`. Eine Suche darüber lieferte die erste passende Vorlage (Groq) und
+    damit fremden Erklärtext samt fremder `base_url`. Deshalb entscheidet zuerst der
+    bisherige Dateiwert `base_url` (sofern einer vorliegt), dann der stabile `key`; erst
+    danach wird über `provider` gesucht, und eine mehrdeutige Suche endet bei der
+    generischen Vorlage (kein Anbietertext, keine URL-Vorbelegung).
+
+    Args:
+        wanted: Wert aus `--provider` oder aus der Konfigurationsdatei.
+        base_url: Bisheriger Dateiwert; entscheidet bei Mehrdeutigkeit die Vorauswahl der
+            interaktiven Liste (wer Groq eingetragen hat, bekommt Groq vorgeschlagen).
+
+    Returns:
+        Die passende Vorlage; bei unbekanntem Wert die erste (»kein Sprachmodell«).
+    """
+    matches = [preset for preset in LLM_PRESETS if preset.provider == wanted]
+    if base_url:
+        # Der Dateiwert benennt die Vorlage genauer als das mehrdeutige `provider`: Wer
+        # den Groq-Endpunkt eingetragen hat, meint Groq.
+        for preset in matches:
+            if preset.base_url == base_url:
+                return preset
+    for preset in LLM_PRESETS:
+        if preset.key == wanted:
+            return preset
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        return LLM_PRESETS[0]
+    generic = next((preset for preset in LLM_PRESETS if preset.key == "openai_compatible"), None)
+    return generic if generic is not None else LLM_PRESETS[0]
+
 
 LLM_CHOICE_INTRO = """
 How should mail be summarised? Every option except the first needs an account with the

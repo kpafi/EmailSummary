@@ -74,6 +74,20 @@ _SNIFF_WINDOW = 8192
 #: Maximale Länge eines sanitisierten Dateinamens.
 _MAX_FILENAME_CHARS = 80
 
+#: Kürzungsmarker in der Mitte zu langer Dateinamen (SPEC-CLI §6, ADR-040).
+_ELLIPSIS = "…"
+
+#: Zeichenkosten von :data:`_ELLIPSIS` **nach** NFKC. Der Composer schickt den Namen durch
+#: `output.sanitizer.scrub_plain`, dessen `clean_text` NFKC anwendet — und NFKC bildet
+#: U+2026 auf ``...`` ab. Ohne diese Reserve wäre der Name nach dem Normalisieren 82
+#: Zeichen lang, der Composer würde bei 80 erneut abschneiden und genau die Endung
+#: verlieren, die hier erhalten werden soll (HC-22).
+_ELLIPSIS_COST = 3
+
+#: Längste Endung, die beim Kürzen erhalten bleibt (``.xlsx``, ``.torrent`` …). Bei
+#: geblockten Anhängen ist die Endung die sicherheitsrelevante Information (E7).
+_MAX_KEPT_SUFFIX = 10
+
 #: Zeichen, die in sanitisierten Dateinamen erlaubt sind (ASCII-Allowlist gegen
 #: RLO-/Homoglyphen-Tricks in Dateinamen, T2/T12).
 _FILENAME_ALLOWED = frozenset(
@@ -122,11 +136,38 @@ def detect_kind(declared_mime: str, data: bytes) -> AttachmentKind:
     return "html" if mime == "text/html" else "text"
 
 
+def _shorten(name: str, limit: int) -> str:
+    """Kürzt einen zu langen Dateinamen in der **Mitte** und behält die Endung (E7/HC-22).
+
+    Der harte Schnitt auf `limit` verschwieg beides: dass gekürzt wurde und worauf die
+    Datei endet. Gerade bei geblockten Anhängen ist die Endung die sicherheitsrelevante
+    Information (``…rechnung.exe``). Das Ergebnis ist höchstens `limit` Zeichen lang —
+    auch nach der NFKC-Auflösung des Auslassungszeichens (:data:`_ELLIPSIS_COST`).
+    """
+    if len(name) <= limit:
+        return name
+    stem, dot, extension = name.rpartition(".")
+    suffix = ""
+    if dot and stem and 1 <= len(extension) <= _MAX_KEPT_SUFFIX:
+        suffix = f".{extension}"
+    budget = limit - _ELLIPSIS_COST - len(suffix)
+    if budget < 2:  # Endung selbst zu lang ⇒ ohne sie, aber mit sichtbarer Kürzung
+        suffix = ""
+        budget = limit - _ELLIPSIS_COST
+    if budget < 2:
+        return name[:limit]
+    body = name[: len(name) - len(suffix)]
+    head = (budget + 1) // 2
+    tail = budget - head
+    return body[:head] + _ELLIPSIS + (body[-tail:] if tail else "") + suffix
+
+
 def sanitize_filename(name: str | None, *, fallback: str = "unbenannt") -> str:
     """Sanitisiert einen Anhang-Dateinamen zu einer harmlosen ASCII-Darstellung.
 
     Entfernt Pfadanteile, ersetzt alles außerhalb einer engen ASCII-Allowlist durch ``_``
-    (deckt Bidi-/Zero-Width-/Homoglyphen-Tricks im Dateinamen ab) und kürzt hart.
+    (deckt Bidi-/Zero-Width-/Homoglyphen-Tricks im Dateinamen ab) und kürzt zu lange Namen
+    in der Mitte mit ``…`` (:func:`_shorten`).
     """
     if not name:
         return fallback
@@ -138,6 +179,4 @@ def sanitize_filename(name: str | None, *, fallback: str = "unbenannt") -> str:
     collapsed = " ".join(kept.split()).strip("._ ")
     if not collapsed:
         return fallback
-    if len(collapsed) > _MAX_FILENAME_CHARS:
-        collapsed = collapsed[:_MAX_FILENAME_CHARS]
-    return collapsed
+    return _shorten(collapsed, _MAX_FILENAME_CHARS)

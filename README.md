@@ -107,9 +107,10 @@ MailDigest läuft **ab Werk ohne jedes Sprachmodell**. Nach `maildigest init` is
 `[llm] provider = "none"` gesetzt, und du kannst sofort loslegen — ohne Konto, ohne
 Kreditkarte, ohne API-Schlüssel.
 
-**Was du in diesem Modus bekommst:** Betreff, Absender, einen ausdrücklich als solchen
-beschrifteten Auszug des Mailtextes, die Liste der geblockten Anhänge — und **alle
-Warnungen**. Der Phishing-Schutz hängt nämlich gar nicht am Sprachmodell: Fehlgeschlagene
+**Was du in diesem Modus bekommst:** Betreff (ab 100 Zeichen mit `…` gekürzt), Absender,
+einen ausdrücklich als solchen beschrifteten Auszug des Mailtextes, je Anhang, aus dem Text
+gelesen werden konnte, einen ebenso beschrifteten Auszug (`— datei.txt: Excerpt: …`), die
+Liste der geblockten Anhänge — und **alle Warnungen**. Der Phishing-Schutz hängt nämlich gar nicht am Sprachmodell: Fehlgeschlagene
 SPF/DKIM-Prüfungen, abweichende Antwortadressen, Punycode-Domains, versteckter Text im
 HTML und entfernte Links berechnet das Programm selbst, in Code. Was ohne Modell fehlt,
 ist der zusammenfassende Text und die Einschätzung „wichtig oder nicht" — nicht der Schutz.

@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -39,6 +40,8 @@ from maildigest.models import (
 )
 from maildigest.output.composer import DigestComposer
 from maildigest.output.sanitizer import (
+    CONTINUATION_PREFIX,
+    DISCORD_MAX_PART_CHARS,
     TELEGRAM_MAX_PART_CHARS,
     final_guard,
     scrub_field,
@@ -69,7 +72,19 @@ _PIECES = [
     "xn--", "192.0.2.1", "а",  # kyrillisches a (Homoglyph)
 ]
 
-ATTACK_TEXT = st.lists(st.sampled_from(_PIECES), min_size=1, max_size=25).map("".join)
+#: Lange Wiederholungsläufe (≥ 128 gleiche Zeichen). Sie fehlten der Strategie komplett —
+#: und genau dort lag HC-8: ``_RE_MAILTO`` deckelt bei 128 Zeichen, schnitt deshalb in
+#: einen bereits gesetzten ``\x00``-Platzhalter und ließ ein rohes U+0000 zurück. Ein
+#: zufälliges Alphabet erzeugt so einen Lauf praktisch nie.
+_LONG_RUNS = st.builds(
+    lambda char, count: char * count,
+    st.sampled_from(["a", "x", "1", "-", ".", "_", "%", "@"]),
+    st.integers(min_value=120, max_value=300),
+)
+
+ATTACK_TEXT = st.lists(
+    st.one_of(st.sampled_from(_PIECES), _LONG_RUNS), min_size=1, max_size=25
+).map("".join)
 
 #: Beide Quellen gemischt: strukturierte Angriffe und wilder Unicode.
 UNTRUSTED = st.one_of(ATTACK_TEXT, ANY_TEXT, st.tuples(ATTACK_TEXT, ANY_TEXT).map("".join))
@@ -108,10 +123,29 @@ _RE_WWW = re.compile(r"(?i)\bwww\s*\.")
 #:
 #: Die Token-Grenzen (`.` im Lookaround) sind wesentlich: `a.http.a` endet auf die Marke
 #: `a` und ist damit keine verlinkbare Domain — nur ein Teilstring davon sähe wie eine aus.
+#: **Das Orakel muss strikt großzügiger sein als die Implementierung** (HC-24). Vorher
+#: übernahm es mit ``{0,62}``/``{1,63}`` exakt die DNS-Längenschranke und mit ``[\w\-.]``
+#: exakt die Wortgrenze von ``output.sanitizer._RE_DOMAINISH`` — es konnte die Lücke, die
+#: es prüfen soll, prinzipiell nicht finden (dieselbe Fehlerart wie HT-1/2/4/6, Nachtrag
+#: zu ADR-058). Jetzt ohne Längendeckel und ohne Unterstrich in der rechten Wortgrenze:
+#: Das Orakel schlägt auch dort an, wo die Implementierung bewusst nicht defangt.
 _RE_LIVE_DOMAIN = re.compile(
-    r"(?<![\w\-.])[a-z0-9][a-z0-9\-]{0,62}(?:\.[a-z0-9\-]{1,63})*\.[a-z]{2}[a-z0-9\-]{0,61}"
+    r"(?<![\w\-.])[a-z0-9][a-z0-9\-]*(?:\.[a-z0-9\-]+)*\.[a-z]{2}[a-z0-9\-]*"
     r"(?![\w\-.])",
     re.IGNORECASE,
+)
+
+#: Eine lebende Vier-Oktett-Folge — nach dem Nachbrenner darf es sie nur gebrochen geben
+#: (HC-9). Das Orakel prüfte IPv4 bisher überhaupt nicht, die Klasse war testseitig blind.
+#: Das Orakel beschreibt die **Eigenschaft**, nicht die Regex der Implementierung: ein
+#: eigenständiges Token aus genau vier Oktetten. Ein Ziffernlauf, der links an einem
+#: Buchstaben/einer Marke hängt (``a192.0.2.1``, ``a.192.0.2.1``) oder rechts weiterläuft
+#: (``0.0.0.0000``, ``1.2.3.4.5``), ist keine Adresse — kein Linkifier macht daraus ein
+#: Ziel. Ein abschließender Wurzelpunkt (``192.0.2.1.``) dagegen schon; er ist erlaubt und
+#: wird gefunden. Die Implementierung defangt an mehreren Stellen **mehr** als dieses
+#: Orakel verlangt (Über-Defang ist der fail-safe Ausgang, ADR-036).
+_RE_LIVE_IPV4 = re.compile(
+    r"(?<![A-Za-z0-9.])\d{1,3}(?:\.\d{1,3}){3}(?!\d)(?!\.\d)"
 )
 
 #: Markup, das Telegram/Discord als Formatierung interpretieren (Discord rendert Markdown
@@ -130,9 +164,13 @@ _RE_LINE_MARKUP = re.compile(r"(?m)^[ \t]*(?:-#|#{1,6}|>{1,3}|[-+]|\d{1,3}[.)])(
 
 #: Zeilen-Präfixe des Nachrichtenformats (docs/ARCHITECTURE.md §7) — nur der Composer darf
 #: sie erzeugen, modellgelieferter Text nie (CT-8).
+#: Seit HC-6 stehen hier auch die **englischen** Beschriftungen und die Banner-Zeile
+#: ``SUSPECTED PHISHING:`` — die Ausgabe ist englisch, das Orakel prüfte bis dahin nur die
+#: deutschen Formen und hätte die gefälschte Warnzeile aus dem Split nie gesehen.
 _RE_STRUCTURE_LINE = re.compile(
     r"(?mi)^[ \t]*(?:[\u26a0\U0001f4e7\U0001f4ce\U0001f50d\U0001f5c2]"
-    r"|(?:Von|Betreff|Hinweise|Stufe)[ \t]*:)"
+    r"|(?:From|Subject|Notes|Stage|Reason|SUSPECTED PHISHING"
+    r"|Von|Betreff|Hinweise|Stufe|Grund|PHISHING-VERDACHT)[ \t]*:)"
 )
 
 #: IDN-Punktvarianten, die ein Client wie `.` behandelt (SECURITY §5, WP7).
@@ -152,6 +190,7 @@ def assert_output_safe(text: str) -> None:
     assert not _RE_WWW.search(text), f"www-Präfix in {text!r}"
     assert "](" not in text, f"Markdown-Naht in {text!r}"
     assert not _RE_LIVE_DOMAIN.search(text), f"lebende Domain in {text!r}"
+    assert not _RE_LIVE_IPV4.search(text), f"lebende IPv4 in {text!r}"
     assert not (_MARKUP & set(text)), f"Messenger-Markup in {text!r}"
     assert not _RE_UNDERSCORE_EDGE.search(text), f"Unterstrich am Wortrand in {text!r}"
     assert not _RE_MASS_MENTION.search(text), f"Massen-Ping in {text!r}"
@@ -172,6 +211,29 @@ def assert_output_safe(text: str) -> None:
 def test_scrub_field_output_is_never_clickable(payload: str) -> None:
     """∀ Eingabe: Feld-Scrub + Nachbrenner liefern keinen klickbaren, formatierten Text."""
     assert_output_safe(final_guard(scrub_field(payload)))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # HC-8, kanonische Form: `_RE_MAILTO` deckelt bei 128 Zeichen und schnitt in den
+        # Platzhalter des vorher gefundenen `http`-Links hinein.
+        "mailto:" + "a" * 127 + "http://boese.example",
+        "mailto:" + "a" * 200 + "http://boese.example",
+        "http://boese.example" + "a" * 130 + "mailto:x@y.example",
+    ],
+)
+def test_hc8_no_placeholder_byte_survives_the_link_pass(payload: str) -> None:
+    """Kein rohes U+0000 in der Zustellung — und jeder Marker bleibt zugeordnet (HC-8)."""
+    result = final_guard(scrub_field(payload))
+    assert "\x00" not in result
+    assert_output_safe(result)
+
+    collector = LinkCollector()
+    scrubbed = collector.scrub(payload)
+    assert "\x00" not in scrubbed
+    for index in range(1, collector.links_removed + 1):
+        assert f"#{index}" in scrubbed, f"Marker #{index} ohne Fundstelle: {scrubbed!r}"
 
 
 @_SLOW
@@ -237,13 +299,47 @@ def test_split_never_produces_an_unsafe_part(payload: str, limit: int) -> None:
 
 
 @_SLOW
+@given(
+    st.lists(UNTRUSTED, min_size=1, max_size=4),
+    st.one_of(
+        st.just(DISCORD_MAX_PART_CHARS),
+        st.just(TELEGRAM_MAX_PART_CHARS),
+        st.integers(min_value=200, max_value=6000),
+    ),
+)
+def test_hc6_no_part_and_no_line_starts_with_a_program_prefix(
+    payloads: list[str], limit: int
+) -> None:
+    """Der Split erzeugt nie einen gefälschten Zeilen-/Teilanfang (HC-6, ADR-062).
+
+    Eingabe ist ausschließlich Feldtext (durch :func:`scrub_field`) — genau das, was der
+    Composer zusammensetzt. Dessen eigene Präfixe sind hier bewusst nicht dabei: Geprüft
+    wird die Naht, nicht das Format. Der Bericht-Repro ist der Fall Discord/Signal
+    (Teil-Limit 2000) bei einem Summary-Limit von 3000.
+    """
+    collector = LinkCollector()
+    text = "\n".join(scrub_field(item, collector=collector) for item in payloads)
+    parts = DigestComposer(part_limit=limit).compose_plain(text).parts
+    for part in parts:
+        assert len(part) <= limit
+        for line in part.split("\n"):
+            assert not _RE_STRUCTURE_LINE.match(line), (
+                f"gefälschte Programmzeile {line[:60]!r} in {part[:60]!r}"
+            )
+
+
+@_SLOW
 @given(UNTRUSTED, st.integers(min_value=1, max_value=200))
 def test_split_preserves_every_non_whitespace_character(payload: str, limit: int) -> None:
     """`split_parts` wirft nur Leerraum weg — kein Zeichen geht beim Teilen verloren."""
     text = final_guard(scrub_field(payload))
     parts = split_parts(text, limit)
     assert all(len(part) <= limit for part in parts)
-    assert _without_whitespace("".join(parts)) == _without_whitespace(text)
+    stripped = [
+        part[len(CONTINUATION_PREFIX) :] if part.startswith(CONTINUATION_PREFIX) else part
+        for part in parts
+    ]
+    assert _without_whitespace("".join(stripped)) == _without_whitespace(text)
 
 
 # --- (b) Link-Erkennung -----------------------------------------------------------------

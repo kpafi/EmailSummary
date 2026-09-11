@@ -24,6 +24,7 @@ Wort ``http`` würden die Erkennung sonst aushebeln, und die intern verwendeten
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import unquote
 
@@ -56,7 +57,21 @@ _SCHEME = rf"(?:{_SCHEME_HTTP}|f\s{{0,3}}t\s{{0,3}}p\s{{0,3}}s?)"
 _SEP = r"\s{0,3}:\s{0,3}/\s{0,3}/\s{0,3}"
 
 #: Ein Domain-Label; ``\w`` ist Unicode-fähig, damit Homoglyphen-Domains erkannt werden.
-_LABEL = r"[\w%-]{1,63}"
+#:
+#: Die Obergrenze ist bewusst **nicht** die DNS-Grenze von 63 Oktetten (HC-24): Eine Marke
+#: mit 64 Zeichen ist zwar nicht auflösbar, wurde aber weder hier noch vom Nachbrenner
+#: erkannt und lief mit lebenden Punkten durch. Die *Erkennung* ist großzügig (Deckel nur
+#: ganz ohne Deckel); ob defangt wird, entscheidet die TLD-Formprüfung in
+#: :func:`LinkCollector.scrub` bzw. `output.sanitizer._defang_domain_match` (ADR-036).
+#: Backtracking ist unkritisch: Weder ``.`` noch die obfuskierten Punktformen liegen in
+#: der Zeichenklasse, die Zerlegung in Marken ist also eindeutig.
+_LABEL = r"[\w%-]+"
+
+#: Zeichen, die niemals Teil eines Fundes sein dürfen: die intern gesetzten
+#: ``\x00``-Platzhalter (HC-8). Ohne diesen Ausschluss schnitt z. B. ``_RE_MAILTO`` in ein
+#: bereits gesetztes Token hinein, die Rück-Ersetzung fand es nicht mehr — und ein rohes
+#: U+0000 erreichte die Zustellung.
+_NUL = "\x00"
 
 #: Punkt-Varianten zwischen Labels. Leerzeichen-Varianten verlangen ein
 #: Kleinbuchstaben-/Ziffern-Lookahead, damit nach „example.com. Nächster Satz" nicht der
@@ -66,13 +81,13 @@ _HOST_SEP = (
     r"(?=[a-z0-9]))"
 )
 _HOSTISH = rf"{_LABEL}(?:{_HOST_SEP}{_LABEL})*"
-_PATH = r"(?:[/?#][^\s<>\"'()]*)?"
+_PATH = r"(?:[/?#][^\s<>\"'()\x00]*)?"
 
 _RE_URL = re.compile(
-    rf"{_SCHEME}{_SEP}(?:[^\s<>\"'@/]{{1,64}}@)?{_HOSTISH}(?::\d{{1,5}})?{_PATH}",
+    rf"{_SCHEME}{_SEP}(?:[^\s<>\"'@/\x00]{{1,64}}@)?{_HOSTISH}(?::\d{{1,5}})?{_PATH}",
     re.IGNORECASE,
 )
-_RE_MAILTO = re.compile(r"mailto\s{0,3}:\s{0,3}[^\s<>\"'`,;:]{1,128}", re.IGNORECASE)
+_RE_MAILTO = re.compile(r"mailto\s{0,3}:\s{0,3}[^\s<>\"'`,;:\x00]{1,128}", re.IGNORECASE)
 _RE_TEL = re.compile(r"tel\s{0,3}:\s{0,3}\+?[0-9][0-9 ()./-]{2,24}[0-9]", re.IGNORECASE)
 _RE_WWW = re.compile(
     rf"\bwww\s{{0,3}}(?:{_OBF_DOT}|\.)\s{{0,3}}{_HOSTISH}{_PATH}", re.IGNORECASE
@@ -81,11 +96,21 @@ _RE_OBF_DOMAIN = re.compile(
     rf"\b{_LABEL}(?:\s{{0,3}}{_OBF_DOT}\s{{0,3}}{_LABEL})+{_PATH}", re.IGNORECASE
 )
 _RE_BARE_DOMAIN = re.compile(
-    rf"(?<![\w@.-]){_LABEL}(?:\.{_LABEL}){{1,10}}(?:/[^\s<>\"'()]*)?", re.IGNORECASE
+    rf"(?<![\w@.-]){_LABEL}(?:\.{_LABEL}){{1,10}}(?:/[^\s<>\"'()\x00]*)?", re.IGNORECASE
 )
 
 #: Satzzeichen, die am Ende eines Funds abgetrennt werden (gehören zum Satz, nicht zur URL).
 _TRAILING_PUNCTUATION = ".,;:!?"
+
+#: Markup-Zeichen, die aus der defangten Form fallen (HC-7). Deckungsgleich mit
+#: `output.sanitizer._MARKUP_CHARS` **ohne** ``[``/``]``: Die eckigen Klammern tragen die
+#: Defang-Token ``[.]``/``[:]``.
+_MARKUP_STRIP = {ord(char): None for char in "`*|~\\"}
+
+#: Ein gesetzter Platzhalter (``\x00<n>\x00``). Er wird zwischen den Erkennungs-Pässen
+#: **atomar** übersprungen: Kein Pass darf in ein bereits gesetztes Token hineinschneiden
+#: (HC-8) — sonst fände die Rück-Ersetzung es nicht mehr und ein rohes U+0000 bliebe stehen.
+_RE_PLACEHOLDER = re.compile(r"\x00\d{1,6}\x00")
 
 #: Kanonisches http-Schema auf bereits „kondensiertem" Text (ohne Leerzeichen).
 _RE_CANON_HTTP = re.compile(
@@ -105,6 +130,28 @@ _FILE_EXTENSIONS = frozenset(
         "bmp", "tif", "tiff", "mp3", "mp4", "mov", "avi", "db", "sqlite", "bak", "tmp",
     }
 )
+
+
+def _sub_outside_placeholders(
+    pattern: re.Pattern[str], repl: Callable[[re.Match[str]], str], text: str
+) -> str:
+    """Wendet `pattern` nur auf die Abschnitte **zwischen** gesetzten Platzhaltern an.
+
+    Damit kann kein Erkennungs-Pass in ein Token eines früheren Passes hineinschneiden
+    (HC-8) und auch kein Fund über ein Token hinweg zusammenwachsen. Die Zeichenklassen
+    schließen ``\x00`` zusätzlich aus — diese Funktion ist die Regel, der Ausschluss die
+    zweite Schicht.
+    """
+    if _NUL not in text:
+        return pattern.sub(repl, text)
+    chunks: list[str] = []
+    position = 0
+    for token in _RE_PLACEHOLDER.finditer(text):
+        chunks.append(pattern.sub(repl, text[position : token.start()]))
+        chunks.append(token.group(0))
+        position = token.end()
+    chunks.append(pattern.sub(repl, text[position:]))
+    return "".join(chunks)
 
 
 def _split_trailing(raw: str) -> tuple[str, str]:
@@ -150,7 +197,16 @@ def _defang(url: str) -> str:
     Auch der ``://``-Trenner und der ``mailto:``-Doppelpunkt werden gebrochen, damit die
     defangte Form nirgends (auch nicht in der optionalen Fußnote) einem Auto-Linkifier
     zum Opfer fallen kann (I3).
+
+    Zusätzlich fallen die Messenger-Markup-Zeichen weg (HC-7). Der Eintrag ist ein vom
+    Programm gebauter, inhaltlich aber **angreifergesteuerter** String: Er wandert als
+    Link-Fußnote roh in die Nachricht, und `output.sanitizer.final_guard` enthält bewusst
+    kein ``_RE_MARKUP`` (es fräße die eigenen Defang-Klammern, ADR-062). Ein unpaariges
+    ```` ``` ```` in einer Query öffnete auf Discord sonst einen Codeblock, der alle
+    folgenden Fußnotenzeilen verschluckt. ``[`` und ``]`` bleiben stehen — ohne sie
+    zerfielen ``[.]`` und ``[:]``.
     """
+    url = url.translate(_MARKUP_STRIP)
     defanged = re.sub(r"^https", "hxxps", url)
     defanged = re.sub(r"^http\b", "hxxp", defanged)
     defanged = re.sub(r"^ftp", "fxp", defanged)
@@ -239,16 +295,19 @@ class LinkCollector:
                 return match.group(0)
             return stash(self._record(host, _defang(condensed))) + tail
 
-        text = _RE_URL.sub(replace_url, text)
-        text = _RE_MAILTO.sub(replace_mailto, text)
-        text = _RE_TEL.sub(replace_tel, text)
-        text = _RE_WWW.sub(replace_domain, text)
-        text = _RE_OBF_DOMAIN.sub(replace_domain, text)
-        text = _RE_BARE_DOMAIN.sub(replace_bare, text)
+        text = _sub_outside_placeholders(_RE_URL, replace_url, text)
+        text = _sub_outside_placeholders(_RE_MAILTO, replace_mailto, text)
+        text = _sub_outside_placeholders(_RE_TEL, replace_tel, text)
+        text = _sub_outside_placeholders(_RE_WWW, replace_domain, text)
+        text = _sub_outside_placeholders(_RE_OBF_DOMAIN, replace_domain, text)
+        text = _sub_outside_placeholders(_RE_BARE_DOMAIN, replace_bare, text)
 
         for token, marker in placeholders.items():
             text = text.replace(token, marker)
-        return text
+        # Zusicherung statt Vertrauen (HC-8): Kein Platzhalter-Byte verlässt das Modul,
+        # auch wenn ein künftiger Pass die atomare Regel verletzt. Ein übrig gebliebenes
+        # U+0000 wäre ein Steuerzeichen in der Zustellung — fail-safe entfernen.
+        return text.replace(_NUL, "")
 
     def _record(self, host: str, defanged: str, *, kind: str = "Link") -> str:
         """Zählt einen Fund, prüft Punycode/Mixed-Script und liefert den Text-Marker."""

@@ -37,11 +37,13 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 
 from maildigest.sanitize.links import LinkCollector
 from maildigest.sanitize.unicode_clean import clean_text
 
 __all__ = [
+    "CONTINUATION_PREFIX",
     "DISCORD_MAX_PART_CHARS",
     "SIGNAL_MAX_PART_CHARS",
     "TELEGRAM_MAX_PART_CHARS",
@@ -161,13 +163,33 @@ _IDN_DOTS = str.maketrans({"。": ".", "｡": "."})
 #:   verlinken trotzdem, weil ein Label nicht mit `-` beginnen darf und ihr Linkifier dort
 #:   neu ansetzt. Der Match darf deshalb hinter einem `-` beginnen; nur mitten in einem
 #:   alphanumerischen Lauf neu anzusetzen wäre sinnlos (der Lauf ist schon konsumiert).
+#: * **Kein DNS-Längendeckel (HC-24):** ``[a-z0-9]{0,62}`` deckelte die *Erkennung* auf
+#:   63 Oktette. Eine 64 Zeichen lange erste Marke fiel damit komplett durch — der
+#:   Nachbrenner sah gar kein Token mehr und ließ die Punkte leben. Die Erkennung ist
+#:   jetzt **ohne jeden Längendeckel**; ob defangt wird, entscheidet ausschließlich
+#:   :func:`_defang_domain_match`. Über-Defang ist hier der fail-safe Ausgang (ADR-036
+#:   nimmt ihn ausdrücklich in Kauf). Auch ein großzügiger Deckel wäre falsch: Das
+#:   Property-Orakel hatte denselben und konnte die Klasse deshalb nicht finden — eine
+#:   Schranke, die Prüfling und Orakel teilen, ist keine Prüfung (Nachtrag zu ADR-058).
+#:   Backtracking ist unkritisch, weil ``.`` in keiner der Zeichenklassen vorkommt: Die
+#:   Zerlegung in Marken ist eindeutig.
 _RE_DOMAINISH = re.compile(
-    r"(?<![A-Za-z0-9])[a-z0-9](?:[a-z0-9\-]{0,62})(?:\.[a-z0-9\-]{1,63})+"
-    r"(?![A-Za-z0-9_\-])",
+    r"(?<![A-Za-z0-9])[a-z0-9][a-z0-9\-]*(?:\.[a-z0-9\-]+)+(?![A-Za-z0-9_\-])",
     re.IGNORECASE,
 )
 
-_RE_IPV4 = re.compile(r"(?<![\w.\-])\d{1,3}(?:\.\d{1,3}){3}(?![\w.\-])")
+#: Nackte IPv4-Adresse. Die Lookarounds sind — wie bei :data:`_RE_DOMAINISH` nach HT-4 —
+#: **ASCII-Grenzen und keine Wortgrenzen** (HC-9): Mit ``(?<![\w.\-])``/``(?![\w.\-])``
+#: überlebte jede Adresse mit einem Nachbarzeichen (``-192.0.2.1/login``, ``192.0.2.1x``,
+#: ``192.0.2.1_neu``, ``a.192.0.2.1``) den Nachbrenner ungebrochen. Links darf der Treffer
+#: deshalb hinter ``-``/``_``/``.`` beginnen; rechts wird nur der Fall ausgeschlossen, in
+#: dem der Treffer Teil einer **längeren** Zahl/IP wäre: ``(?!\.?\d)`` — direkt folgende
+#: Ziffer (``0.0.0.0000``) oder ein fünftes Oktett (``1.2.3.4.5``). Der Bericht schlug
+#: ``(?![0-9.])`` vor; das ließ ``192.0.2.1.`` (abschließender Wurzelpunkt) ungebrochen
+#: durch, obwohl ein Linkifier daraus sehr wohl ein Ziel macht. Die gewählte Form defangt
+#: strikt mehr — die fail-safe Richtung (ADR-036). Dass ``3.14``, ``1.2.3`` und ``v2.10.1``
+#: lesbar bleiben, kommt aus der Vier-Oktett-Form, nicht aus den Lookarounds.
+_RE_IPV4 = re.compile(r"(?<![A-Za-z0-9])\d{1,3}(?:\.\d{1,3}){3}(?!\.?\d)")
 
 #: `](` unmittelbar hintereinander ist die Markdown-Link-Syntax. Nach dem Scrubbing steht
 #: im Ziel zwar nie eine URL, aber die Form soll gar nicht erst entstehen (T7).
@@ -220,6 +242,12 @@ _RE_MANY_NEWLINES = re.compile(r"\n{3,}")
 #: Kürzungsmarker für Felder über ihrem Einzellimit (ohne Klammern: die fielen der
 #: Markup-Neutralisierung zum Opfer).
 _TRUNCATION_MARKER = " …"
+
+#: Präfix jedes Fortsetzungsstücks eines harten Zeilenschnitts (HC-6, ADR-062-Nachtrag).
+#: U+2026 + Leerzeichen: neutral, ohne Markup-Wirkung, und es verhindert, dass ein Schnitt
+#: mitten in der Zeile ein Struktur-Emoji oder eine Kopfzeilen-Beschriftung an einen
+#: **Zeilenanfang** schiebt, den keine Schicht mehr prüft (ARCHITECTURE §7).
+CONTINUATION_PREFIX = "… "
 
 
 def _unescape(text: str) -> str:
@@ -306,6 +334,28 @@ def neutralize_markup(text: str) -> str:
     return _RE_STRUCTURE_LABEL.sub(r"\1 · ", cleaned)
 
 
+def _strip_control(text: str) -> str:
+    """Entfernt jedes „C*"-Zeichen außer Tab/Zeilenumbruch — ohne NFKC (F-SEC-10).
+
+    Zweiter Durchgang **nach** der Link-Erkennung (HC-8): Der
+    :class:`~maildigest.sanitize.links.LinkCollector` arbeitet intern mit
+    ``\x00``-Platzhaltern. Schneidet eine seiner Regexen in ein gesetztes Token, bleibt ein
+    rohes U+0000 im Text stehen — genau das erreichte die Zustellung. Die Zusage „kein
+    Steuerzeichen verlässt dieses Modul" hängt damit nicht mehr an der Korrektheit fremder
+    Link-Regexe, sondern an dieser einen Zeile (Defense in Depth).
+    """
+    if not any(
+        char not in "\t\n" and unicodedata.category(char).startswith("C")
+        for char in text
+    ):
+        return text
+    return "".join(
+        char
+        for char in text
+        if char in "\t\n" or not unicodedata.category(char).startswith("C")
+    )
+
+
 def _collapse_whitespace(text: str) -> str:
     """Vereinheitlicht Leerraum: keine Zeilen-Endleerzeichen, höchstens eine Leerzeile."""
     return _RE_MANY_NEWLINES.sub("\n\n", _RE_TRAILING_SPACE.sub("", text)).strip()
@@ -345,7 +395,7 @@ def scrub_field(
         position = match.end()
     chunks.append(_scrub_segment(prepared[position:], link_collector))
 
-    return _collapse_whitespace(neutralize_markup("".join(chunks)))
+    return _collapse_whitespace(neutralize_markup(_strip_control("".join(chunks))))
 
 
 def scrub_plain(text: str, *, max_chars: int | None = None) -> str:
@@ -430,18 +480,35 @@ def final_guard(text: str) -> str:
 
 
 def _split_long_line(line: str, limit: int) -> list[str]:
-    """Zerlegt eine einzelne, zu lange Zeile — bevorzugt an einem Leerzeichen."""
+    """Zerlegt eine einzelne, zu lange Zeile — bevorzugt an einem Leerzeichen.
+
+    Jedes Stück **nach dem ersten** bekommt das Fortsetzungspräfix :data:`CONTINUATION_PREFIX`
+    (HC-6). Grund: Nur der harte Schnitt *innerhalb* einer Zeile kann einen Zeilenanfang
+    erzeugen, den keine Schicht geprüft hat — Schnitte an Zeilengrenzen liefern Anfänge,
+    die :func:`neutralize_markup` bereits entschärft hat oder die vom Composer stammen.
+    Ohne das Präfix begann Teil 2 einer Discord-Nachricht (Limit 2000) bei einem
+    Summary-Limit von 3000 mit einer vollständig gefälschten Programmzeile
+    (``⚠️ SUSPECTED PHISHING: …``) — im einzigen Warnkanal des Produkts.
+
+    Das Präfix zählt zum Limit; :func:`split_parts` gibt deshalb nie ein Stück über
+    `limit` zurück. Ist `limit` kleiner als das Präfix selbst (Testgrößen), entfällt es —
+    dort ist ohnehin kein Struktur-Präfix mehr darstellbar.
+    """
     pieces: list[str] = []
     rest = line
-    while len(rest) > limit:
-        window = rest[:limit]
+    prefix = ""
+    continuation = CONTINUATION_PREFIX if limit > len(CONTINUATION_PREFIX) else ""
+    while len(prefix) + len(rest) > limit:
+        budget = limit - len(prefix)
+        window = rest[:budget]
         cut = window.rfind(" ")
-        if cut < limit // 2:  # kein brauchbarer Trennpunkt ⇒ hart schneiden
-            cut = limit
-        pieces.append(rest[:cut].rstrip())
+        if cut < budget // 2:  # kein brauchbarer Trennpunkt ⇒ hart schneiden
+            cut = budget
+        pieces.append(prefix + rest[:cut].rstrip())
         rest = rest[cut:].lstrip()
+        prefix = continuation
     if rest:
-        pieces.append(rest)
+        pieces.append(prefix + rest)
     return pieces or [""]
 
 

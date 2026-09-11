@@ -62,6 +62,7 @@ from maildigest.config import (
     ImapConfig,
     LlmConfig,
     MessengerConfig,
+    TelegramConfig,
     load_config,
     validate_section,
 )
@@ -135,6 +136,23 @@ _TELEGRAM_COMMAND_HINT = (
     "This chat can also trigger MailDigest:\n"
     "/digest — fetch and summarise right now\n"
     "/status — short report on what is waiting"
+)
+
+#: Terminal-Hinweis nach jeder erfolgreichen Telegram-Einrichtung (HC-19). Er geht auf
+#: stdout, nicht in eine Nachricht — hier darf der punktierte Sektionsname stehen.
+_TELEGRAM_SETUP_HINT = (
+    "While `maildigest run` is running, this chat can also trigger it:\n"
+    "  /digest   fetch and summarise right now\n"
+    "  /status   short report on what is waiting\n"
+    "Anything else you write is discarded — there is no chat function.\n"
+    "If the chat is a group where not everyone should be able to trigger runs, set\n"
+    "accept_commands = false under [messenger.telegram] in your configuration."
+)
+
+#: Vorgabe für `[messenger.telegram] accept_commands` (ADR-078) — aus dem Schema, damit
+#: Datei und Validierung nicht auseinanderlaufen.
+_TELEGRAM_ACCEPT_COMMANDS_DEFAULT: bool = bool(
+    TelegramConfig.model_fields["accept_commands"].default
 )
 
 
@@ -703,7 +721,10 @@ def cmd_init(ctx: Context) -> int:
         "links": {"footnote": False},
         "messenger": {
             "active": "telegram",
-            "telegram": {"chat_id": "", "accept_commands": True},
+            "telegram": {
+                "chat_id": "",
+                "accept_commands": _TELEGRAM_ACCEPT_COMMANDS_DEFAULT,
+            },
             "discord": {},
             "signal": {"enabled": False, "signal_cli_socket": ""},
         },
@@ -724,18 +745,21 @@ def cmd_init(ctx: Context) -> int:
     config_file.save()
     console.out(f"Configuration created: {path} (file mode 0600)")
     console.out("")
-    console.out("Next steps:")
-    console.out("  1) maildigest connect-mail        (mirror mailbox)")
-    console.out("  2) maildigest connect-messenger   (Telegram/Discord/Signal)")
-    console.out("  3) maildigest test                (self-test)")
-    console.out("  4) maildigest run                 (continuous operation)")
-    console.out("")
+    # Erst die Einordnung, dann die Schrittliste: Die Ausgabe endet mit dem, was der
+    # Nutzer als Nächstes tippt (SPEC-CLI §4 `init`, HC-18).
     console.out(
         "No language model is configured, so MailDigest starts out delivering a labelled "
         "excerpt of each mail plus all the warnings it works out in code. That needs no "
         "account anywhere. `maildigest connect-llm` adds real summaries later — it also "
         "lists the providers that are free of charge."
     )
+    console.out("")
+    console.out("Next steps:")
+    console.out("  1) maildigest connect-mail        (mirror mailbox)")
+    console.out("  2) maildigest connect-messenger   (Telegram/Discord/Signal)")
+    console.out("  3) maildigest connect-llm         (optional: real summaries)")
+    console.out("  4) maildigest test                (self-test)")
+    console.out("  5) maildigest run                 (continuous operation)")
     return EXIT_OK
 
 
@@ -775,22 +799,37 @@ derived from it.
 """.strip()
 
 
-def _resolve_host(console: Console, entered: str) -> str:
+@dataclass(frozen=True)
+class _ResolvedHost:
+    """Ergebnis von :func:`_resolve_host`: Host **und** erkannter Anbieter (HC-15).
+
+    Der erkannte Anbieter darf nicht verlorengehen: Eine zweite Suche über die
+    Eingabezeichenkette findet ihn bei einer Mailadresse nicht wieder, und die Sperre für
+    Anbieter ohne Passwort-Anmeldung griffe dann nicht.
+    """
+
+    host: str
+    provider: providers.Provider | None
+
+
+def _resolve_host(console: Console, entered: str) -> _ResolvedHost:
     """Macht aus einer Mailadresse oder blanken Domain den richtigen IMAP-Host.
 
     Eine Mailadresse statt des Hosts ist an dieser Stelle die häufigste Fehleingabe. Ist
     der Anbieter bekannt, wird sie in den Host übersetzt und die Übersetzung angezeigt;
-    sonst bleibt die Eingabe unverändert — geraten wird nicht.
+    sonst bleibt die Eingabe unverändert — geraten wird nicht. Ein nicht unterstützter
+    Anbieter behält seine Eingabe, wird aber mitgeliefert, damit der Aufrufer abbrechen
+    kann.
     """
     provider = providers.find_by_host(entered)
     if provider is None and "@" in entered:
         provider = providers.find_by_address(entered)
     if provider is None or not provider.supported:
-        return entered
+        return _ResolvedHost(entered, provider)
     host = provider.imap_host
     if entered.strip().lower() != host.lower():
         console.out(f"  -> IMAP host for {provider.name}: {host}")
-    return host
+    return _ResolvedHost(host, provider)
 
 
 def _username_example(provider: providers.Provider | None) -> str:
@@ -825,12 +864,12 @@ def cmd_connect_mail(ctx: Context) -> int:
     console.out("")
     console.out(_HOST_EXPLANATION.format(examples=providers.host_examples()))
     console.out("")
-    host = _resolve_host(
+    resolved = _resolve_host(
         console,
         args.host
         or console.ask("IMAP host", default=configured_host, flag="--host", required=True),
     )
-    provider = providers.find_by_host(host)
+    host, provider = resolved.host, resolved.provider
     if provider is not None and not provider.supported:
         _reject_unsupported(provider)
     if provider is not None:
@@ -972,28 +1011,33 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
 # --- Kommando: connect-llm --------------------------------------------------------------------
 
 
-def _choose_llm_preset(ctx: Context, *, current: str) -> providers.LlmPreset:
+def _choose_llm_preset(
+    ctx: Context, *, current: str, current_base_url: str = ""
+) -> providers.LlmPreset:
     """Lässt die Betriebsart wählen und liefert die passende Vorlage.
 
     Im nicht-interaktiven Modus (und wenn `--provider` gesetzt ist) wird nicht gefragt: Dann
     entscheidet die Option, und die Vorlage dient nur noch als Quelle für Erklärtext und
     Basis-URL-Vorbelegung.
+
+    Args:
+        current: Bisheriger Wert von `[llm] provider`.
+        current_base_url: Bisheriger Wert von `[llm] base_url`; wählt in der interaktiven
+            Liste den passenden Eintrag vor, wenn `provider` mehrdeutig ist (HC-3).
     """
     console, args = ctx.console, ctx.args
     wanted = args.provider or current
     if args.provider or not console.interactive:
-        for preset in providers.LLM_PRESETS:
-            if preset.provider == wanted:
-                return preset
-        return providers.LLM_PRESETS[0]
+        # Ohne `--base-url` wird hier **keine** anbieterspezifische URL vorbelegt: Die
+        # generische Vorlage trägt keine (HC-3/E5).
+        return providers.find_preset(wanted)
 
     console.out("")
     console.out(providers.LLM_CHOICE_INTRO)
     console.out("")
     labels = [preset.label for preset in providers.LLM_PRESETS]
-    default_index = next(
-        (index for index, p in enumerate(providers.LLM_PRESETS) if p.provider == wanted), 0
-    )
+    preselected = providers.find_preset(wanted, base_url=current_base_url)
+    default_index = providers.LLM_PRESETS.index(preselected)
     return providers.LLM_PRESETS[console.choose("Option", labels, default_index=default_index)]
 
 
@@ -1004,7 +1048,11 @@ def cmd_connect_llm(ctx: Context) -> int:
     llm = config_file.section("llm")
 
     console.out("Connecting the language model")
-    preset = _choose_llm_preset(ctx, current=str(llm.get("provider", "none")))
+    preset = _choose_llm_preset(
+        ctx,
+        current=str(llm.get("provider", "none")),
+        current_base_url=str(llm.get("base_url", "")),
+    )
     provider = args.provider or preset.provider
     llm["provider"] = provider
 
@@ -1201,17 +1249,15 @@ def _setup_telegram(ctx: Context, config_file: ConfigFile) -> None:
 
     if args.chat_id:
         telegram["chat_id"] = args.chat_id
-        return
-    telegram["chat_id"] = _discover_chat_id(ctx, SecretStr(token), telegram)
+    else:
+        telegram["chat_id"] = _discover_chat_id(ctx, SecretStr(token), telegram)
+    # Alte Dateien kennen das Feld nicht; `connect-messenger` vervollständigt den Feldsatz
+    # aus SPEC-CLI §5 mit dem Default (HC-18 (d)).
+    telegram.setdefault("accept_commands", _TELEGRAM_ACCEPT_COMMANDS_DEFAULT)
+    # Genau einmal, in beiden Zweigen: Mit `--chat-id` und `--no-test` erfuhr der Nutzer
+    # sonst nichts vom Befehlskanal (HC-19).
     console.out("")
-    console.out(
-        "While `maildigest run` is running, this chat can also trigger it:\n"
-        "  /digest   fetch and summarise right now\n"
-        "  /status   short report on what is waiting\n"
-        "Anything else you write is discarded — there is no chat function.\n"
-        "If the chat is a group where not everyone should be able to trigger runs, set\n"
-        "accept_commands = false under [messenger.telegram] in your configuration."
-    )
+    console.out(_TELEGRAM_SETUP_HINT)
 
 
 def _discover_chat_id(
@@ -1371,16 +1417,25 @@ class _CollectingMessenger:
         return True
 
 
-#: Vorspann der Selbsttest-Zustellung. Ohne Punkte und Domains, damit der Nachbrenner des
-#: Output-Sanitizers ihn nicht sichtbar entschärft (wie bei :data:`_TEST_MESSAGE`).
-_SELFTEST_NOTICE = (
-    "🧪 MailDigest self-test\n"
-    "The next message is built from the bundled example mail, not from your mailbox — "
-    "there is no such mail to look for"
-)
+def _selftest_notice(*, from_file: bool) -> str:
+    """Vorspann der Selbsttest-Zustellung, passend zur Herkunft der Mail (HC-17).
+
+    Ohne Punkte und Domains, damit der Nachbrenner des Output-Sanitizers den Text nicht
+    sichtbar entschärft (wie bei :data:`_TEST_MESSAGE`). Der **Dateipfad** steht bewusst
+    nicht darin: Er trüge Punkte, käme also entstellt an — die Kategorie genügt.
+
+    Args:
+        from_file: Ob die Mail aus einer mit `--eml` übergebenen Datei stammt.
+    """
+    origin = "the file you supplied" if from_file else "the bundled example mail"
+    return (
+        "🧪 MailDigest self-test\n"
+        f"The next message is built from {origin}, not from your mailbox — "
+        "there is no such mail to look for"
+    )
 
 
-def _announce_selftest(ctx: Context, config: Config) -> None:
+def _announce_selftest(ctx: Context, config: Config, *, from_file: bool) -> None:
     """Kündigt die Selbsttest-Zustellung an, damit sie erkennbar ist.
 
     Ein Fehlschlag ist hier kein Grund abzubrechen: Der eigentliche Test ist die
@@ -1389,7 +1444,7 @@ def _announce_selftest(ctx: Context, config: Config) -> None:
     try:
         messenger = ctx.hooks.build_messenger(config.messenger)
         composer = DigestComposer(part_limit=part_limit_for(config.messenger.active))
-        messenger.send(composer.compose_plain(_SELFTEST_NOTICE))
+        messenger.send(composer.compose_plain(_selftest_notice(from_file=from_file)))
     except (ConfigError, MessengerError):
         ctx.console.err("Note: the self-test marker could not be delivered.")
 
@@ -1424,7 +1479,7 @@ def cmd_test(ctx: Context) -> int:
         # Ohne diesen Vorspann ist die zugestellte Nachricht von einer echten
         # Zusammenfassung nicht zu unterscheiden — und der Nutzer sucht im Postfach nach
         # einer Mail, die es nie gab (Feldbericht 2026-09-09).
-        _announce_selftest(ctx, test_config)
+        _announce_selftest(ctx, test_config, from_file=args.eml is not None)
 
     with tempfile.TemporaryDirectory(prefix="maildigest-test-") as tmp:
         # Eigene State-Datei: Der Selbsttest darf weder den Dedupe-Stand noch die
@@ -1544,6 +1599,9 @@ def _report_test_result(
         console.out("")
         return EXIT_OK
     if pending:
+        # Die Schrittfolge aus SPEC-CLI §4 endet immer mit einer 5/5-Zeile — auch wenn die
+        # Zustellung nicht bestätigt wurde (HC-35). Die Erklärung bleibt auf stderr.
+        console.out(f"5/5 Not delivered ({_parts_label(parts)}) — queued for retry.")
         console.err(
             "Self-test: the message was created but not delivered — it is sitting in the "
             "queue. Check the messenger credentials "
@@ -1597,6 +1655,16 @@ def cmd_run(ctx: Context) -> int:
     """Startet den Daemon bzw. einen Einzellauf (F-OPS-1)."""
     console, args = ctx.console, ctx.args
     config = _load_full_config(ctx.config_path)
+    if config.imap.password is None:
+        # Ein fehlendes Passwort ist ein Konfigurationsfehler, kein Erreichbarkeitsproblem:
+        # Sonst sucht der Nutzer beim Server statt in seiner Datei (HC-34).
+        raise CliError(
+            f"Invalid configuration ({ctx.config_path}):\n"
+            "  - [imap] password: required value missing. Set it in the configuration "
+            f"or through the environment variable {ENV_IMAP_PASSWORD}.\n"
+            "Reference for all fields: docs/SPEC-CLI.md §5.",
+            EXIT_ERROR,
+        )
     ctx.hooks.configure_logging(config.general.log_level)
     try:
         runner = ctx.hooks.build_runner(config, config_path=ctx.config_path)

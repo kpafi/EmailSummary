@@ -586,10 +586,16 @@ def test_testnachricht_nennt_keine_ungueltige_config_sektion() -> None:
     an. Statt ihn ohne Punkt zu schreiben (und damit falsch), nennt die Nachricht ihn gar
     nicht — die exakte Syntax steht im Terminal-Hinweis und im README.
     """
-    from maildigest.cli import _SELFTEST_NOTICE, _TELEGRAM_COMMAND_HINT, _TEST_MESSAGE
+    from maildigest.cli import _TELEGRAM_COMMAND_HINT, _TEST_MESSAGE, _selftest_notice
     from maildigest.output.sanitizer import final_guard
 
-    for text in (_TEST_MESSAGE, _TELEGRAM_COMMAND_HINT, _SELFTEST_NOTICE):
+    texts = (
+        _TEST_MESSAGE,
+        _TELEGRAM_COMMAND_HINT,
+        _selftest_notice(from_file=False),
+        _selftest_notice(from_file=True),
+    )
+    for text in texts:
         assert "messenger telegram" not in text
         # Der Text übersteht den Nachbrenner unverändert — sonst käme er entstellt an.
         assert final_guard(text) == text
@@ -607,7 +613,126 @@ def test_init_schreibt_accept_commands_aus(tmp_path: Path) -> None:
 
 def test_selbsttest_vorspann_sagt_dass_die_mail_nicht_echt_ist() -> None:
     """Sonst sucht man im Postfach nach einer Mail, die es nie gab (Feldbericht)."""
-    from maildigest.cli import _SELFTEST_NOTICE
+    from maildigest.cli import _selftest_notice
 
-    assert "self-test" in _SELFTEST_NOTICE
-    assert "not from your mailbox" in _SELFTEST_NOTICE
+    notice = _selftest_notice(from_file=False)
+    assert "self-test" in notice
+    assert "not from your mailbox" in notice
+
+
+# --- HC-38 (1): `test` im Werkszustand, über die echten Hooks ---------------------------
+
+
+def _factory_config(tmp_path: Path) -> Path:
+    """Der Zustand direkt nach `init --non-interactive`, um Postfach und Chat ergänzt."""
+    path = tmp_path / "config.toml"
+    code, _out, _err = run(["init", "--config", str(path), "--non-interactive"])
+    assert code == EXIT_OK
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        "[imap]\nport = 993",
+        '[imap]\nhost = "imap.example.org"\nusername = "mirror@example.org"\nport = 993',
+    )
+    text = text.replace('chat_id = ""', 'chat_id = "42"\ntoken = "1:abc"')
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _eml(subject: str, *, attachment: tuple[str, str] | None = None) -> str:
+    """Eine minimale `.eml` — mit optionalem `text/plain`-Anhang."""
+    head = (
+        "From: Absender <a@sender.example>\n"
+        f"Subject: {subject}\n"
+        "Date: Mon, 1 Sep 2026 10:00:00 +0200\n"
+        "Message-ID: <x@sender.example>\n"
+        "MIME-Version: 1.0\n"
+    )
+    if attachment is None:
+        return head + 'Content-Type: text/plain; charset="utf-8"\n\nHallo Welt.\n'
+    name, content = attachment
+    return (
+        head + 'Content-Type: multipart/mixed; boundary="B"\n\n--B\n'
+        'Content-Type: text/plain; charset="utf-8"\n\nHallo Welt.\n--B\n'
+        f'Content-Type: text/plain; charset="utf-8"; name="{name}"\n'
+        f'Content-Disposition: attachment; filename="{name}"\n\n{content}\n--B--\n'
+    )
+
+
+def test_hc38_selbsttest_im_werkszustand_laeuft_ueber_die_echten_hooks(tmp_path: Path) -> None:
+    """HC-38/HC-1: Der Standardmodus war nur isoliert geprüft, nie auf dem Nutzerweg.
+
+    `Hooks()` ohne Attrappen heißt: `_summarizer_for`/`_critic_for` entscheiden anhand
+    `[llm] provider = "none"`, und ein Betreff über 100 Zeichen darf den Lauf nicht mehr
+    fail-closed abbrechen (HC-1). `--dry-run` hält alles im Prozess.
+    """
+    path = _factory_config(tmp_path)
+    eml = tmp_path / "lang.eml"
+    eml.write_text(_eml("A" * 300), encoding="utf-8")
+
+    code, out, _err = run(["--config", str(path), "test", "--dry-run", "--eml", str(eml)])
+    assert code == EXIT_OK
+    assert "Message created" in out
+    assert "Fail-closed" not in out
+    assert "Excerpt, not a summary" in out
+
+
+def test_hc38_selbsttest_im_werkszustand_zeigt_den_anhang(tmp_path: Path) -> None:
+    """HC-2 auf dem Nutzerweg: Der gelesene Anhang darf nicht stumm verschwinden."""
+    path = _factory_config(tmp_path)
+    eml = tmp_path / "anhang.eml"
+    eml.write_text(
+        _eml("Kurz", attachment=("mitteilung.txt", "Neue IBAN im Anhang.")), encoding="utf-8"
+    )
+
+    code, out, _err = run(["--config", str(path), "test", "--dry-run", "--eml", str(eml)])
+    assert code == EXIT_OK
+    assert "mitteilung[.]txt" in out
+    assert "Neue IBAN im Anhang." in out
+
+
+def test_hc18_ausgabe_endet_mit_der_schrittliste(tmp_path: Path) -> None:
+    """HC-18 (a): SPEC §4 `init` sagt zu, dass die Ausgabe mit der Liste endet.
+
+    Der Absatz zum Sprachmodell stand dahinter — das Letzte auf dem Bildschirm war damit
+    eine Einordnung statt des nächsten Befehls.
+    """
+    target = tmp_path / "config.toml"
+    code, out, _err = run(["--config", str(target), "--non-interactive", "init"])
+
+    assert code == EXIT_OK
+    zeilen = [line for line in out.splitlines() if line.strip()]
+    assert zeilen[-1].strip().startswith("5) maildigest run")
+    assert "Next steps:" in zeilen[-6]
+    # Die optionale Stufe steht in der Liste, nicht nur im Fließtext.
+    assert any("connect-llm" in line and "optional" in line for line in zeilen)
+    # Die Einordnung kommt vor der Liste.
+    assert out.index("No language model is configured") < out.index("Next steps:")
+
+
+def test_hc34_run_meldet_fehlendes_passwort_als_konfigurationsfehler(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """HC-34: Ein fehlendes Passwort ist kein Erreichbarkeitsproblem (SPEC §4 `run`).
+
+    Sonst sucht der Nutzer beim Server statt in seiner Datei.
+    """
+    monkeypatch.delenv("MAILDIGEST_IMAP_PASSWORD", raising=False)
+    target = tmp_path / "run1.toml"
+    # Eine im Übrigen vollständige, gültige Konfiguration — sonst scheitert schon das
+    # Laden und der Test bewiese nichts.
+    assert run(["--config", str(target), "--non-interactive", "init"])[0] == EXIT_OK
+    text = target.read_text(encoding="utf-8")
+    text = text.replace(
+        "[imap]",
+        '[imap]\nhost = "imap.example.org"\nusername = "mirror@example.org"',
+    ).replace('active = "telegram"', 'active = "discord"').replace(
+        "# webhook_url =", 'webhook_url = "https://discord.example/api/webhooks/1/x"\n#'
+    )
+    target.write_text(text, encoding="utf-8")
+
+    code, _out, err = run(["--config", str(target), "run", "--once"])
+
+    assert code == EXIT_ERROR
+    assert err.startswith("Error: Invalid configuration")
+    assert "MAILDIGEST_IMAP_PASSWORD" in err
+    assert "unreachable" not in err

@@ -9,12 +9,15 @@ ohne Modell trägt.
 from __future__ import annotations
 
 from maildigest.agents.offline import (
+    ATTACHMENT_EXCERPT_MAX_CHARS,
     EXCERPT_MAX_CHARS,
     NO_MODEL_NOTE,
     OfflineCritic,
     OfflineSummarizer,
 )
+from maildigest.agents.summarizer import HEADLINE_MAX_CHARS
 from maildigest.models import AttachmentInfo, SanitizationReport, SanitizedMail
+from maildigest.output.composer import DigestComposer
 from maildigest.pipeline import Critic, Summarizer
 
 
@@ -24,6 +27,7 @@ def make_mail(
     subject: str = "Rechnung Maerz",
     report: SanitizationReport | None = None,
     attachments: tuple[AttachmentInfo, ...] = (),
+    attachment_texts: dict[str, str] | None = None,
 ) -> SanitizedMail:
     return SanitizedMail(
         dedupe_key="<x@example.org>",
@@ -32,7 +36,7 @@ def make_mail(
         subject=subject,
         date=None,
         body_text=body,
-        attachment_texts={},
+        attachment_texts=dict(attachment_texts or {}),
         attachments=list(attachments),
         links_found=[],
         sanitization_report=report or SanitizationReport(),
@@ -134,3 +138,89 @@ def test_der_modus_ruft_nachweislich_kein_modell_auf(monkeypatch) -> None:
     mail = make_mail()
     summary = OfflineSummarizer().summarize(mail)
     OfflineCritic().review(mail, summary)
+
+
+# --- Regressionen der Abschluss-Testrunde ----------------------------------------------------
+
+
+def test_hc1_langer_betreff_wird_gekuerzt_statt_fail_closed() -> None:
+    """HC-1: Ein Betreff über 100 Zeichen brach den Standardmodus fail-closed ab.
+
+    `Summary.headline` trägt `max_length=100`; die Kürzung lief erst in der Nachkontrolle,
+    also nach der Konstruktion — Pydantic warf vorher. 300 Zeichen ist die Obergrenze, die
+    der Sanitizer durchlässt.
+    """
+    summary = OfflineSummarizer().summarize(make_mail(subject="A" * 300))
+    assert len(summary.headline) <= HEADLINE_MAX_CHARS
+    assert summary.headline.endswith("…")
+    assert summary.headline.startswith("AAAA")
+
+
+def test_hc1_betreff_von_genau_101_zeichen_geht_durch() -> None:
+    """HC-1, Repro des Berichts: 100 Zeichen ging, 101 brach ab — beides muss tragen."""
+    for length in (100, 101):
+        summary = OfflineSummarizer().summarize(make_mail(subject="B" * length))
+        assert len(summary.headline) <= HEADLINE_MAX_CHARS
+
+
+def test_hc2_gelesener_anhang_erscheint_als_beschrifteter_auszug() -> None:
+    """HC-2: Der extrahierte Anhangstext verschwand spurlos aus der Nachricht."""
+    mail = make_mail(
+        body="",
+        attachment_texts={
+            "mitteilung.txt": "WICHTIG: Ihre Bankverbindung wurde geaendert.",
+            # Ein Anhang ohne lesbaren Text erzeugt keine leere Zeile.
+            "leer.txt": "   ",
+        },
+    )
+    summary = OfflineSummarizer().summarize(mail)
+    assert "mitteilung.txt" in summary.attachment_summaries
+    assert "leer.txt" not in summary.attachment_summaries
+    value = summary.attachment_summaries["mitteilung.txt"]
+    assert "Bankverbindung" in value
+    assert value.startswith("Excerpt: ")
+
+
+def test_hc2_auszug_erreicht_die_zugestellte_nachricht() -> None:
+    """HC-2: Der Weg bis in die Nachricht zählt, nicht nur das Feld."""
+    mail = make_mail(
+        body="",
+        attachment_texts={"mitteilung.txt": "Neue IBAN im Anhang."},
+    )
+    summary = OfflineSummarizer().summarize(mail)
+    verdict = OfflineCritic().review(mail, summary)
+    message = DigestComposer(part_limit=4096).compose(mail, summary, verdict)
+    text = "\n".join(message.parts)
+    # Der Dateiname ist im Ausgabepfad defanged (I3) — deshalb `mitteilung[.]txt`.
+    assert "— mitteilung[.]txt:" in text
+    assert "Neue IBAN im Anhang." in text
+
+
+def test_hc2_langer_anhangstext_wird_auf_das_composer_limit_gekuerzt() -> None:
+    """HC-2: Der Composer kürzt bei 400 Zeichen — das darf nicht ihm überlassen bleiben."""
+    mail = make_mail(body="", attachment_texts={"lang.txt": "wort " * 500})
+    value = OfflineSummarizer().summarize(mail).attachment_summaries["lang.txt"]
+    assert len(value) <= ATTACHMENT_EXCERPT_MAX_CHARS
+    assert value.endswith("…")
+
+
+def test_hc2_ohne_body_aber_mit_anhangstext_keine_falsche_behauptung() -> None:
+    """HC-2: „Mail without displayable content" war sachlich falsch, der Inhalt war da."""
+    mail = make_mail(body="", attachment_texts={"a.txt": "Inhalt"})
+    text = OfflineSummarizer().summarize(mail).summary_text
+    assert "without displayable content" not in text
+    assert "No mail body; 1 attachment with readable text." in text
+
+
+def test_hc2_singular_bei_genau_einem_geblockten_anhang() -> None:
+    """HC-14/HC-2: „1 blocked attachments" war ein Grammatikfehler in derselben Funktion."""
+    blocked = AttachmentInfo(
+        filename_sanitized="setup.exe",
+        declared_mime="application/octet-stream",
+        detected_kind="unknown",
+        size_bytes=1024,
+        processed=False,
+    )
+    text = OfflineSummarizer().summarize(make_mail(body="", attachments=(blocked,))).summary_text
+    assert "1 blocked attachment:" in text
+    assert "1 blocked attachments" not in text

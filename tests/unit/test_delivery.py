@@ -6,7 +6,10 @@ Backoff, Aufgabe nach 5 Versuchen bzw. einer Stunde, unveränderter Nachrichtent
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from maildigest.delivery import (
     DELIVERY_BACKOFF_SECONDS,
@@ -120,6 +123,91 @@ def test_deadline_ends_the_retries_even_with_attempts_left() -> None:
         stats = outbox.flush()
         assert stats.abandoned == 1
         assert outbox.pending == 0
+
+
+# --- HC-25: nicht-monotone Systemuhr ----------------------------------------------------
+
+
+def test_hc25_forward_clock_jump_does_not_eat_the_remaining_attempts() -> None:
+    """Ein Sprung der Uhr um +3 h darf die Nachricht nicht nach dem ersten Versuch töten.
+
+    Repro aus dem Bericht: NTP-Erstsynchronisation auf einem Gerät ohne RTC (oder ein
+    VM-Resume) stellt die Uhr vor. Vorher ergab `now - first_queued_at` dadurch 3 Stunden,
+    die Stundenfrist griff und die Nachricht war nach **einem** Versuch verloren.
+    """
+    clock = Clock()
+    with StateDB(":memory:") as db:
+        adapter = RecordingMessenger(failures=99)
+        outbox = OutboxMessenger(db, adapter, now=clock)
+        outbox.send(message())  # Versuch 1 scheitert
+        assert outbox.pending == 1
+
+        clock.advance(3 * 3600)  # die Uhr springt
+        stats = outbox.flush()
+
+        assert (stats.abandoned, stats.deferred) == (0, 1)
+        assert outbox.pending == 1
+
+
+def test_hc25_after_a_forward_jump_all_five_attempts_are_used() -> None:
+    """Nach dem Sprung entscheidet allein der Versuchszähler — fünf Versuche (ADR-048)."""
+    clock = Clock()
+    with StateDB(":memory:") as db:
+        adapter = RecordingMessenger(failures=99)
+        outbox = OutboxMessenger(db, adapter, now=clock)
+        outbox.send(message())
+        clock.advance(3 * 3600)
+        attempts = 1
+        while outbox.pending:
+            clock.advance(next_delivery_delay(attempts))
+            outbox.flush()
+            attempts += 1
+        assert attempts == DELIVERY_MAX_ATTEMPTS
+
+
+def test_hc25_backward_clock_jump_does_not_park_the_message_forever() -> None:
+    """Ein Rücksprung um zwei Tage darf die Zeile nicht unerreichbar machen.
+
+    `next_attempt_at` liegt danach zwei Tage in der Zukunft; ohne die Plausibilitäts-
+    schranke in `outbox_due` käme die Zeile nie wieder — es gibt keinen Sweeper.
+    """
+    clock = Clock()
+    with StateDB(":memory:") as db:
+        adapter = RecordingMessenger(failures=1)
+        outbox = OutboxMessenger(db, adapter, now=clock)
+        outbox.send(message())
+        assert outbox.pending == 1
+
+        clock.now = START - timedelta(days=2)  # die Uhr springt zurück
+        stats = outbox.flush()
+
+        assert stats.delivered == 1
+        assert outbox.pending == 0
+        assert adapter.sent == [["Hallo"]]
+
+
+def test_hc25_clock_skew_correction_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """Der Eingriff ist im Betrieb sichtbar (BETRIEB §5)."""
+    clock = Clock()
+    with StateDB(":memory:") as db:
+        outbox = OutboxMessenger(db, RecordingMessenger(failures=1), now=clock)
+        outbox.send(message())
+        clock.now = START - timedelta(days=2)
+        with caplog.at_level(logging.WARNING, logger="maildigest.state"):
+            outbox.flush()
+    assert "outbox_clock_skew_corrected" in caplog.text
+
+
+def test_hc25_planned_backoff_is_never_mistaken_for_a_clock_jump() -> None:
+    """Gegenprobe: Die regulären Wartezeiten bleiben Wartezeiten, keine Korrekturfälle."""
+    clock = Clock()
+    with StateDB(":memory:") as db:
+        outbox = OutboxMessenger(db, RecordingMessenger(failures=99), now=clock)
+        outbox.send(message())
+        for attempt in range(1, 3):
+            assert db.outbox_due(now=clock()) == []  # noch nicht fällig, nicht korrigiert
+            clock.advance(next_delivery_delay(attempt))
+            assert outbox.flush().deferred == 1
 
 
 def test_successful_flush_promotes_checked_to_delivered() -> None:

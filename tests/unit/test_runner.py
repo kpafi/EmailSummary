@@ -567,3 +567,31 @@ def test_fehler_beim_abfragen_stoppt_den_betrieb_nicht(tmp_path: Path) -> None:
 
         runner.commands = boom
         assert runner.poll_commands_once() == ()
+
+
+# --- HC-38 (1): der Standardmodus ohne Sprachmodell ist wirklich verdrahtet -------------
+
+
+def test_hc38_build_runner_verdrahtet_ohne_modell_die_offline_stufen(tmp_path: Path) -> None:
+    """HC-38: `agents/offline.py` war isoliert geprüft, aber auf keinem Nutzerweg erreicht.
+
+    Ohne injizierte Stufen und mit `[llm] provider = "none"` — dem Zustand, den
+    `maildigest init` schreibt — müssen genau die Offline-Stufen stehen (ADR-076).
+    """
+    from maildigest.agents.offline import OfflineCritic, OfflineSummarizer
+
+    config = load_config_from_dict(
+        {
+            "imap": {"host": "imap.example.org", "username": "mirror@example.org"},
+            "llm": {"provider": "none"},
+            "messenger": {
+                "active": "telegram",
+                "telegram": {"token": "1:abc", "chat_id": "42"},
+            },
+        },
+        env={},
+    )
+    with StateDB(tmp_path / "s.db") as db:
+        runner = build_runner(config, db=db, messenger=SendingMessenger())
+        assert isinstance(runner.deps.summarizer, OfflineSummarizer)
+        assert isinstance(runner.deps.critic, OfflineCritic)

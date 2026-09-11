@@ -50,6 +50,7 @@ gemacht**:
 | T13 | Mail-in-Mail (message/rfc822) schmuggelt Payloads an Filtern vorbei | Eingebettete Mails werden wie Anhänge behandelt: nicht geöffnet, nur Metadatum (WP3) |
 | T14 | Kompromittierte Zusammenfassung im Sammel-Digest geht unter | Kritiker-`high` erzwingt Einzelzustellung mit Banner (F-CRIT-2) |
 | T15 | `multipart/alternative`: harmloser `text/plain`, bösartiger `text/html` — der Nutzer sieht den HTML-Teil, die Zusammenfassung beschreibt den Klartext | Divergenz-Erkennung im Sanitizer setzt `html_divergent`; Hinweiszeile + Kritiker-Signal (WP11, ADR-067) |
+| T16 | Gefälschte `Message-ID` unterdrückt eine echte Mail: Der Angreifer schickt seine Mail zuerst mit der Message-ID der erwarteten Mail; die echte gilt als Duplikat und verschwindet ohne Zustellung, Notiz oder Warnung | Zweites, inhaltsabgeleitetes Dedupe-Merkmal `content_hash` (`sha256(mime_bytes)`) in `seen_mails`; gleicher Key bei anderem Inhalt ist eine **Kollision**: Die Mail wird unter einem abgeleiteten Schlüssel regulär verarbeitet, bekommt eine Hinweiszeile und erzeugt `mail_id_collision` (WARNING) im Log (Fixrunde, HC-10, ADR-079) |
 
 ## 4. Sanitizer-Politik (verbindlich; umgesetzt in WP3, ADR-026 bis ADR-030)
 
@@ -221,10 +222,41 @@ docs/TESTING.md §6):**
 - Mehrere unabhängige Fälschungssignale mit mindestens einem harten heben die Risikostufe
   per Code auf `high` und lösen damit das Banner aus (ADR-063, präzisiert ADR-043).
 
+**Nachgeschärft in der Fixrunde 2026-09-11 (Befunde HC-6…HC-9, HC-22, HC-24 in
+docs/TESTRUNDE-HOT-COLD.md):** Fünf Nähte derselben Art — die Regeln stimmten, ihre Ränder
+nicht.
+
+- **Der Split erzeugt keinen ungeprüften Zeilenanfang mehr (HC-6).** `neutralize_markup`
+  schützt Zeilenanfänge, `split_parts` erzeugte neue: Ein harter Schnitt *innerhalb* einer
+  Zeile konnte ein Struktur-Emoji oder eine Kopfzeilen-Beschriftung an den Anfang eines
+  Teils schieben. Jedes Fortsetzungsstück eines solchen Schnitts trägt jetzt das neutrale
+  Präfix `… `; es zählt zum Teil-Limit. `final_guard` bekommt weiterhin **keine**
+  Zeilenanfangs-Regeln (sie würden die Präfixe des Composers auffressen, ADR-062).
+- **Markdown überlebt auch die Link-Fußnote nicht mehr (HC-7).** Die defangte Form
+  (`sanitize/links._defang`) trägt kein `` ` ``, `*`, `|`, `~`, `\` mehr; `[`/`]` bleiben,
+  weil sie die Defang-Token tragen. Die Fußnote ist per SPEC-CLI §6 Teil derselben
+  Nachricht, `final_guard` bleibt unverändert.
+- **Kein Steuerzeichen mehr aus der Link-Erkennung (HC-8).** Der `LinkCollector` arbeitet
+  intern mit `\x00`-Platzhaltern; eine seiner Regexen schnitt in ein gesetztes Token und
+  ließ ein rohes U+0000 in der Zustellung zurück. Drei Schichten: Die Erkennungs-Pässe
+  überspringen gesetzte Platzhalter atomar, die Zeichenklassen schließen `\x00` aus, und
+  `scrub_field` entfernt `C*`-Zeichen ein **zweites Mal nach** der Link-Erkennung. Die
+  Zusage aus SECURITY §4 hängt damit nicht mehr an der Korrektheit der Link-Regexe.
+- **Domain- und IPv4-Erkennung kennen keine Längen- und Wortgrenzen-Schranken mehr
+  (HC-9/HC-24).** Die Längendeckel in `_RE_DOMAINISH` und `links._LABEL` sind entfallen;
+  die Lookarounds von `_RE_IPV4` sind ASCII-Grenzen. Die Entscheidung „ist das eine
+  Domain/Adresse" fällt ausschließlich in der Formprüfung, Über-Defang ist der fail-safe
+  Ausgang (ADR-036).
+- **Gekürzte Dateinamen zeigen die Kürzung und die Endung (HC-22).** Kürzung in der Mitte
+  mit `…`, Endung erhalten, Gesamtlänge ≤ 80 — bei einem geblockten Anhang ist die Endung
+  die sicherheitsrelevante Information (ADR-040).
+
 Die Zusage aus ADR-035 („die Invariante I3 hängt nicht an der Korrektheit der
 Segmentierungs-Regex") gilt damit auch für das, was der Nutzer tatsächlich sieht. Geprüft
 wird sie nicht mehr nur an Beispiel-Payloads, sondern als Allaussage über zufällige
-Eingaben (`tests/unit/test_hot_properties.py`, ADR-058).
+Eingaben (`tests/unit/test_hot_properties.py`, ADR-058) — deren Orakel seit HC-24
+ausdrücklich **strikt großzügiger** ist als die Implementierung und seit HC-9 auch IPv4
+prüft.
 
 ## 6. Betriebssicherheit
 

@@ -27,8 +27,22 @@ from maildigest.models import (
     Summary,
 )
 from maildigest.output.composer import DigestComposer, LowDigestItem
-from maildigest.output.sanitizer import final_guard, scrub_field, scrub_plain, split_parts
+from maildigest.output.sanitizer import (
+    CONTINUATION_PREFIX,
+    final_guard,
+    scrub_field,
+    scrub_plain,
+    split_parts,
+)
 from maildigest.sanitize.sanitizer import MailSanitizer, SanitizeError
+
+
+def _strip_continuation(parts: list[str]) -> list[str]:
+    """Zieht das Fortsetzungspräfix eines harten Zeilenschnitts ab (HC-6)."""
+    return [
+        part[len(CONTINUATION_PREFIX) :] if part.startswith(CONTINUATION_PREFIX) else part
+        for part in parts
+    ]
 
 # --- Hilfen ---------------------------------------------------------------------------
 
@@ -373,11 +387,16 @@ def _sanitized(**overrides: Any) -> SanitizedMail:
 
 @pytest.mark.parametrize("limit", [1, 2, 3, 10, 4095, 4096])
 def test_split_never_exceeds_the_limit(limit: int) -> None:
-    """Auch bei absurd kleinem Limit hält der Split das Limit ein."""
+    """Auch bei absurd kleinem Limit hält der Split das Limit ein.
+
+    Seit HC-6 trägt jedes Stück eines harten Zeilenschnitts das Fortsetzungspräfix; es
+    zählt zum Limit und wird für den Inhaltsvergleich wieder abgezogen.
+    """
     text = "Zeile eins\nZeile zwei mit einem sehr langen ununterbrochenen Wort " + "w" * 200
     parts = split_parts(text, limit)
     assert all(len(part) <= limit for part in parts)
-    assert "".join("".join(part.split()) for part in parts) == "".join(text.split())
+    joined = "".join("".join(part.split()) for part in _strip_continuation(parts))
+    assert joined == "".join(text.split())
 
 
 def test_split_rejects_a_limit_below_one() -> None:

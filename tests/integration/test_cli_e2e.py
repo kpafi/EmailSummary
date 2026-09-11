@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import io
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -582,3 +582,62 @@ def test_ct10_gescheiterte_zustellung_wird_nicht_als_zugestellt_gezaehlt(
     assert code == EXIT_OK
     assert "0 messages delivered" in err
     assert "2 queued" in err
+
+
+# --- HC-17 / HC-35: Selbsttest-Vorspann und die fünfte Schrittzeile --------------------
+
+
+def _hooks_with_messenger(messenger: FakeMessenger, **kwargs: Any) -> Hooks:
+    """Wie :func:`make_hooks`, aber auch der Vorspann geht an die Attrappe.
+
+    Ohne `build_messenger` baut `_announce_selftest` einen echten Messenger; der Vorspann
+    ist dann für keinen Test sichtbar (HC-17).
+    """
+    hooks = make_hooks(messenger=messenger, **kwargs)
+    return replace(hooks, build_messenger=lambda section, **_kwargs: messenger)
+
+
+def test_hc17_vorspann_nennt_die_uebergebene_datei(tmp_path: Path) -> None:
+    """HC-17: Mit `--eml` stammt die Mail nicht aus der mitgelieferten Beispielmail."""
+    messenger = FakeMessenger()
+    code, _out, _err = run(
+        [
+            "test",
+            "--config",
+            str(write_config(tmp_path)),
+            "--eml",
+            str(CORPUS / "03_attachment_pdf_ok.eml"),
+        ],
+        hooks=_hooks_with_messenger(messenger),
+    )
+    assert code == EXIT_OK
+    assert len(messenger.sent) == 2
+    notice = "\n".join(messenger.sent[0].parts)
+    assert "self-test" in notice
+    assert "the file you supplied" in notice
+    assert "bundled example mail" not in notice
+    # Der Dateipfad bleibt draußen — er käme vom Nachbrenner entstellt an.
+    assert "03_attachment_pdf_ok" not in notice
+
+
+def test_hc17_vorspann_nennt_ohne_eml_die_beispielmail(tmp_path: Path) -> None:
+    """Gegenprobe: Ohne `--eml` bleibt die Herkunftsangabe richtig."""
+    messenger = FakeMessenger()
+    code, _out, _err = run(
+        ["test", "--config", str(write_config(tmp_path))],
+        hooks=_hooks_with_messenger(messenger),
+    )
+    assert code == EXIT_OK
+    notice = "\n".join(messenger.sent[0].parts)
+    assert "bundled example mail" in notice
+
+
+def test_hc35_nicht_bestaetigte_zustellung_hat_eine_fuenfte_zeile(tmp_path: Path) -> None:
+    """HC-35: Die Schrittfolge aus SPEC §4 endet auch im Zustellfehlerfall mit 5/5."""
+    code, out, err = run(
+        ["test", "--config", str(write_config(tmp_path))],
+        hooks=make_hooks(messenger=FakeMessenger(fail=True)),
+    )
+    assert code == EXIT_ERROR
+    assert "5/5 Not delivered (1 part) — queued for retry." in out
+    assert "queue" in err

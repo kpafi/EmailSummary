@@ -658,3 +658,256 @@ def test_connect_mail_wechselt_nicht_stillschweigend_den_ordner(
     assert "does not exist on the server" in err
     assert read(config_path)["imap"]["folder"] == "GibtsNicht"  # unverändert, nicht „Entwurf"
     assert "Entwurf" in out  # die Liste wird trotzdem gezeigt
+
+
+# --- HC-3: Vorlagenwahl in `connect-llm` -----------------------------------------------
+
+
+def _init(tmp_path: Path) -> Path:
+    """Eine per `init --non-interactive` erzeugte Konfiguration (Werkszustand)."""
+    target = tmp_path / "c.toml"
+    code, _out, _err = run(["--config", str(target), "--non-interactive", "init"])
+    assert code == EXIT_OK
+    return target
+
+
+def test_hc3_openai_compatible_setzt_keine_fremde_base_url(tmp_path: Path) -> None:
+    """HC-3: `--provider openai_compatible` darf nicht bei Groq landen (E5).
+
+    `provider` ist mehrdeutig — fünf Vorlagen tragen den Wert. Die Suche lieferte früher
+    die erste (Groq) samt deren Erklärtext und deren URL.
+    """
+    target = _init(tmp_path)
+    code, out, _err = run(
+        [
+            "connect-llm",
+            "--config",
+            str(target),
+            "--non-interactive",
+            "--provider",
+            "openai_compatible",
+            "--model",
+            "foo",
+            "--no-test",
+        ]
+    )
+    assert code == EXIT_OK
+    assert read(target)["llm"]["base_url"] == ""
+    assert "groq" not in out.lower()
+    assert "Local or OpenAI-compatible model" in out
+
+
+def test_hc3_base_url_option_bleibt_erhalten(tmp_path: Path) -> None:
+    """HC-3: Ausdrücklich gesetzte Endpunkte überschreibt keine Vorlage."""
+    target = _init(tmp_path)
+    code, _out, _err = run(
+        [
+            "connect-llm",
+            "--config",
+            str(target),
+            "--non-interactive",
+            "--provider",
+            "openai_compatible",
+            "--model",
+            "foo",
+            "--base-url",
+            "http://127.0.0.1:1/v1",
+            "--no-test",
+        ]
+    )
+    assert code == EXIT_OK
+    assert read(target)["llm"]["base_url"] == "http://127.0.0.1:1/v1"
+
+
+def test_hc3_provider_anthropic_zeigt_die_anthropic_anleitung(tmp_path: Path) -> None:
+    """HC-3: Die Anleitung gehört zur gewählten Betriebsart."""
+    target = _init(tmp_path)
+    code, out, _err = run(
+        [
+            "connect-llm",
+            "--config",
+            str(target),
+            "--non-interactive",
+            "--provider",
+            "anthropic",
+            "--model",
+            "claude-haiku-4-5",
+            "--no-test",
+        ]
+    )
+    assert code == EXIT_OK
+    assert "Getting an API key (Anthropic)" in out
+    assert "groq" not in out.lower()
+
+
+def test_hc3_bestehender_dateiwert_ueberlebt_den_zweiten_lauf(tmp_path: Path) -> None:
+    """HC-3: Ohne `--base-url` gilt der bisherige Dateiwert, nie eine Vorlagen-URL."""
+    target = _init(tmp_path)
+    argv = [
+        "connect-llm",
+        "--config",
+        str(target),
+        "--non-interactive",
+        "--provider",
+        "openai_compatible",
+        "--model",
+        "foo",
+        "--no-test",
+    ]
+    assert run([*argv, "--base-url", "http://localhost:8000/v1"])[0] == EXIT_OK
+    assert run(argv)[0] == EXIT_OK
+    assert read(target)["llm"]["base_url"] == "http://localhost:8000/v1"
+
+
+# --- HC-15: Anbietersperre bei eingegebener Mailadresse --------------------------------
+
+
+@pytest.mark.parametrize("address", ["me@outlook.com", "me@hotmail.de", "me@proton.me"])
+def test_hc15_mailadresse_eines_gesperrten_anbieters_wird_abgelehnt(
+    config_path: Path, address: str
+) -> None:
+    """HC-15: Adresse und Domain sind laut SPEC §4 gleichwertig — auch für die Sperre."""
+    before = config_path.read_bytes()
+    code, out, err = run(
+        [
+            "connect-mail",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--no-test",
+            "--host",
+            address,
+            "--username",
+            address,
+        ]
+    )
+    assert code == EXIT_USAGE
+    text = _err_text(out, err)
+    assert "MailDigest cannot read" in text
+    # Grund und Ausweg stehen in der Meldung, nicht nur die Absage.
+    assert "forward" in text.lower() or "mirror" in text.lower()
+    assert config_path.read_bytes() == before
+
+
+def test_hc15_gmail_adresse_wird_weiterhin_uebersetzt(
+    config_path: Path, monkeypatch: Any
+) -> None:
+    """Gegenprobe: Die Übersetzung einer Adresse in den Host bleibt erhalten."""
+    monkeypatch.setenv("MAILDIGEST_IMAP_PASSWORD", "aus-env")
+    code, out, _err = run(
+        [
+            "connect-mail",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--no-test",
+            "--host",
+            "me@gmail.com",
+            "--username",
+            "me@gmail.com",
+        ]
+    )
+    assert code == EXIT_OK
+    assert read(config_path)["imap"]["host"] == "imap.gmail.com"
+    assert "imap.gmail.com" in out
+
+
+# --- HC-19: Befehls-Hinweis nach jeder Telegram-Einrichtung ----------------------------
+
+
+def test_hc19_hinweis_erscheint_auch_mit_chat_id(
+    config_path: Path, monkeypatch: Any
+) -> None:
+    """HC-19: Der `--chat-id`-Zweig kehrte vor dem Hinweisblock zurück."""
+    monkeypatch.setenv("MAILDIGEST_TELEGRAM_TOKEN", "aus-env")
+    code, out, _err = run(
+        [
+            "connect-messenger",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--messenger",
+            "telegram",
+            "--chat-id",
+            "555",
+            "--no-test",
+        ]
+    )
+    assert code == EXIT_OK
+    assert read(config_path)["messenger"]["telegram"]["chat_id"] == "555"
+    assert "/digest" in out
+    assert "/status" in out
+    assert out.count("/digest") == 1
+
+
+def test_hc19_hinweis_erscheint_genau_einmal_ueber_getupdates(
+    config_path: Path, monkeypatch: Any
+) -> None:
+    """Gegenprobe: Auf dem regulären Weg bleibt es bei genau einem Hinweis."""
+    monkeypatch.setenv("MAILDIGEST_TELEGRAM_TOKEN", "aus-env")
+    hooks = Hooks(
+        build_messenger=lambda section, **kwargs: FakeMessenger(),
+        discover_chat_ids=lambda **kwargs: [ChatCandidate("9", "private")],
+    )
+    code, out, _err = run(
+        ["connect-messenger", "--config", str(config_path), "--non-interactive", "--no-test"],
+        hooks=hooks,
+    )
+    assert code == EXIT_OK
+    assert out.count("/status") == 1
+
+
+def test_hc18_connect_messenger_ergaenzt_accept_commands(
+    config_path: Path, monkeypatch: Any
+) -> None:
+    """HC-18 (d): Eine alte Datei ohne das Feld bekommt den Default geschrieben."""
+    monkeypatch.setenv("MAILDIGEST_TELEGRAM_TOKEN", "aus-env")
+    assert "accept_commands" not in config_path.read_text(encoding="utf-8")
+    code, _out, _err = run(
+        [
+            "connect-messenger",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--messenger",
+            "telegram",
+            "--chat-id",
+            "555",
+            "--no-test",
+        ]
+    )
+    assert code == EXIT_OK
+    assert read(config_path)["messenger"]["telegram"]["accept_commands"] is True
+
+
+# --- HC-38 (1): der Rückweg zum Betrieb ohne Sprachmodell --------------------------------
+
+
+def test_hc38_connect_llm_provider_none_raeumt_modell_und_key(tmp_path: Path) -> None:
+    """HC-38: Der `provider == "none"`-Zweig von `connect-llm` war ungetestet.
+
+    Er ist der Rückweg in den Werkszustand (ADR-076): Modellname geleert, Schlüssel aus
+    der Datei entfernt, kein Testaufruf. Bliebe der Schlüssel stehen, läge ein
+    Zugangsgeheimnis ohne Grund weiter auf der Platte.
+    """
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[imap]\nport = 993\n\n[llm]\nprovider = "anthropic"\nmodel = "claude"\n'
+        'api_key = "sk-geheim"\nbase_url = "https://api.example/v1"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+
+    def explode(**kwargs: Any) -> Any:  # pragma: no cover - darf nie laufen
+        raise AssertionError("ohne Modell darf kein Provider gebaut werden")
+
+    code, out, _err = run(
+        ["connect-llm", "--config", str(path), "--non-interactive", "--provider", "none"],
+        hooks=Hooks(build_provider=explode),
+    )
+    assert code == EXIT_OK
+    llm = read(path)["llm"]
+    assert llm["provider"] == "none"
+    assert llm["model"] == ""
+    assert "api_key" not in llm
+    assert "without a language model" in out

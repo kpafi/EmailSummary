@@ -217,3 +217,48 @@ def test_intro_nennt_den_grund_fuer_den_fehlenden_mitgelieferten_schluessel() ->
     """Ehrlichkeit an der Stelle, an der Nutzer „warum nicht einfach gratis?" fragen."""
     assert "open source" in providers.LLM_CHOICE_INTRO
     assert "no key of its own" in providers.LLM_CHOICE_INTRO
+
+
+def test_hc15_resolve_host_behaelt_den_gesperrten_anbieter(tmp_path) -> None:
+    """HC-15: Der Kreuzfall Adresse × gesperrter Anbieter war die Lücke.
+
+    `_resolve_host` verwarf den erkannten Anbieter, und die Sperre in `cmd_connect_mail`
+    suchte danach erneut über die Adresszeichenkette — erfolglos.
+    """
+    import io
+
+    from maildigest.cli import Console, _resolve_host
+
+    console = Console(io.StringIO(), io.StringIO(), io.StringIO(), interactive=False)
+    resolved = _resolve_host(console, "me@outlook.com")
+    assert resolved.provider is not None
+    assert resolved.provider.supported is False
+    # Der Host bleibt die Eingabe: Geraten wird für einen gesperrten Anbieter nichts.
+    assert resolved.host == "me@outlook.com"
+
+    supported = _resolve_host(console, "me@gmail.com")
+    assert supported.host == "imap.gmail.com"
+    assert supported.provider is not None and supported.provider.supported
+
+
+def test_hc3_find_preset_entscheidet_ueber_den_key_nicht_ueber_provider() -> None:
+    """HC-3: `provider` ist mehrdeutig, `key` ist es nicht."""
+    assert providers.find_preset("openai_compatible").key == "openai_compatible"
+    assert providers.find_preset("openai_compatible").base_url == ""
+    assert providers.find_preset("none").key == "none"
+    assert providers.find_preset("anthropic").key == "anthropic"
+    # Unbekannter Wert (etwa aus einer von Hand bearbeiteten Datei): kein Sprachmodell.
+    assert providers.find_preset("gibtsnicht").key == "none"
+
+
+def test_hc3_find_preset_waehlt_die_vorlage_zum_dateiwert_vor() -> None:
+    """HC-3: Die interaktive Liste zeigt auf den Eintrag, der zur Datei passt."""
+    groq = providers.find_preset(
+        "openai_compatible", base_url="https://api.groq.com/openai/v1"
+    )
+    assert groq.key == "groq"
+    ollama = providers.find_preset("openai_compatible", base_url="http://localhost:11434/v1")
+    assert ollama.key == "ollama"
+    # Eine fremde URL gehört zu keiner Vorlage — dann bleibt es beim generischen Eintrag.
+    fremd = providers.find_preset("openai_compatible", base_url="http://127.0.0.1:9/v1")
+    assert fremd.key == "openai_compatible"

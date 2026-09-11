@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 import pytest
 
+from maildigest.output.sanitizer import scrub_plain
 from maildigest.sanitize.attachments import (
     ALLOWLIST_MIMES,
+    _shorten,
     detect_kind,
     sanitize_filename,
     sniff_signature,
@@ -138,6 +142,54 @@ class TestSanitizeFilename:
 
     def test_laenge_wird_begrenzt(self) -> None:
         assert len(sanitize_filename("a" * 500 + ".pdf")) <= 80
+
+    def test_hc22_kuerzung_ist_sichtbar_und_erhaelt_die_endung(self) -> None:
+        """HC-22/E7: Mittelkürzung mit `…`, Endung bleibt, Gesamtlänge ≤ 80.
+
+        Vorher schnitt die Funktion hart auf 80 Zeichen: Der Nutzer sah weder, dass
+        gekürzt wurde, noch worauf die Datei endet — bei einem geblockten Anhang ist die
+        Endung die sicherheitsrelevante Information.
+        """
+        name = sanitize_filename("a" * 120 + ".exe")
+        assert len(name) <= 80
+        assert "…" in name
+        assert name.endswith(".exe")
+        assert name.startswith("a")
+
+    def test_hc22_gekuerzter_name_ueberlebt_die_nfkc_normalisierung(self) -> None:
+        """Auch nach NFKC (``…`` ⇒ ``...``) bleibt der Name ≤ 80 Zeichen.
+
+        Der Composer schickt den Namen durch `scrub_plain`; ohne die Reserve kürzte der
+        dort erneut — und zwar genau die Endung weg (HC-22).
+        """
+        name = sanitize_filename("a" * 120 + ".exe")
+        assert len(unicodedata.normalize("NFKC", name)) <= 80
+        assert scrub_plain(name, max_chars=80).endswith(".exe")
+
+    @pytest.mark.parametrize(
+        ("name", "limit", "erwartet"),
+        [
+            # Budget reicht nicht für Marker **und** Endung ⇒ Endung fällt, Marker bleibt.
+            ("abcdefgh.exe", 7, "ab…xe"),
+            # Endung über `_MAX_KEPT_SUFFIX` gilt gar nicht erst als Endung.
+            ("abcdefghij.langeendung", 12, "abcde…dung"),
+            # Budget reicht nicht einmal für den Marker ⇒ harter Schnitt als letzter Ausweg.
+            ("abcdefghij.exe", 4, "abcd"),
+        ],
+    )
+    def test_hc22_entartete_limits_bleiben_definiert(
+        self, name: str, limit: int, erwartet: str
+    ) -> None:
+        """Die Kürzungsregel ist auch für absurd kleine Limits total (kein Absturz)."""
+        result = _shorten(name, limit)
+        assert result == erwartet
+        assert len(result) <= limit
+
+    def test_hc22_name_ohne_endung_wird_ebenfalls_sichtbar_gekuerzt(self) -> None:
+        """Ohne Endung wird schlicht in der Mitte gekürzt — der Marker bleibt Pflicht."""
+        name = sanitize_filename("b" * 200)
+        assert len(name) <= 80
+        assert "…" in name
 
     def test_fuehrende_punkte_werden_entfernt(self) -> None:
         assert not sanitize_filename(".hidden").startswith(".")

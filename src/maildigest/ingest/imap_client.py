@@ -24,6 +24,11 @@ Sicherheits-Design dieses Moduls:
   State-DB reserviert (:meth:`~maildigest.state.db.StateDB.claim`). Gelesen-Flag und
   Verschieben passieren erst **nach** der Verarbeitung; ein Absturz davor führt beim
   Wiederanlauf zu einem erkannten Duplikat, nicht zu einer Doppelverarbeitung.
+* **Kein Unterdrücken per Header (ADR-079):** Der Dedupe-Key ist im Normalfall die
+  `Message-ID` — ein Header, den der Absender frei wählt. Neben ihm wird deshalb ein
+  inhaltsabgeleitetes Merkmal geführt (`RawMail.content_hash`). Gleicher Key bei anderem
+  Inhalt ist keine Wiederholung, sondern eine **Kollision**: Die Mail wird unter einem
+  abgeleiteten Schlüssel regulär verarbeitet und im Hinweisblock kenntlich gemacht.
 * **I5/NF-5:** Geloggt werden nur der gekürzte Dedupe-Hash, die Absender-Domain und der
   Status — nie Betreff, Body, Message-ID im Klartext oder Zugangsdaten.
 * **I6 fail-closed:** Eine einzelne kaputte Mail beendet den Loop nicht. Der Fehler wird als
@@ -43,6 +48,7 @@ import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
+from email.header import decode_header, make_header
 from email.utils import getaddresses, parsedate_to_datetime
 from types import TracebackType
 from typing import Final, Protocol
@@ -54,7 +60,7 @@ from maildigest.config import ImapConfig
 from maildigest.logging_setup import traceback_enabled
 from maildigest.models import RawMail
 from maildigest.pipeline import PipelineResult
-from maildigest.state.db import MailState, StateDB, dedupe_hash
+from maildigest.state.db import ClaimResult, MailState, StateDB, dedupe_hash
 
 __all__ = [
     "MAX_BACKOFF_SECONDS",
@@ -146,15 +152,24 @@ class IngestStats:
 # --- RawMail-Aufbau -------------------------------------------------------------------------
 
 
-def _header_values(msg: MailMessage, name: str) -> list[str]:
-    """Alle Werte eines Headers als Strings; defensiv gegen kaputte Header-Objekte."""
+def _raw_header_values(msg: MailMessage, name: str) -> list[object]:
+    """Alle Werte eines Headers **unverwandelt**; defensiv gegen kaputte Header-Objekte.
+
+    Wichtig für HC-23: Enthält ein Header roh-8-bittige Bytes (RFC-Verstoß, in freier
+    Wildbahn häufig), liefert `email` dafür ein :class:`email.header.Header`-Objekt. Dessen
+    `str()` ersetzt jedes solche Byte durch U+FFFD — die Originalbytes stehen danach
+    nirgends mehr. `decode_header` auf dem **Objekt** bekommt sie dagegen noch.
+    """
     try:
         values = msg.obj.get_all(name)
     except Exception:  # pragma: no cover - defekte email.Message-Implementierungen
         return []
-    if not values:
-        return []
-    return [str(value) for value in values]
+    return list(values or [])
+
+
+def _header_values(msg: MailMessage, name: str) -> list[str]:
+    """Alle Werte eines Headers als Strings; defensiv gegen kaputte Header-Objekte."""
+    return [str(value) for value in _raw_header_values(msg, name)]
 
 
 def _collapse(value: str) -> str:
@@ -167,12 +182,78 @@ def _collapse(value: str) -> str:
     return " ".join(value.split())
 
 
+def _decode_unknown_8bit(data: bytes) -> str:
+    """Rät die Kodierung roh-8-bittiger Headerbytes (HC-23).
+
+    `email` markiert sie als ``unknown-8bit`` und gibt sie sonst als U+FFFD aus. UTF-8 ist
+    heute der Normalfall; Latin-1 ist der Auffangkorb, der nie scheitert. Das ist Raten —
+    aber lesbares Raten schlägt garantierte Unlesbarkeit, und sicherheitsrelevant ist es
+    nicht: Was hier herauskommt, geht anschliessend durch den Sanitizer.
+    """
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
+
+
+def _decode_mime_words(value: str) -> str:
+    """Dekodiert RFC-2047-Wörter (``=?utf-8?Q?…?=``) in einem Headerwert (HC-23).
+
+    Anzeigenamen tragen dieselbe Transport-Kodierung wie der Betreff. Ohne diesen Schritt
+    sieht der Sanitizer nur ASCII-Hülsen: Die in docs/SECURITY.md §4 zugesagten NFKC-,
+    Steuerzeichen- und Mixed-Script-Prüfungen liefen auf der Kodierung statt auf dem
+    Namen, und der
+    Nutzer bekäme `=?utf-8?Q?J=C3=B6rg?=` statt `Jörg` zu lesen.
+
+    Bei kaputter Kodierung wird der Rohwert zurückgegeben — `build_raw_mail` wirft nie
+    (ADR-020 (e)); eine hier scheiternde Mail käme nie in den Fail-closed-Pfad.
+    """
+    if "=?" not in value:
+        return value
+    try:
+        return str(make_header(decode_header(value)))
+    except Exception:  # jede kaputte RFC-2047-Kodierung: Rohwert behalten
+        return value
+
+
 def _header(msg: MailMessage, name: str) -> str | None:
     """Erster Wert eines Headers, whitespace-normalisiert; ``None`` wenn leer/fehlend."""
     values = _header_values(msg, name)
     if not values:
         return None
     return _collapse(values[0]) or None
+
+
+def _decode_display_value(value: object) -> str:
+    """Dekodiert einen anzeigenamentragenden Headerwert (HC-23).
+
+    Zwei Fälle: RFC-2047-kodierte Wörter (``=?utf-8?Q?…?=``) übernimmt `make_header`, das
+    auch die Wortzusammenführung nach RFC 2047 §6.2 richtig macht. Roh-8-bittige Bytes
+    kennt `make_header` nicht — die kommen aus `decode_header` als ``unknown-8bit`` und
+    werden hier selbst dekodiert.
+    """
+    try:
+        parts = decode_header(value)  # type: ignore[arg-type]
+    except Exception:  # kaputte Kodierung: Rohwert behalten (ADR-020 (e))
+        return str(value)
+    if any(isinstance(text, bytes) and charset == "unknown-8bit" for text, charset in parts):
+        return "".join(
+            _decode_unknown_8bit(text) if isinstance(text, bytes) else text
+            for text, _charset in parts
+        )
+    return _decode_mime_words(str(value))
+
+
+def _display_header(msg: MailMessage, name: str) -> str | None:
+    """Wie :func:`_header`, aber mit Dekodierung des Anzeigenamens (HC-23).
+
+    Für die Header, die einen Anzeigenamen tragen können (`From`, `Reply-To`). Die Adresse
+    selbst ist immer ASCII; dekodiert wird faktisch nur der Namensteil.
+    """
+    values = _raw_header_values(msg, name)
+    if not values:
+        return None
+    return _collapse(_decode_display_value(values[0])) or None
 
 
 def _domain_of(address: str) -> str:
@@ -254,6 +335,15 @@ def _raw_bytes(msg: MailMessage) -> bytes:
         return str(msg.obj).encode("utf-8", "replace")
 
 
+def _content_hash(mime_bytes: bytes) -> str:
+    """SHA-256 (hex) über die MIME-Bytes — das zweite Dedupe-Merkmal (ADR-079, HC-10).
+
+    Anders als `Message-ID` kann ein Absender diesen Wert nicht auf eine fremde Mail legen:
+    Er ist genau dann gleich, wenn die Mail dieselbe ist.
+    """
+    return hashlib.sha256(mime_bytes).hexdigest()
+
+
 def build_raw_mail(msg: MailMessage) -> RawMail:
     """Wandelt eine `imap_tools.MailMessage` in das Domänenmodell `RawMail` um.
 
@@ -270,7 +360,7 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         From + Date + Subject + Body-Präfix.
     """
     message_id = _header(msg, "Message-ID")
-    from_addr = _header(msg, "From") or ""
+    from_addr = _display_header(msg, "From") or ""
     date_str = _header(msg, "Date") or ""
 
     try:
@@ -302,7 +392,7 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         dedupe_key=dedupe_key,
         from_addr=from_addr,
         from_domain=_domain_of(from_addr),
-        reply_to=_header(msg, "Reply-To"),
+        reply_to=_display_header(msg, "Reply-To"),
         return_path_domain=_return_path_domain(return_path),
         to_addrs=to_addrs,
         subject_raw=subject_raw,
@@ -310,6 +400,7 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         auth_results_header="\n".join(auth_results) if auth_results else None,
         mime_bytes=mime_bytes,
         size_bytes=size_bytes,
+        content_hash=_content_hash(mime_bytes),
     )
 
 
@@ -582,6 +673,11 @@ def poll_once(
     bekannter Dedupe-Key wird übersprungen, aber trotzdem als gelesen markiert, damit er
     nicht bei jedem Poll erneut auftaucht (F-ING-2).
 
+    Meldet `claim` eine **Kollision** (gleicher Key, anderer Inhalt — ADR-079), wird die
+    Mail nicht verworfen: Sie bekommt einen abgeleiteten Dedupe-Key, `id_collision = True`
+    und läuft regulär durch; das Ereignis steht als `mail_id_collision` (WARNING, nur
+    Hashes) im Log.
+
     Ein Fehler in der Verarbeitung **einer** Mail beendet den Durchlauf nicht (I6): Die Mail
     bekommt Status `failed`. Ebenso wenig beendet ihn ein abgelehntes Nachbehandlungs-
     Kommando (:class:`MailboxPostProcessError`, z. B. fehlender `move_processed_to`-Ordner):
@@ -612,7 +708,22 @@ def poll_once(
         raw = build_raw_mail(msg)
         key_short = dedupe_hash(raw.dedupe_key)[:12]
 
-        if not db.claim(raw.dedupe_key):
+        outcome = db.claim(raw.dedupe_key, content_hash=raw.content_hash)
+        if outcome is ClaimResult.COLLISION:
+            # ADR-079/HC-10: Derselbe Dedupe-Key, nachweislich anderer Inhalt. Der Key kommt
+            # aus einem frei wählbaren Header — ihn hier als Duplikat zu verwerfen, hiesse
+            # eine echte Mail auf Zuruf des Angreifers zu unterdrücken. Die Mail läuft
+            # deshalb unter einem abgeleiteten, inhaltsgebundenen Key regulär durch und wird
+            # dem Nutzer als Kollision kenntlich gemacht.
+            raw = _as_collision(raw)
+            collision_short = dedupe_hash(raw.dedupe_key)[:12]
+            logger.warning(
+                "mail_id_collision",
+                extra={"mail": key_short, "collision_mail": collision_short},
+            )
+            key_short = collision_short
+            outcome = db.claim(raw.dedupe_key, content_hash=raw.content_hash)
+        if outcome is not ClaimResult.CLAIMED:
             stats.duplicates += 1
             logger.info("mail_duplicate", extra={"mail": key_short})
             _mark_processed_best_effort(client, msg, key_short)
@@ -654,6 +765,21 @@ def poll_once(
             )
         _mark_processed_best_effort(client, msg, key_short)
     return stats
+
+
+def _as_collision(raw: RawMail) -> RawMail:
+    """Kopie der Mail unter dem abgeleiteten Kollisions-Key, mit gesetztem Hinweis-Flag.
+
+    `RawMail` ist frozen (I1-nahes Datenmodell) — die Kopie ist der einzige Weg. Der
+    abgeleitete Key ist deterministisch, damit dieselbe Mail beim nächsten Poll wieder als
+    Duplikat erkannt wird (F-ING-2 bleibt gültig).
+    """
+    return raw.model_copy(
+        update={
+            "dedupe_key": StateDB.derived_collision_key(raw.dedupe_key, raw.content_hash),
+            "id_collision": True,
+        }
+    )
 
 
 def _mark_processed_best_effort(client: ImapClient, msg: MailMessage, key_short: str) -> None:

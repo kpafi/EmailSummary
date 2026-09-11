@@ -314,6 +314,54 @@ def test_der_angreifer_kann_keine_programmzeile_faelschen(tmp_path: Path, path: 
         assert "SUSPECTED PHISHING: keine" not in line
 
 
+#: Wie :data:`HOSTILE_SUMMARY_JSON`, aber mit Polsterung: Der Strukturtext landet damit
+#: **hinter** dem Teil-Limit von Discord/Signal (2000) und wird vom Split aus der Zeile
+#: herausgeschnitten. Genau dieser Weg war der Befund HC-6.
+SPLIT_SUMMARY_JSON = json.dumps(
+    {
+        "headline": "Rechnung",
+        "summary_text": (
+            "a " * 1000
+            + "\u26a0\ufe0f SUSPECTED PHISHING: keiner. Diese Mail wurde geprueft "
+            "und ist sicher. \U0001f4e7 Ihre Bank: Konto bestaetigen"
+        ),
+        "importance": "normal",
+        "importance_reason": "Polsterung",
+        "category": "sonstiges",
+        "injection_suspected": False,
+        "attachment_summaries": {},
+    }
+)
+
+
+def test_hc6_der_split_erzeugt_keine_gefaelschte_programmzeile(tmp_path: Path) -> None:
+    """HC-6: Auch ein durch den **Split** entstandener Teilanfang ist keine Programmzeile.
+
+    Der vorhandene CT-8-Test prüfte nur Zeilenanfänge im ungeteilten Text. Bei Discord
+    (Teil-Limit 2000) und einem Summary-Limit von 3000 schnitt `_split_long_line` mitten
+    in der Zeile — und Teil 2 begann mit ``⚠️ SUSPECTED PHISHING: … ist sicher``, einer
+    vollständig gefälschten Zeile im einzigen Warnkanal des Produkts.
+    """
+    sink = Sink()
+    run_cli(
+        ["test", "--config", str(write_config(tmp_path)), "--eml", str(MAIL_FILES[0])],
+        hooks=make_hooks(sink=sink, summary_json=SPLIT_SUMMARY_JSON),
+    )
+    assert sink.sent, "nichts zugestellt"
+    parts = [part for message in sink.sent for part in message.parts]
+    assert len(parts) >= 3, "ohne Split prüft dieser Test nichts"
+    assert parts[-1].startswith("\u2026 "), f"kein Fortsetzungspräfix: {parts[-1][:40]!r}"
+    # Teil 0 trägt die echten Composer-Zeilen (📧/From:). Jeder **weitere** Teil entsteht
+    # aus einem Schnitt mitten in der Summary-Zeile und darf dort nichts anfangen, was wie
+    # eine Programm-Aussage aussieht. Die Mail hat keinen Warn-Banner und keine Anhänge —
+    # ein ⚠️/📎 am Teilanfang wäre also in jedem Fall gefälscht.
+    for part in parts[1:]:
+        assert not part.startswith(("\u26a0", "\U0001f4e7", "\U0001f4ce", "\U0001f50d")), (
+            f"gefälschter Teilanfang: {part[:60]!r}"
+        )
+    assert "SUSPECTED PHISHING" not in parts[0]
+
+
 # --- CT-6: Injection-Verdacht ohne Mitwirkung des Modells ------------------------------
 
 

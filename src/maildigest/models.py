@@ -63,6 +63,14 @@ class RawMail(BaseModel):
     auth_results_header: str | None = None
     mime_bytes: bytes
     size_bytes: int = Field(ge=0)
+    #: SHA-256 (hex) über `mime_bytes` — das zweite, **nicht fälschbare** Dedupe-Merkmal
+    #: neben dem frei wählbaren `Message-ID`-Header (ADR-079, HC-10). Leer nur bei
+    #: von Hand gebauten `RawMail`-Objekten aus Tests.
+    content_hash: str = ""
+    #: Eine frühere Mail hat denselben Dedupe-Key, aber einen anderen Inhalt (ADR-079).
+    #: Der Ingest setzt das Flag, der Sanitizer kopiert es in den `SanitizationReport`,
+    #: der Composer macht daraus eine `🔍`-Hinweiszeile.
+    id_collision: bool = False
 
 
 class AttachmentInfo(BaseModel):
@@ -100,6 +108,10 @@ class SanitizationReport(BaseModel):
     blocked_attachments: int = Field(default=0, ge=0)
     reply_to_mismatch: bool = False
     return_path_mismatch: bool = False
+    #: Der `Message-ID`-Dedupe-Key dieser Mail war schon von einer inhaltlich anderen Mail
+    #: belegt (ADR-079). Kopie von `RawMail.id_collision`; ohne diese Weitergabe bliebe die
+    #: unterdrückte Mail für den Nutzer unsichtbar (HC-10).
+    id_collision: bool = False
     auth_results: dict[str, str] = Field(default_factory=dict)
 
 

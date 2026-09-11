@@ -308,6 +308,10 @@
   Verarbeitungspfad nicht die maßgebliche Prüfung. Die Normalisierung von `error_class`
   vereinheitlicht Zeichenvorrat und Länge; sie ist keine inhaltliche Filterung — es bleibt
   Pflicht der Aufrufstellen, ausschließlich konstante Klassenlabels zu übergeben.
+- **Nachtrag (Fixrunde, 2026-09-11, HC-10):** Punkt (b) ist überholt. `claim()` liefert
+  kein `bool` mehr, sondern `ClaimResult` (`claimed`/`duplicate`/`collision`), und
+  `seen_mails` hat eine zweite, nullbare Spalte `content_hash`. Begründung und Wirkung:
+  ADR-079. Punkt (a) gilt unverändert — auch das neue Merkmal ist ein Hash, kein Inhalt.
 
 ## ADR-019: Reihenfolge im Ingest — erst reservieren, dann verarbeiten, zuletzt Seen/Move
 - Status: accepted
@@ -335,6 +339,11 @@
   `move_processed_to` ist rein kosmetisch und darf nie die einzige Dedupe-Quelle sein.
   Löschen findet nirgends statt (F-ING-1): `delete()`/`expunge()` kommen im Ingest-Modul
   nicht vor, und die Test-Fakes brechen ab, falls das je jemand einführt.
+- **Nachtrag (Fixrunde, 2026-09-11, HC-10):** Die Reihenfolge bleibt. Ergänzt ist nur der
+  dritte Ausgang von Schritt (2): Meldet `claim()` eine **Kollision**, wird die Mail nicht
+  übersprungen, sondern unter einem abgeleiteten Dedupe-Key regulär verarbeitet (ADR-079).
+  Die hier abgelehnte Alternative „UID/UIDVALIDITY in den Key" bleibt abgelehnt: Sie bräche
+  die Idempotenz über Neustarts und Ordner-Moves hinweg.
 
 ## ADR-020: IMAPS wird erzwungen; Header-Auswertung mit expliziten Unbekannt-Werten
 - Status: accepted
@@ -367,6 +376,15 @@
   Die „Unbekannt"-Konventionen sind ab jetzt Teil des `RawMail`-Vertrags und gehören nach
   ARCHITECTURE §3; nachfolgende WPs müssen leeres `from_domain` als „Domain unbekannt"
   behandeln, nicht als Domain.
+- **Nachtrag (Fixrunde, 2026-09-11, HC-23):** Punkt (d) galt nur für den Betreff. Der
+  Anzeigename trägt dieselbe Transport-Kodierung, wurde aber nie dekodiert — zugestellt
+  wurde `=?utf-8?Q?J=C3=B6rg_M=C3=BCller?=`, und die in SECURITY §4 zugesagten NFKC-,
+  Steuerzeichen- und Mixed-Script-Prüfungen liefen auf der Kodierung statt auf dem Namen.
+  `build_raw_mail` dekodiert jetzt auch `From` und `Reply-To`: RFC-2047-Wörter über
+  `decode_header`/`make_header`, roh-8-bittige Bytes (die `email` als `unknown-8bit`
+  markiert und sonst zu U+FFFD macht) über einen UTF-8-Versuch mit Latin-1-Auffang. Punkt
+  (e) bleibt bindend — bei kaputter Kodierung gilt der Rohwert, geworfen wird nie. Der
+  Sanitizer ist unverändert; er sieht jetzt nur endlich den echten Namen.
 
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
@@ -708,6 +726,12 @@
 - Konsequenzen: Ein LLM-Aufruf auch für inhaltsleere Mails (Kosten akzeptiert). Der
   Ersatztext ist der einzige Summary-Text, der nicht vom Modell stammt — er ist deshalb
   nicht scrub-pflichtig, weil alle Bestandteile bereits durch den Sanitizer gegangen sind.
+- **Nachtrag (Fixrunde, 2026-09-11, HC-2):** Der Wortlaut oben ist historisch; er lautet
+  englisch („Mail without displayable content, 2 blocked attachments: …") und unterscheidet
+  jetzt Singular und Plural. Vor allem behauptet er keinen fehlenden Inhalt mehr, wenn aus
+  Anhängen Text gelesen wurde: Dann beginnt er mit „No mail body; N attachment(s) with
+  readable text". Der gelesene Anhangstext ist in diesem Fall vorhanden — im Modellbetrieb
+  in den `attachment_summaries`, ohne Modell als Auszug (ADR-076, Nachtrag).
 
 ## ADR-035: Output-Sanitizer in zwei Stufen — Feld-Scrub plus unabhängiger Nachbrenner
 - Status: accepted
@@ -772,6 +796,24 @@
   Nachricht mehr autolinkbar. Die Regel ist eine einzige Funktion und damit in WP12
   grep-/testbar. Die Namensliste unter (b) ist die einzige Blocklist im Sanitizer-Pfad und
   muss bei WP12 erneut geprüft werden.
+
+**Nachtrag (Fixrunde, 2026-09-11):** Zwei Lücken derselben Klasse — die Regel war richtig,
+ihre *Erkennung* zu eng.
+- **HC-24:** `_RE_DOMAINISH` deckelte die erste Marke auf 63 Zeichen (`[a-z0-9]{0,62}`).
+  Eine 64 Zeichen lange Marke (`aaa…a.com/rechnung`) erzeugte deshalb gar kein Token, und
+  der Nachbrenner ließ die Punkte leben. Die Längendeckel fallen ersatzlos — in
+  `output/sanitizer.py` **und** in `sanitize/links.py` (`_LABEL`). Ob defangt wird,
+  entscheidet ausschließlich die TLD-Formprüfung in `_defang_domain_match`; Über-Defang ist
+  hier ausdrücklich der fail-safe Ausgang. Backtracking bleibt unkritisch, weil `.` in
+  keiner beteiligten Zeichenklasse vorkommt und die Zerlegung in Marken damit eindeutig ist.
+- **HC-9:** `_RE_IPV4` benutzte mit `(?<![\w.\-])`/`(?![\w.\-])` genau die Lookaround-Form,
+  die HT-4 für `_RE_DOMAINISH` schon verworfen hatte: Jedes Nachbarzeichen hebelte den
+  Ersatz aus (`-192.0.2.1/login`, `192.0.2.1x`, `192.0.2.1_neu`, `a.192.0.2.1`). Neu links
+  `(?<![A-Za-z0-9])`, rechts `(?!\.?\d)` — nur der Fall „Treffer ist Teil einer längeren
+  Zahl/IP" wird ausgeschlossen. Der Bericht schlug `(?![0-9.])` vor; das ließ den
+  abschließenden Wurzelpunkt (`192.0.2.1.`) ungebrochen durch, obwohl ein Linkifier daraus
+  sehr wohl ein Ziel macht. Dass `3.14`, `1.2.3` und `v2.10.1` lesbar bleiben, kommt aus der
+  Vier-Oktett-Form, nicht aus den Lookarounds.
 
 ## ADR-037: Markup wird entfernt statt escaped; `_` bleibt erhalten
 - Status: accepted
@@ -862,6 +904,18 @@
 - Konsequenzen: Sehr lange Zusammenfassungen werden sichtbar gekürzt statt gesplittet; das
   ist gewollt (der Nutzer soll nicht 10 Nachrichten pro Mail bekommen). Ein hart
   geschnittener Teil kann einen Marker kosmetisch zerreißen — nie klickbar.
+
+**Nachtrag (Fixrunde, 2026-09-11):**
+- **HC-22:** Punkt (b) sagt „Kürzung mit `…`-Marker" zu; `sanitize/attachments.sanitize_filename`
+  schnitt aber hart auf 80 Zeichen. Der Nutzer sah weder, dass gekürzt wurde, noch die
+  Endung — bei einem geblockten Anhang genau die sicherheitsrelevante Information. Gekürzt
+  wird jetzt in der **Mitte** mit `…`, die Endung (bis 10 Zeichen) bleibt erhalten. Die
+  Zeichenreserve beträgt drei statt einem Zeichen: `scrub_plain` im Composer normalisiert
+  NFKC, und NFKC bildet U+2026 auf `...` ab — ohne die Reserve hätte der Composer bei 80
+  erneut geschnitten und dabei genau die Endung verloren. Das Composer-Limit bleibt bei 80.
+- **HC-6:** Punkt (c) bekommt eine Einschränkung: Jedes Stück **nach dem ersten** aus einem
+  harten Zeilenschnitt trägt das Fortsetzungspräfix `… ` (U+2026 + Leerzeichen). Es zählt
+  zum Teil-Limit; kein Teil wird dadurch länger als erlaubt. Begründung: ADR-062-Nachtrag.
 
 ## ADR-041: Kritiker bekommt Mail und Zusammenfassung in zwei getrennten Untrusted-Blöcken
 - Status: accepted
@@ -1065,6 +1119,18 @@
   Warteschlange liegt — genau die von ADR-008 vorgesehene Lücke, in der eine Doppelzustellung
   möglich ist. Betreiber sehen wartende Zustellungen in den Log-Feldern
   `queued_deliveries`/`delivery_deferred`.
+- **Nachtrag (Fixrunde, 2026-09-11, HC-25):** Die Fristen rechnen mit der Wanduhr. Springt
+  sie (NTP-Erstsynchronisation ohne RTC, VM-Resume), war die Nachricht nach **einem**
+  Versuch „eine Stunde alt" und wurde verworfen; sprang sie zurück, lag `next_attempt_at`
+  Tage in der Zukunft und die Zeile war unerreichbar, weil es keinen Sweeper gibt. Neu:
+  (1) das gemessene Alter wird auf `>= 0` geklemmt und darf die Stundenfrist nur auslösen,
+  wenn es zum Retry-Plan passt (`delivery.age_is_plausible`) — sonst entscheidet allein der
+  Versuchszähler und `first_queued_at` wird beim Defer auf die neue Zeitbasis gehoben;
+  (2) `outbox_due` sammelt Zeilen ein, deren `next_attempt_at` mehr als zwei Stunden in der
+  Zukunft liegt, setzt sie auf `now` und loggt `outbox_clock_skew_corrected`. Die Zusage
+  „fünf Versuche" gilt damit auch über einen Uhrsprung; die Zusage „über höchstens eine
+  Stunde" gilt nur, solange die Uhr nicht springt — eine Uhr, die springt, kennt keine
+  Stunde. Der Schema-Satz ist überholt: additiv gehoben wird jetzt 1 → 2 → 3 (ADR-079).
 
 ## ADR-049: Inhalt der Low-Digest-Warteschlange und Planung des Sammel-Digests
 - Status: accepted
@@ -1442,6 +1508,26 @@
   `•`, Nummerierungen zu `12 ·`, führende Rauten verschwinden. Modelltext, der zufällig mit
   `Von:` beginnt, liest sich als `Von · …`. Die Eigenschaft wird nicht nur an Beispielen,
   sondern als Allaussage geprüft (`test_hot_properties.py`, eigene Markdown-/Struktur-Strategie).
+
+**Nachtrag (Fixrunde, 2026-09-11):** Die Entscheidung „keine Zeilenanfangs-Regeln in
+`final_guard`" bleibt — sie hatte aber zwei offene Nähte hinter sich.
+- **HC-6 (die Split-Naht):** `neutralize_markup` schützt Zeilen*anfänge*; `split_parts`
+  erzeugt neue. Bei Discord/Signal (Teil-Limit 2000) und einem Summary-Limit von 3000
+  schnitt `_split_long_line` mitten in die Zeile, und Teil 2 begann mit
+  `⚠️ SUSPECTED PHISHING: … ist sicher` — einer vollständig gefälschten Zeile im einzigen
+  Warnkanal des Produkts. Geschlossen wird die Naht an genau der Stelle, an der sie
+  entsteht: Nur der harte Schnitt *innerhalb* einer Zeile kann einen ungeprüften Anfang
+  erzeugen (Schnitte an Zeilengrenzen liefern Anfänge, die `scrub_field` bereits
+  neutralisiert hat oder die vom Composer stammen), also bekommt jedes Fortsetzungsstück das
+  neutrale Präfix `… `. Weder wird die Feld-Neutralisierung verschärft (das fräße legitime
+  Emojis im Fließtext) noch bekommt `final_guard` Zeilenanfangs-Regeln.
+- **HC-7 (die Fußnoten-Naht):** Die Link-Fußnote (`[links] footnote = true`) hängt als
+  einziger Block roh an der Nachricht, und `final_guard` kennt bewusst kein `_RE_MARKUP`.
+  Angreifergesteuertes Markdown in einer URL-Query (```` ``` ````, `*fett*`, `||spoiler||`,
+  `~~weg~~`) erreichte damit die Zustellung; auf Discord verschluckte ein unpaariges
+  ```` ``` ```` alle folgenden Fußnotenzeilen. Entfernt werden die Zeichen dort, wo die
+  defangte Form entsteht — `sanitize/links._defang` streicht `` ` ``, `*`, `|`, `~`, `\`.
+  `[` und `]` bleiben: Ohne sie zerfielen `[.]` und `[:]`. `final_guard` bleibt unverändert.
 
 ## ADR-063: Mehrere unabhängige Fälschungssignale heben auf `high` — Präzisierung von ADR-043
 - Status: accepted (präzisiert ADR-043, hebt ihn nicht auf)
@@ -1829,6 +1915,19 @@
   Datum. Ein unbekannter Anbieter verhält sich wie bisher — es wird nichts geraten. Der
   Anbieter wird ausschließlich für Text und Vorbelegungen benutzt: Kein Sicherheitsverhalten
   hängt daran (IMAPS bleibt Pflicht, die Zertifikatsprüfung bleibt aktiv, I5 unberührt).
+- **Nachtrag (Fixrunde, 2026-09-11, HC-15/HC-3):** Zwei Stellen benutzten die
+  Wissensbasis über das **falsche Feld**. (1) `_resolve_host` warf den erkannten Anbieter
+  weg und gab nur den Host zurück; die Sperre in `cmd_connect_mail` suchte danach erneut
+  über die Eingabezeichenkette. Bei einer eingetippten **Mailadresse** (`me@outlook.com`)
+  fand sie nichts mehr — Outlook.com und Proton wurden mit `--no-test` anstandslos
+  gespeichert, obwohl die Sperre für Domain und Adresse gleichermaßen gilt (SPEC §4).
+  `_resolve_host` liefert jetzt Host **und** Anbieter (`_ResolvedHost`); die
+  `supported`-Prüfung hängt an diesem Ergebnis. (2) `_choose_llm_preset` suchte die Vorlage
+  über `LlmPreset.provider` — ein Feld, das fünf der sieben Vorlagen teilen. Die Suche
+  lieferte die erste (Groq) und damit fremden Erklärtext samt fremder `base_url`. Die Wahl
+  läuft jetzt über `providers.find_preset` und damit zuerst über den stabilen `key`
+  (HC-3/E5). Die Regel von oben bleibt: Der Anbieter trägt Text und Vorbelegung, nie
+  Sicherheitsverhalten.
 
 
 ## ADR-076: Betrieb ohne Sprachmodell als Standard
@@ -1868,6 +1967,33 @@
 - Konsequenzen: `[llm] model` ist nur noch Pflicht, wenn ein echter Provider gewählt ist
   (Validator in `config.py`). Wer den Modus produktiv nutzt, bekommt Auszüge statt
   Zusammenfassungen — das steht so in README und in jeder erzeugten Nachricht.
+- **Nachtrag (Fixrunde, 2026-09-11):** Der Modus baut seine `Summary` selbst und steht
+  damit an einer Stelle, an der sonst nur schema-validierte Modellausgabe ankommt. Zwei
+  Folgen davon waren übersehen worden. (1) HC-1: `Summary.headline` trägt `max_length=100`;
+  die Kürzung lag ausschließlich in der Nachkontrolle `enforce_output_policy`, die erst
+  **nach** der Konstruktion läuft. Jeder Betreff über 100 Zeichen ließ Pydantic werfen und
+  brach den Werkszustand fail-closed ab. Die Kürzung ist jetzt die eigene Funktion
+  `summarizer.clamp_headline` und wird vor der Konstruktion angewandt; wer künftig eine
+  `Summary` von Hand baut, benutzt sie. (2) HC-2: `attachment_summaries` blieb leer, womit
+  ein Anhang, dessen Text erfolgreich extrahiert wurde, spurlos aus der Nachricht fiel
+  (`_unprocessed_line` nennt nur *nicht* verarbeitete Anhänge). Ohne Modell trägt der Modus
+  nun je gelesenem Anhang einen beschrifteten, auf 400 Zeichen gekürzten Auszug ein — das
+  Composer-Limit je Wert. Das ist keine Aufweichung von I4: Der Text stammt aus
+  `SanitizedMail.attachment_texts` und läuft durch dieselbe Nachkontrolle und denselben
+  Output-Sanitizer wie jede Modellausgabe. Verdrahtung und Werkszustand sind seither über
+  `build_runner`, `connect-llm --provider none` und einen `test`-Lauf über die echten Hooks
+  mechanisch festgehalten (HC-38).
+- **Nachtrag (Fixrunde, 2026-09-11, HC-3/HC-18):** Zur Einrichtung dieses Modus gehören
+  zwei Klarstellungen. (1) `--provider` setzt **nur** `[llm] provider`. Weil der Wert
+  `openai_compatible` fünf Vorlagen trifft, gilt bei dieser Mehrdeutigkeit die generische
+  Vorlage: generischer Erklärtext, **keine** `base_url`-Vorbelegung. Nicht-interaktiv wird
+  nie eine anbieterspezifische URL gesetzt, die nicht ausdrücklich per `--base-url` kam —
+  ein Endpunkt, der Mailinhalte empfängt, entsteht nicht als Nebenwirkung einer
+  Anleitung. Eine eigene Option für die Vorlage (`--preset`) wurde verworfen: Sie
+  verdoppelte den Begriff „Anbieter" in der Oberfläche, ohne einen Fall zu lösen, den
+  `--base-url` nicht schon löst. (2) `[llm] model` behält den Default `""` und ist erst
+  Pflicht, sobald `provider` nicht `none` ist; SPEC §4 zählte es fälschlich zu den
+  „Pflichtfeldern ohne Default" und widersprach damit §5 und diesem ADR.
 
 
 ## ADR-077: Fernauslösung aus dem Messenger — feste Befehle statt Dialog
@@ -1944,3 +2070,42 @@
   Start ein. Das ist gewollt, aber es ist eine Verhaltensänderung ohne Zutun des Nutzers —
   deshalb steht sie im CHANGELOG unter „Unveröffentlicht" und in der Ausgabe von
   `connect-messenger`.
+
+## ADR-079: Zweites Dedupe-Merkmal `content_hash`; Kollision statt stiller Unterdrückung
+- Status: accepted
+- WP / Datum: Fixrunde (HC-10), 2026-09-11
+- Kontext: Der Dedupe-Key ist im Normalfall die `Message-ID` — ein Header, den der Absender
+  frei wählt (SECURITY §1: Der Angreifer sendet beliebige Mails inklusive Header). Wer die
+  Message-ID einer erwarteten Mail errät oder abschreibt und seine Mail zuerst zustellt,
+  bekommt die echte Mail gratis unterdrückt: `claim()` meldete `False`, der Ingest markierte
+  sie als gelesen und verwarf sie — ohne Zusammenfassung, ohne Metadaten-Notiz, ohne
+  Logzeile oberhalb von `mail_duplicate` (INFO). Für den Nutzer ist der Verlust unsichtbar.
+  Derselbe Mechanismus trifft ohne jeden Angreifer zwei verschiedene Mails mit kollidierender
+  Message-ID (fehlerhafter Mailserver, Weiterleitungskette).
+- Entscheidung: (a) `RawMail.content_hash` = `sha256(mime_bytes)` — ein Merkmal, das kein
+  Absender auf eine fremde Mail legen kann. (b) `seen_mails` bekommt die nullbare Spalte
+  `content_hash`; Schema-Version 2 → 3, additiv über `ALTER TABLE … ADD COLUMN` auf dem
+  bestehenden Upgrade-Pfad (NF-3, kein Migrationswerkzeug). (c) `claim()` ist dreiwertig
+  (`ClaimResult`): gleicher Key + gleicher (oder unbekannter) Inhalt ⇒ `duplicate` wie
+  bisher; gleicher Key + nachweislich anderer Inhalt ⇒ `collision`. (d) Im Kollisionsfall
+  verarbeitet `poll_once` die Mail regulär unter dem abgeleiteten Schlüssel
+  `sha256(message_id_hash + content_hash)`, setzt `RawMail.id_collision`, der Sanitizer
+  kopiert das Flag in den `SanitizationReport`, der Composer macht daraus eine
+  `🔍`-Hinweiszeile. Das Ereignis steht als `mail_id_collision` (WARNING, nur gekürzte
+  Hashes) im Log. (e) Zeilen ohne `content_hash` — alles aus einer Datenbank vor Version 3 —
+  gelten als „Inhalt unbekannt" und lösen nie eine Kollision aus.
+- Alternativen: (1) UID/UIDVALIDITY in den Key nehmen — bricht die Idempotenz über
+  Neustarts und Ordner-Moves (ADR-019 hat das schon abgelehnt). (2) Die kollidierende Mail
+  über den Fail-closed-Pfad als Metadaten-Notiz zustellen — sicher, aber unnötig: Nichts an
+  dieser Mail ist unsicher, sie ist nur gleich benannt; der Nutzer bekäme eine Notiz statt
+  einer Zusammenfassung. (3) Nur loggen — der Betreiber sähe es, der Nutzer nicht, und der
+  Verlust bliebe. (4) `content_hash` als alleiniger Key — jede Weiterleitung mit geändertem
+  Trace-Header wäre eine neue Mail; die Idempotenz über Neustarts hinge an Byte-Gleichheit.
+- Konsequenzen: Der erste Absender einer Message-ID behält den unabgeleiteten Key; die
+  zweite Mail läuft unter einem anderen Schlüssel und wird ein zweites Mal zugestellt —
+  gewollt, denn genau dieses „zweite Mal" war der stille Verlust. Ein Angreifer kann damit
+  keine Mail mehr unterdrücken, wohl aber weiterhin eine zusätzliche Zustellung auslösen
+  (das kann er ohnehin, indem er einfach eine Mail schickt). Der abgeleitete Schlüssel ist
+  deterministisch: Dieselbe kollidierende Mail bleibt beim nächsten Poll ein Duplikat,
+  F-ING-2 gilt unverändert. Kosten: 32 Byte Hash je Zeile und ein SHA-256 über die
+  MIME-Bytes je Mail.

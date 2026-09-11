@@ -408,6 +408,7 @@ class MailSanitizer:
             blocked_attachments=sum(1 for info in attachments if not info.processed),
             reply_to_mismatch=_reply_to_mismatch(raw),
             return_path_mismatch=_return_path_mismatch(raw),
+            id_collision=raw.id_collision,
             auth_results=_parse_auth_results(raw.auth_results_header),
         )
 

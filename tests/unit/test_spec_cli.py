@@ -141,3 +141,101 @@ def test_umgebungsvariablen_sind_dokumentiert() -> None:
     text = SPEC_PATH.read_text(encoding="utf-8")
     for name in (ENV_CONFIG, ENV_IMAP_PASSWORD, ENV_LLM_API_KEY, ENV_TELEGRAM_TOKEN):
         assert name in text
+
+
+# --- HC-18: `init` schreibt den vollständigen Feldsatz aus §5 ---------------------------
+
+_FIELD_ROW = re.compile(r"^\|\s*`\[([a-z.]+)\]\s+([a-z_]+)`\s*\|([^|]*)\|([^|]*)\|")
+
+#: Default-Zellen, die kein Literal sind: „—" (kein Default) und „erbt" (Override).
+_NO_DEFAULT = {"—", "erbt"}
+
+
+def _spec_fields() -> list[tuple[str, str, str]]:
+    """Liest die Feldtabelle aus §5: (Sektionspfad, Feld, Default-Zelle)."""
+    rows = [
+        (m.group(1), m.group(2), m.group(4).strip())
+        for line in SPEC_PATH.read_text(encoding="utf-8").splitlines()
+        if (m := _FIELD_ROW.match(line))
+    ]
+    assert len(rows) > 30, "Die Feldtabelle aus §5 wurde nicht gefunden"
+    return rows
+
+
+def _default_value(cell: str) -> object:
+    """Macht aus der Default-Zelle (`` `993` ``) den TOML-Wert."""
+    import tomllib as _tomllib
+
+    return _tomllib.loads(f"x = {cell.strip('`')}")["x"]
+
+
+def _lookup(data: dict[str, object], path: str, key: str) -> tuple[bool, object]:
+    """Sucht `key` unter dem punktierten Sektionspfad; liefert (gefunden, Wert)."""
+    node: object = data
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return False, None
+        node = node[part]
+    if not isinstance(node, dict) or key not in node:
+        return False, None
+    return True, node[key]
+
+
+def _commented_lines(text: str) -> set[str]:
+    """Alle auskommentierten Feldzeilen der erzeugten Datei als `sektion.feld`."""
+    section = ""
+    found: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+            continue
+        commented = re.match(r"^#\s*([a-z_]+)\s*=", stripped)
+        if commented and section:
+            found.add(f"{section}.{commented.group(1)}")
+    return found
+
+
+def test_hc18_init_schreibt_den_vollstaendigen_feldsatz(tmp_path: Path) -> None:
+    """HC-18: Jedes Feld aus §5 steht in der Vorlage — mit Wert oder als Kommentar.
+
+    Der Test liest die §5-Tabelle **maschinell**; eine zweite, von Hand gepflegte Liste
+    würde genauso still veralten wie `_KEY_ORDER` es getan hat (`accept_commands` stand
+    dort, wurde aber nie geschrieben).
+    """
+    import io
+    import tomllib
+
+    from maildigest.cli import EXIT_OK, main
+
+    target = tmp_path / "config.toml"
+    code = main(
+        ["--config", str(target), "--non-interactive", "init"],
+        stdin=io.StringIO(""),
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+    assert code == EXIT_OK
+
+    text = target.read_text(encoding="utf-8")
+    data = tomllib.loads(text)
+    commented = _commented_lines(text)
+
+    fehlend: list[str] = []
+    abweichend: list[str] = []
+    for path, key, cell in _spec_fields():
+        found, value = _lookup(data, path, key)
+        if cell in _NO_DEFAULT:
+            # Ohne Default: als auskommentierte Beispielzeile, nicht als echter Wert.
+            if not found and f"{path}.{key}" not in commented:
+                fehlend.append(f"[{path}] {key} (Kommentarzeile)")
+            continue
+        if not found:
+            fehlend.append(f"[{path}] {key}")
+            continue
+        expected = _default_value(cell)
+        if value != expected:
+            abweichend.append(f"[{path}] {key}: Datei {value!r}, Spec {expected!r}")
+
+    assert not fehlend, f"`init` schreibt diese Felder aus §5 nicht: {fehlend}"
+    assert not abweichend, f"Defaults weichen von §5 ab: {abweichend}"

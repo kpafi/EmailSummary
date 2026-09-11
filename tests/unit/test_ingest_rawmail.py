@@ -10,6 +10,8 @@ bei fehlender Message-ID, Grenzfälle mit kaputten Headern, Backoff-Kennlinie.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from datetime import datetime
 
 import pytest
@@ -20,6 +22,7 @@ from maildigest.ingest.imap_client import (
     backoff_delay,
     build_raw_mail,
 )
+from maildigest.sanitize import MailSanitizer
 
 FULL_MAIL = b"""\
 Return-Path: <bounce@Mailer.Example.NET>
@@ -100,6 +103,94 @@ def test_folded_header_is_normalised() -> None:
     )
     raw = build_raw_mail(make_message(mail))
     assert raw.subject_raw == "Rechnung fuer den Monat Maerz"
+
+
+# --- HC-23: Anzeigename wird RFC-2047-dekodiert ----------------------------------------------
+
+
+def test_hc23_from_display_name_is_rfc2047_decoded() -> None:
+    """Der Anzeigename trägt dieselbe Transport-Kodierung wie der Betreff (HC-23)."""
+    mail = FULL_MAIL.replace(
+        b'From: "Stadtwerke X" <rechnung@Stadtwerke-X.DE>',
+        b"From: =?utf-8?Q?J=C3=B6rg_M=C3=BCller?= <j@b.example>",
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_addr == "Jörg Müller <j@b.example>"
+    assert raw.from_domain == "b.example"
+
+
+def test_hc23_reply_to_display_name_is_decoded_too() -> None:
+    mail = FULL_MAIL.replace(
+        b"Reply-To: antwort@anderes-ziel.example",
+        b"Reply-To: =?utf-8?Q?B=C3=BCro?= <antwort@anderes-ziel.example>",
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.reply_to == "Büro <antwort@anderes-ziel.example>"
+
+
+def test_hc23_eight_bit_display_name_does_not_become_mojibake() -> None:
+    """Roh-8-bittige Namen (RFC-Verstoß, in freier Wildbahn häufig) bleiben lesbar."""
+    mail = FULL_MAIL.replace(
+        b'From: "Stadtwerke X" <rechnung@Stadtwerke-X.DE>',
+        "From: Jörg Müller <j@b.example>".encode(),
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert "Jörg Müller" in raw.from_addr
+    assert "Ã" not in raw.from_addr
+
+
+def test_hc23_control_chars_in_the_name_reach_the_sanitizer() -> None:
+    """VS16/Cf im kodierten Namen erreichen den Sanitizer und werden dort gezählt.
+
+    Vor dem Fix sah der Sanitizer nur die ASCII-Hülse `=?utf-8?…?=`; die in
+    docs/SECURITY.md §4 zugesagte Steuerzeichen-Prüfung lief damit ins Leere.
+    """
+    encoded = base64.b64encode("Bank️​X".encode()).decode()
+    mail = FULL_MAIL.replace(
+        b'From: "Stadtwerke X" <rechnung@Stadtwerke-X.DE>',
+        f"From: =?utf-8?B?{encoded}?= <b@b.example>".encode(),
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert "️" in raw.from_addr
+
+    sanitized = MailSanitizer().sanitize(raw)
+    assert sanitized.sanitization_report.control_chars_removed >= 1
+    assert "​" not in sanitized.from_display  # Zero-Width-Zeichen ist raus
+
+
+def test_hc23_broken_encoding_falls_back_to_the_raw_value() -> None:
+    """ADR-020 (e): `build_raw_mail` wirft nie — auch nicht bei kaputter Kodierung."""
+    mail = FULL_MAIL.replace(
+        b'From: "Stadtwerke X" <rechnung@Stadtwerke-X.DE>',
+        b"From: =?utf-8?B?%%%nicht-base64%%%?= <k@b.example>",
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert isinstance(raw.from_addr, str)
+    assert raw.from_domain == "b.example"
+
+
+# --- HC-10: content_hash ----------------------------------------------------------------------
+
+
+def test_hc10_content_hash_is_the_sha256_of_the_mime_bytes() -> None:
+    raw = build_raw_mail(make_message(FULL_MAIL))
+    assert raw.content_hash == hashlib.sha256(raw.mime_bytes).hexdigest()
+    assert raw.id_collision is False
+
+
+def test_hc10_collision_flag_reaches_the_sanitization_report() -> None:
+    """Der Hinweis überlebt die Sanitize-Stufe — sonst sähe der Nutzer nie etwas (ADR-079)."""
+    raw = build_raw_mail(make_message(FULL_MAIL)).model_copy(update={"id_collision": True})
+    assert MailSanitizer().sanitize(raw).sanitization_report.id_collision is True
+
+
+def test_hc10_same_message_id_different_body_yields_different_content_hash() -> None:
+    """Das zweite Merkmal ist genau dann gleich, wenn die Mail dieselbe ist (ADR-079)."""
+    other = FULL_MAIL.replace(b"Guten Tag, anbei Ihre Rechnung.", b"Etwas ganz anderes.")
+    first = build_raw_mail(make_message(FULL_MAIL))
+    second = build_raw_mail(make_message(other))
+    assert first.dedupe_key == second.dedupe_key
+    assert first.content_hash != second.content_hash
 
 
 # --- Dedupe-Key ------------------------------------------------------------------------------

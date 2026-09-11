@@ -35,11 +35,14 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `mark_seen=False` ist sicherheitsrelevant: Das Gelesen-Flag ist die letzte, nicht die erste
   Aktion (s. u.).
 - **Reihenfolge je Mail (F-ING-2, ADR-019):**
-  1. `RawMail` bauen, 2. `StateDB.claim(dedupe_key)` (`INSERT OR IGNORE`, committet **vor**
-  der Verarbeitung), 3. Pipeline-Callback, 4. Endstatus schreiben, 5. `UID STORE +FLAGS
-  (\Seen)` setzen und ggf. `UID MOVE` nach `[imap] move_processed_to`. Ein bereits bekannter
-  Key wird übersprungen, aber trotzdem als gelesen markiert/verschoben, damit er die
-  Unseen-Menge verlässt.
+  1. `RawMail` bauen, 2. `StateDB.claim(dedupe_key, content_hash=…)` (`INSERT OR IGNORE`,
+  committet **vor** der Verarbeitung), 3. Pipeline-Callback, 4. Endstatus schreiben,
+  5. `UID STORE +FLAGS (\Seen)` setzen und ggf. `UID MOVE` nach `[imap] move_processed_to`.
+  Ein bereits bekannter Key wird übersprungen, aber trotzdem als gelesen markiert/verschoben,
+  damit er die Unseen-Menge verlässt. `claim()` ist dreiwertig (ADR-079): `claimed` ⇒
+  verarbeiten, `duplicate` ⇒ überspringen, `collision` ⇒ unter dem abgeleiteten Schlüssel
+  `sha256(message_id_hash + content_hash)` verarbeiten, `RawMail.id_collision = True` setzen
+  und `mail_id_collision` (WARNING) loggen.
 - **Löschen: nie** (F-ING-1, ADR-064). Die Nachbehandlung setzt **rohe UID-Kommandos** über
   `mailbox.client.uid(...)` ab, nicht die Komfort-Methoden von imap-tools: `MailBox.flag()`
   und `MailBox.delete()` hängen an jedes STORE ein unbedingtes `EXPUNGE`, und
@@ -54,6 +57,14 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
 - **Dedupe-Key:** `Message-ID`, sonst `sha256:` + Hash über From + Date + Subject +
   Body-Präfix (512 Zeichen), Felder `\x00`-getrennt. Das Präfix macht Fallback-Keys von
   echten Message-IDs unterscheidbar.
+- **Zweites Dedupe-Merkmal (ADR-079):** `RawMail.content_hash` = `sha256(mime_bytes)`, in
+  `seen_mails.content_hash` gespeichert. Der Key allein stammt aus einem frei wählbaren
+  Header; erst das zweite Merkmal unterscheidet „dieselbe Mail nochmal" von „fremde Mail
+  unter gleichem Namen". Zeilen ohne Wert (Datenbank vor Schema-Version 3) gelten als
+  „Inhalt unbekannt" und lösen nie eine Kollision aus.
+- **Anzeigenamen (ADR-020 Nachtrag, HC-23):** `From` und `Reply-To` werden wie der Betreff
+  RFC-2047-dekodiert, bevor sie in `RawMail` landen; roh-8-bittige Namen werden als UTF-8
+  (Auffang Latin-1) gelesen. Der Sanitizer sieht damit den Namen, nicht seine Kodierung.
 - **Polling-Loop (`IngestService`):** `run_once()` für `run --once`; `run_forever()` mit
   `[imap] poll_interval_seconds` (Default 120 s) und Shutdown über ein `threading.Event`
   (`stop()`). Verbindungsfehler ⇒ Reconnect mit Exponential Backoff 5 s, 10 s, 20 s …
@@ -165,11 +176,18 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
 `CriticAgent` die Stufen `OfflineSummarizer`/`OfflineCritic` ein:
 
 - **OfflineSummarizer** baut die `Summary` allein aus `SanitizedMail`: Betreff als
-  Headline, ein auf 400 Zeichen gekürzter Auszug des bereits sanitisierten Textes mit
-  fester Beschriftung (`Excerpt, not a summary …`), `importance = "normal"` (ein geratenes
-  `low` würde Mails stillschweigend in den Sammel-Digest schieben). Danach läuft dieselbe
-  `enforce_output_policy` wie bei einer Modellausgabe — inklusive
-  `detect_injection_evidence` (F-SEC-5/CT-6).
+  Headline — **vor** der Konstruktion mit `summarizer.clamp_headline` auf 100 Zeichen
+  gekürzt, weil `Summary.headline` diese Grenze als `max_length` trägt und die
+  Nachkontrolle zu spät käme (HC-1) —, ein auf 400 Zeichen gekürzter Auszug des bereits
+  sanitisierten Textes mit fester Beschriftung (`Excerpt, not a summary …`),
+  `importance = "normal"` (ein geratenes `low` würde Mails stillschweigend in den
+  Sammel-Digest schieben). Danach läuft dieselbe `enforce_output_policy` wie bei einer
+  Modellausgabe — inklusive `detect_injection_evidence` (F-SEC-5/CT-6).
+- **Anhänge ohne Modell:** Je Eintrag in `attachment_texts` trägt der OfflineSummarizer
+  einen beschrifteten, auf 400 Zeichen (Composer-Limit je Wert) gekürzten Auszug in
+  `attachment_summaries` ein; der Composer rendert daraus `— <datei>: Excerpt: …`. Ohne
+  diesen Schritt fiel ein Anhang, dessen Text erfolgreich extrahiert wurde, spurlos aus der
+  Nachricht — `📎 Not processed` nennt nur die *geblockten* (HC-2).
 - **OfflineCritic** startet bei `phishing_risk = "none"` und überlässt die Anhebung
   vollständig `enforce_verdict_policy(collect_signals(mail))` — denselben Code-Signalen wie
   im Modellbetrieb (ADR-043/ADR-063). `summary_accurate` ist immer wahr: Der Text stammt
@@ -216,7 +234,9 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   Output-Sanitizer (ADR-033 „Konsequenzen", ADR-036).
 - **Mail ohne darstellbaren Text:** Der LLM-Aufruf findet trotzdem statt
   (Betreff/Absender/Anhangsnamen sind Signale); bleibt `summary_text` leer, greift der
-  deterministische Ersatztext „Mail ohne darstellbaren Inhalt, N geblockte Anhänge: …".
+  deterministische Ersatztext `describe_without_body` („Mail without displayable content,
+  N blocked attachments: …"). Wurde aus Anhängen Text gelesen, behauptet er keinen fehlenden
+  Inhalt, sondern nennt ihn („No mail body; N attachments with readable text", HC-2).
 - **Nicht Aufgabe des Summarizers:** die Zustell-Schwelle `deliver_min_importance` (wertet
   `pipeline.process_mail` aus, inkl. F-CRIT-2-Anhebung) und die Nachrichten-Formatierung
   (WP7).
@@ -300,7 +320,8 @@ freigeschaltetem Signal.
 
 ### State (`state/db.py`)
 - SQLite, Tabellen:
-  - `seen_mails(message_id_hash TEXT PK, first_seen_at, status, error_class, retry_count)`
+  - `seen_mails(message_id_hash TEXT PK, first_seen_at, status, error_class, retry_count,
+    content_hash)`
   - `low_digest_queue(id, message_id_hash, received_at, headline, category, from_domain)`
   - `outbox(id, message_id_hash, kind, payload, attempts, first_queued_at, next_attempt_at,
     last_error)`
@@ -327,6 +348,14 @@ enthalten **nur bereits output-sanitisierten** Text (Kopfzeile/Kategorie/Domain 
 fertigen Nachrichtenteile), nie Mail-Rohtext, und werden nach Zustellung geleert
 (docs/SECURITY.md §6). Zustell-Ergebnisse dürfen ausschließlich Datensätze im Status
 `checked` bewegen (`promote_checked_to_delivered`).
+
+**Stand Fixrunde (ADR-079):** Schema-Version 3. Neu ist die nullbare Spalte
+`seen_mails.content_hash` (`sha256(mime_bytes)` der Mail, HC-10). Der Schritt 2 → 3 ist
+wieder rein additiv und wird beim Öffnen still vollzogen — neue Tabellen legt
+`CREATE TABLE IF NOT EXISTS` an, neue Spalten `ALTER TABLE … ADD COLUMN`
+(`StateDB._add_missing_columns`); bestehende Zeilen bleiben unangetastet und bekommen
+`NULL` = „Inhalt unbekannt". `claim()` liefert seither `ClaimResult`
+(`claimed`/`duplicate`/`collision`) statt `bool`.
 
 ### Orchestrierung & Betrieb (`runner.py`, `delivery.py`, `logging_setup.py`)
 
@@ -394,7 +423,7 @@ fertigen Nachrichtenteile), nie Mail-Rohtext, und werden nach Zustellung geleert
 class RawMail(BaseModel, frozen=True):
     message_id: str | None          # Header; None wenn fehlend
     dedupe_key: str                 # message_id oder Fallback-Hash
-    from_addr: str                  # "Anzeigename <adresse>" roh
+    from_addr: str                  # "Anzeigename <adresse>", RFC-2047-dekodiert, sonst roh
     from_domain: str                # extrahiert, lowercase
     reply_to: str | None
     return_path_domain: str | None
@@ -404,6 +433,8 @@ class RawMail(BaseModel, frozen=True):
     auth_results_header: str | None # Authentication-Results, roh
     mime_bytes: bytes               # komplette Roh-Mail (verlässt Ingest+Sanitizer nie!)
     size_bytes: int
+    content_hash: str               # sha256(mime_bytes), zweites Dedupe-Merkmal (ADR-079)
+    id_collision: bool              # Key belegt, Inhalt anders (ADR-079)
 
 class AttachmentInfo(BaseModel, frozen=True):
     filename_sanitized: str
@@ -435,6 +466,7 @@ class SanitizationReport(BaseModel, frozen=True):
     blocked_attachments: int
     reply_to_mismatch: bool
     return_path_mismatch: bool
+    id_collision: bool              # Kopie von RawMail.id_collision (ADR-079)
     auth_results: dict[str, str]    # z. B. {"spf": "pass", "dkim": "fail"} best effort
 
 class Summary(BaseModel):
@@ -680,6 +712,9 @@ erweitert.
   3 × 3 = 9 Requests; gültige HTTP-Antwort mit Nicht-JSON-Inhalt → 2 Requests (Erstaufruf +
   Reparatur, danach kein Stufen-Retry); Transportfehler ohne HTTP-Status → 3 Requests. Der
   in F-SEC-7 genannte Wert „3 Versuche" meint die **Stufen**-Ebene.
+- **Systemuhr (HC-25):** Alle Zustellfristen rechnen mit der Wanduhr. Springt sie, gilt
+  weiterhin „fünf Versuche", aber nicht mehr „über höchstens eine Stunde": Ein Alter, das
+  nicht zum Retry-Plan passt, wird ignoriert statt geglaubt. Details im ADR-048-Nachtrag.
 - Messenger-Fehler: 5 Versuche über max. 1 h (Nachricht ist fertig sanitisiert und darf
   aus der DB-Queue erneut versendet werden), dann `failed` + Log. Die Teile einer
   mehrteiligen Nachricht gehen einzeln an den Adapter; bricht die Zustellung beim Teil *n*
@@ -698,6 +733,7 @@ erweitert.
 | LLM-Schema | 1 Reparaturversuch, **kein** Stufen-Retry | `llm/schema.py` |
 | Kritiker `summary_accurate = false` | sofort fail-closed, kein Retry | `pipeline.process_mail` |
 | Zustellung | 5 Versuche, 60/300/900/2100 s, harte Schranke 1 h, dann `failed`/`delivery_failed` | `delivery.OutboxMessenger` |
+| Uhrsprung während der Zustellung | Alter auf `>= 0` geklemmt; die Stundenfrist greift nur bei plausiblem Alter (`age_is_plausible`), sonst entscheidet der Versuchszähler und `first_queued_at` wird neu gesetzt. Eine Fälligkeit mehr als 2 h in der Zukunft wird auf `now` korrigiert (`outbox_clock_skew_corrected`) | `delivery._handle_failure`, `StateDB.outbox_due` (ADR-048 Nachtrag, HC-25) |
 | State-DB nicht schreibbar | Stufenfehler ⇒ Metadaten-Notiz (`state_error`) | `pipeline._record` |
 
 ## 7. Nachrichtenformat (final festgeschrieben in WP7, `output/composer.py`)
@@ -731,7 +767,13 @@ Verbindliche Zusatzregeln (WP7):
    Kritiker-Grund 200, Anzeigename 80, Domain 100, Dateiname 80 Zeichen; max. 10 gelistete
    Anhänge, max. 5 Banner-Gründe), Kürzung mit `…` (ADR-040).
 3. Split an Zeilengrenzen auf das Limit des aktiven Messengers (Telegram 4096, Discord 2000,
-   Signal 2000), ohne Teil-Zähler.
+   Signal 2000), ohne Teil-Zähler. Muss eine **einzelne Zeile** hart geschnitten werden,
+   trägt jedes Stück nach dem ersten das Fortsetzungspräfix `… ` (U+2026 + Leerzeichen).
+   Es zählt zum Limit. Grund: Nur dieser Schnitt erzeugt einen Zeilenanfang, den keine
+   Schicht geprüft hat — ohne das Präfix konnte ein Teil mit einer gefälschten
+   Programmzeile beginnen (HC-6, Nachtrag zu ADR-062). Schnitte an Zeilengrenzen brauchen
+   es nicht: Diese Anfänge hat `neutralize_markup` bereits gesehen oder der Composer
+   selbst erzeugt.
 4. Fail-closed-Notiz (`compose_failure`, F-OPS-3) — fünf Zeilen, ausschließlich Metadaten:
 
    ```

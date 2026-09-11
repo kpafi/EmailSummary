@@ -18,6 +18,7 @@ import pytest
 
 from maildigest.state.db import (
     SCHEMA_VERSION,
+    ClaimResult,
     MailState,
     StateDB,
     StateError,
@@ -38,9 +39,9 @@ def db(tmp_path: Path) -> Iterator[StateDB]:
 
 def test_claim_is_idempotent(db: StateDB) -> None:
     """F-ING-2: Genau der erste Claim gewinnt, jeder weitere meldet 'schon bekannt'."""
-    assert db.claim(MESSAGE_ID) is True
-    assert db.claim(MESSAGE_ID) is False
-    assert db.claim(MESSAGE_ID) is False
+    assert db.claim(MESSAGE_ID) is ClaimResult.CLAIMED
+    assert db.claim(MESSAGE_ID) is ClaimResult.DUPLICATE
+    assert db.claim(MESSAGE_ID) is ClaimResult.DUPLICATE
 
 
 def test_claim_sets_pending_and_first_seen(db: StateDB) -> None:
@@ -58,7 +59,7 @@ def test_claim_does_not_overwrite_final_status(db: StateDB) -> None:
     """Ein zweiter Abruf derselben Mail darf einen Endstatus nicht zurücksetzen."""
     db.claim(MESSAGE_ID)
     db.mark_status(MESSAGE_ID, MailState.DELIVERED)
-    assert db.claim(MESSAGE_ID) is False
+    assert db.claim(MESSAGE_ID) is ClaimResult.DUPLICATE
     record = db.get(MESSAGE_ID)
     assert record is not None
     assert record.status is MailState.DELIVERED
@@ -71,8 +72,73 @@ def test_was_seen(db: StateDB) -> None:
 
 
 def test_distinct_keys_are_independent(db: StateDB) -> None:
-    assert db.claim("<a@example.org>") is True
-    assert db.claim("<b@example.org>") is True
+    assert db.claim("<a@example.org>") is ClaimResult.CLAIMED
+    assert db.claim("<b@example.org>") is ClaimResult.CLAIMED
+
+
+# --- HC-10 / ADR-079: Kollision statt stiller Unterdrückung -------------------------------
+
+
+def test_hc10_same_key_other_content_is_a_collision(db: StateDB) -> None:
+    """Gleicher Dedupe-Key, anderer Inhalt ⇒ Kollision, nicht Duplikat."""
+    assert db.claim(MESSAGE_ID, content_hash="a" * 64) is ClaimResult.CLAIMED
+    assert db.claim(MESSAGE_ID, content_hash="b" * 64) is ClaimResult.COLLISION
+
+
+def test_hc10_same_key_same_content_stays_a_duplicate(db: StateDB) -> None:
+    """F-ING-2 ist unberührt: dieselbe Mail zweimal bleibt ein Duplikat."""
+    assert db.claim(MESSAGE_ID, content_hash="a" * 64) is ClaimResult.CLAIMED
+    assert db.claim(MESSAGE_ID, content_hash="a" * 64) is ClaimResult.DUPLICATE
+
+
+def test_hc10_unknown_content_hash_never_raises_a_collision(db: StateDB) -> None:
+    """Ohne Vergleichswert ist eine Kollision nicht beweisbar — dann gilt Duplikat.
+
+    Das betrifft Zeilen aus einer Datenbank vor Schema-Version 3 und Aufrufer, die den
+    Inhalt nicht kennen; ein Fehlalarm wäre hier die schlechtere Antwort.
+    """
+    assert db.claim(MESSAGE_ID) is ClaimResult.CLAIMED
+    assert db.claim(MESSAGE_ID, content_hash="b" * 64) is ClaimResult.DUPLICATE
+    assert db.claim("<zweite@example.org>", content_hash="a" * 64) is ClaimResult.CLAIMED
+    assert db.claim("<zweite@example.org>") is ClaimResult.DUPLICATE
+
+
+def test_hc10_derived_collision_key_is_stable_and_content_bound() -> None:
+    first = StateDB.derived_collision_key(MESSAGE_ID, "a" * 64)
+    assert first == StateDB.derived_collision_key(MESSAGE_ID, "a" * 64)
+    assert first != StateDB.derived_collision_key(MESSAGE_ID, "b" * 64)
+    assert first != StateDB.derived_collision_key("<other@example.org>", "a" * 64)
+    assert first.startswith("collision:")
+
+
+def test_hc10_content_hash_is_not_stored_in_plain_text_next_to_the_key(
+    tmp_path: Path,
+) -> None:
+    """Auch das zweite Merkmal ist ein Hash — kein Mail-Inhalt in der Datei (I5/NF-5)."""
+    path = tmp_path / "state.db"
+    with StateDB(path) as database:
+        database.claim(MESSAGE_ID, content_hash=dedupe_hash("Mail-Inhalt"))
+    content = path.read_bytes()
+    assert b"Mail-Inhalt" not in content
+    assert MESSAGE_ID.encode() not in content
+
+
+def test_hc10_schema_version_two_database_is_migrated_additively(tmp_path: Path) -> None:
+    """Version 2 ⇒ 3: `content_hash` wird ergänzt, bestehende Zeilen bleiben unverändert."""
+    path = tmp_path / "state.db"
+    with StateDB(path) as database:
+        database.claim(MESSAGE_ID, content_hash="a" * 64)
+        database.mark_status(MESSAGE_ID, MailState.DELIVERED)
+        # Zustand einer Version-2-Datei nachstellen: Spalte weg, Version zurück.
+        database._conn.execute("ALTER TABLE seen_mails DROP COLUMN content_hash")
+        database.meta_set("schema_version", "2")
+
+    with StateDB(path) as database:
+        assert database.meta_get("schema_version") == str(SCHEMA_VERSION)
+        record = database.get(MESSAGE_ID)
+        assert record is not None and record.status is MailState.DELIVERED
+        # Alte Zeile ohne Inhaltsmerkmal ⇒ Duplikat, kein Kollisionsalarm.
+        assert database.claim(MESSAGE_ID, content_hash="b" * 64) is ClaimResult.DUPLICATE
 
 
 # --- Statusübergänge ----------------------------------------------------------------------
@@ -222,9 +288,9 @@ def test_reopening_keeps_state(tmp_path: Path) -> None:
     """Wiederanlauf nach Prozess-Ende erkennt bereits gesehene Mails (F-ING-2)."""
     path = tmp_path / "state.db"
     with StateDB(path) as first:
-        assert first.claim(MESSAGE_ID) is True
+        assert first.claim(MESSAGE_ID) is ClaimResult.CLAIMED
     with StateDB(path) as second:
-        assert second.claim(MESSAGE_ID) is False
+        assert second.claim(MESSAGE_ID) is ClaimResult.DUPLICATE
 
 
 def test_foreign_schema_version_is_rejected(tmp_path: Path) -> None:

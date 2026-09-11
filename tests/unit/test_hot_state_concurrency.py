@@ -24,6 +24,7 @@ import pytest
 
 from maildigest.state.db import (
     SCHEMA_VERSION,
+    ClaimResult,
     MailState,
     StateDB,
     StateError,
@@ -37,8 +38,8 @@ def test_two_connections_claim_the_same_mail_only_once(tmp_path: Path) -> None:
     """Zwei offene Verbindungen auf derselben Datei: genau ein `claim` gewinnt (F-ING-2)."""
     path = tmp_path / "state.db"
     with StateDB(path) as first, StateDB(path) as second:
-        assert first.claim("<doppelt@example>") is True
-        assert second.claim("<doppelt@example>") is False
+        assert first.claim("<doppelt@example>") is ClaimResult.CLAIMED
+        assert second.claim("<doppelt@example>") is ClaimResult.DUPLICATE
         assert second.was_seen("<doppelt@example>") is True
 
 
@@ -46,7 +47,7 @@ def test_many_threads_claim_the_same_mail_only_once(tmp_path: Path) -> None:
     """12 Threads mit je eigener Verbindung — genau einer darf verarbeiten."""
     path = tmp_path / "state.db"
     StateDB(path).close()  # Schema einmal anlegen, dann gleichzeitig zugreifen
-    results: list[bool] = []
+    results: list[ClaimResult] = []
     errors: list[BaseException] = []
     barrier = threading.Barrier(12)
 
@@ -65,7 +66,9 @@ def test_many_threads_claim_the_same_mail_only_once(tmp_path: Path) -> None:
         thread.join(timeout=30)
 
     assert errors == [], f"Nebenläufigkeitsfehler: {errors!r}"
-    assert results.count(True) == 1, f"genau ein Gewinner erwartet, war: {results!r}"
+    assert results.count(ClaimResult.CLAIMED) == 1, (
+        f"genau ein Gewinner erwartet, war: {results!r}"
+    )
     assert len(results) == 12
 
 
@@ -110,9 +113,10 @@ def test_two_processes_claim_the_same_mail_only_once(tmp_path: Path) -> None:
     StateDB(path).close()
     script = (
         "import sys\n"
-        "from maildigest.state.db import StateDB\n"
+        "from maildigest.state.db import ClaimResult, StateDB\n"
         "with StateDB(sys.argv[1]) as db:\n"
-        "    print('1' if db.claim('<prozess@example>') else '0')\n"
+        "    won = db.claim('<prozess@example>') is ClaimResult.CLAIMED\n"
+        "    print('1' if won else '0')\n"
     )
     outcomes = [
         subprocess.run(

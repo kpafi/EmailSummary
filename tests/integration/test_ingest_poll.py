@@ -14,6 +14,8 @@ Schwerpunkte:
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -31,7 +33,7 @@ from maildigest.ingest.imap_client import (
 )
 from maildigest.models import DigestMessage, FailureNotice, RawMail, Summary
 from maildigest.pipeline import Delivered, FailedNotice, PipelineResult, QueuedLow
-from maildigest.state.db import MailState, StateDB
+from maildigest.state.db import SCHEMA_VERSION, MailState, StateDB, dedupe_hash
 
 
 def make_mail(message_id: str, *, subject: str = "Test") -> bytes:
@@ -288,6 +290,109 @@ def test_two_distinct_mails_without_message_id_are_not_confused(db: StateDB) -> 
     poll_once(make_client(box), db, processor)
 
     assert len(processor.seen) == 2
+
+
+# --- HC-10 / ADR-079: kollidierende Message-ID --------------------------------------------------
+
+
+def test_hc10_forged_message_id_does_not_suppress_the_real_mail(db: StateDB) -> None:
+    """Angreifer-Mail zuerst, echte Mail mit derselben Message-ID danach ⇒ beide kommen an.
+
+    Der Dedupe-Key ist ein frei wählbarer Header. Vor ADR-079 hat die zuerst eingetroffene
+    Mail jede spätere mit gleicher Message-ID still verschluckt — genau das Angriffsziel.
+    """
+    attacker = make_mail("rechnung-4711@bank", subject="Ihre Rechnung")
+    genuine = make_mail("rechnung-4711@bank", subject="Ihre echte Rechnung")
+    box = FakeMailBox([make_message(attacker, "1"), make_message(genuine, "2")])
+    processor = RecordingProcessor()
+
+    stats = poll_once(make_client(box), db, processor)
+
+    assert (stats.processed, stats.duplicates) == (2, 0)
+    assert [raw.id_collision for raw in processor.seen] == [False, True]
+    assert processor.seen[1].dedupe_key.startswith("collision:")
+    assert processor.seen[1].dedupe_key != processor.seen[0].dedupe_key
+
+
+def test_hc10_collision_is_logged_with_hashes_only(
+    db: StateDB, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Das Kollisions-Ereignis ist sichtbar (WARNING) und trägt nur gekürzte Hashes (I5)."""
+    box = FakeMailBox(
+        [
+            make_message(make_mail("gleich@bank", subject="A"), "1"),
+            make_message(make_mail("gleich@bank", subject="B"), "2"),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="maildigest.ingest"):
+        poll_once(make_client(box), db, RecordingProcessor())
+
+    records = [record for record in caplog.records if record.message == "mail_id_collision"]
+    assert len(records) == 1
+    assert "gleich@bank" not in caplog.text
+    assert len(records[0].mail) == 12  # type: ignore[attr-defined]
+    assert len(records[0].collision_mail) == 12  # type: ignore[attr-defined]
+
+
+def test_hc10_identical_mail_twice_is_still_a_duplicate(db: StateDB) -> None:
+    """Gleicher Key **und** gleicher Inhalt bleibt ein Duplikat — F-ING-2 ist unberührt."""
+    raw = make_mail("a")
+    box = FakeMailBox([make_message(raw, "1"), make_message(raw, "2")])
+    processor = RecordingProcessor()
+
+    stats = poll_once(make_client(box), db, processor)
+
+    assert (stats.processed, stats.duplicates) == (1, 1)
+
+
+def test_hc10_collision_key_is_stable_across_polls(db: StateDB) -> None:
+    """Die kollidierende Mail wird beim zweiten Abruf wieder als Duplikat erkannt."""
+    attacker = make_mail("gleich@bank", subject="A")
+    genuine = make_mail("gleich@bank", subject="B")
+    box = FakeMailBox([make_message(attacker, "1"), make_message(genuine, "2")])
+    processor = RecordingProcessor()
+    client = make_client(box)
+
+    poll_once(client, db, processor)
+    second = poll_once(client, db, processor)
+
+    assert len(processor.seen) == 2
+    assert (second.processed, second.duplicates) == (0, 2)
+
+
+def test_hc10_state_of_schema_version_two_migrates_without_collision_alarm(
+    tmp_path: Path,
+) -> None:
+    """Eine Datenbank der Version 2 wird additiv migriert; alte Zeilen bleiben Duplikate.
+
+    Zeilen ohne `content_hash` heissen "Inhalt unbekannt" — ohne Vergleichswert ist eine
+    Kollision nicht beweisbar, und ein Fehlalarm nach dem Update wäre die schlechtere
+    Antwort als das bisherige Verhalten.
+    """
+    path = tmp_path / "state.db"
+    legacy_hash = dedupe_hash("<alt@example.org>")
+    with sqlite3.connect(path) as legacy:  # Version-2-Fixture von Hand, ohne content_hash
+        legacy.executescript(
+            "CREATE TABLE seen_mails ("
+            "  message_id_hash TEXT PRIMARY KEY, first_seen_at TEXT NOT NULL,"
+            "  status TEXT NOT NULL, error_class TEXT,"
+            "  retry_count INTEGER NOT NULL DEFAULT 0);"
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+            "INSERT INTO meta (key, value) VALUES ('schema_version', '2');"
+            "INSERT INTO seen_mails (message_id_hash, first_seen_at, status)"
+            f" VALUES ('{legacy_hash}', '2026-08-01T00:00:00+00:00',"
+            "         'delivered');"
+        )
+    legacy.close()
+
+    box = FakeMailBox([make_message(make_mail("alt", subject="neuer Inhalt"), "1")])
+    processor = RecordingProcessor()
+    with StateDB(path) as database:
+        assert database.meta_get("schema_version") == str(SCHEMA_VERSION)
+        stats = poll_once(make_client(box), database, processor)
+
+    assert (stats.processed, stats.duplicates) == (0, 1)
+    assert processor.seen == []
 
 
 # --- CT-9/CT-12: Nachbehandlung ----------------------------------------------------------------

@@ -146,3 +146,33 @@ class TestKennzeichnung:
         result, collector = scrubbed("https://example.com/x")
         assert result == "[Link #1: example.com]"
         assert collector.links_removed == 1
+
+    def test_hc8_ein_pass_schneidet_nie_in_einen_platzhalter(self) -> None:
+        """HC-8: Kein U+0000 überlebt den Scrub, und jeder Marker bleibt zugeordnet.
+
+        `_RE_MAILTO` deckelt bei 128 Zeichen und schnitt deshalb mitten in den
+        ``\\x00<n>\\x00``-Platzhalter, den der `http`-Pass vorher gesetzt hatte. Die
+        Rück-Ersetzung fand ihr Token nicht mehr: Ein rohes Steuerzeichen erreichte die
+        zugestellte Nachricht, und der Marker zum `mailto`-Fund ging verloren.
+        """
+        collector = LinkCollector()
+        result = collector.scrub("mailto:" + "a" * 127 + "http://boese.example")
+        assert "\x00" not in result
+        assert collector.links_removed == 2
+        assert "[Link #1: boese.example]" in result
+        assert "[Mail #2:" in result
+
+    def test_hc8_lange_wiederholungslaeufe_lassen_kein_steuerzeichen_zurueck(self) -> None:
+        """Dieselbe Zusage über eine Reihe langer Wiederholungsläufe (≥ 128 Zeichen)."""
+        for length in (120, 127, 128, 129, 200, 400):
+            collector = LinkCollector()
+            payload = "mailto:" + "a" * length + "http://boese.example"
+            assert "\x00" not in collector.scrub(payload), f"Länge {length}"
+
+    def test_hc7_markup_faellt_aus_der_defangten_form(self) -> None:
+        """HC-7: Die defangte Form trägt kein Messenger-Markup mehr — `[`/`]` bleiben."""
+        collector = LinkCollector()
+        collector.scrub("https://ok.example/?b=*fett*&c=||spoiler||&d=~~weg~~&e=`code`")
+        entry = collector.links_found[0]
+        assert not set("`*|~\\") & set(entry), entry
+        assert entry.startswith("#1: hxxps[:]//ok[.]example")

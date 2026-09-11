@@ -36,11 +36,14 @@ from maildigest.pipeline import Messenger as PipelineMessenger
 from maildigest.state.db import OutboxItem, StateDB
 
 __all__ = [
+    "DELIVERY_AGE_PLAUSIBLE_SECONDS",
+    "DELIVERY_AGE_SLACK_SECONDS",
     "DELIVERY_BACKOFF_SECONDS",
     "DELIVERY_DEADLINE_SECONDS",
     "DELIVERY_MAX_ATTEMPTS",
     "DeliveryStats",
     "OutboxMessenger",
+    "age_is_plausible",
     "next_delivery_delay",
 ]
 
@@ -55,6 +58,15 @@ DELIVERY_BACKOFF_SECONDS: Final = (60.0, 300.0, 900.0, 2100.0)
 
 #: Härtere Schranke: Nach einer Stunde ab dem ersten Einreihen wird aufgegeben.
 DELIVERY_DEADLINE_SECONDS: Final = 3600.0
+
+#: Harte Obergrenze, bis zu der ein gemessenes Alter überhaupt als Wartezeit gelten kann
+#: (HC-25). Fünf Versuche über eine Stunde erzeugen nie ein Alter von 24 Stunden.
+DELIVERY_AGE_PLAUSIBLE_SECONDS: Final = 86400.0
+
+#: Zuschlag auf die planmäßig verstrichene Wartezeit, innerhalb dessen ein Alter noch als
+#: echt gilt (HC-25). Er deckt ab, dass `flush()` nur im Zyklus des Runners läuft und ein
+#: fälliger Versuch deshalb später stattfindet als geplant.
+DELIVERY_AGE_SLACK_SECONDS: Final = 3600.0
 
 #: `kind`-Kennung einer Nachricht des täglichen Sammel-Digests.
 LOW_DIGEST_KIND: Final = "low_digest"
@@ -96,6 +108,34 @@ def _single_part(message: DigestMessage, part: str) -> DigestMessage:
         is_warning=message.is_warning,
         dedupe_key=message.dedupe_key,
     )
+
+
+def age_is_plausible(age_seconds: float, attempts_used: int) -> bool:
+    """Kann dieses Alter aus echtem Zeitablauf stammen (HC-25)?
+
+    `age = now - first_queued_at` ist die Differenz zweier Wanduhr-Werte und damit gegen
+    Sprünge der Systemuhr wehrlos (NTP-Erstsynchronisation ohne RTC, VM-Resume,
+    Zeitzonen-Unfall). Ein Alter ist genau dann glaubhaft, wenn es (a) unter der harten
+    24-Stunden-Grenze liegt und (b) zum Retry-Plan passt: Nach `attempts_used`
+    Fehlversuchen kann planmäßig höchstens die Summe der bis dahin eingelegten Wartezeiten
+    verstrichen sein — plus :data:`DELIVERY_AGE_SLACK_SECONDS`, weil `flush()` nur im
+    Zyklus des Runners läuft.
+
+    Nur ein glaubhaftes Alter darf die Stundenfrist auslösen. Sonst entscheidet allein der
+    Versuchszähler — die Zusage „fünf Versuche" gilt dann weiter, die Zusage „über höchstens
+    eine Stunde" nicht mehr (eine Uhr, die springt, kennt keine Stunde).
+
+    Args:
+        age_seconds: Gemessenes Alter, bereits auf ``>= 0`` geklemmt.
+        attempts_used: Zahl der Versuche inklusive des gerade gescheiterten.
+
+    Returns:
+        ``True``, wenn die Stundenfrist auf diesem Alter rechnen darf.
+    """
+    if age_seconds > DELIVERY_AGE_PLAUSIBLE_SECONDS:
+        return False
+    scheduled = sum(DELIVERY_BACKOFF_SECONDS[: max(0, attempts_used - 1)])
+    return age_seconds <= scheduled + DELIVERY_AGE_SLACK_SECONDS
 
 
 def next_delivery_delay(attempts: int) -> float:
@@ -276,8 +316,13 @@ class OutboxMessenger:
         """Zählt den Fehlversuch, plant den nächsten — oder gibt endgültig auf."""
         now = self._now()
         used = attempts + 1
-        age = (now - first_queued_at).total_seconds()
-        expired = used >= DELIVERY_MAX_ATTEMPTS or age >= DELIVERY_DEADLINE_SECONDS
+        # HC-25: Das Alter stammt aus der Wanduhr und kann springen — nach unten (negativ)
+        # wie nach oben. Geklemmt wird beides, gerechnet wird nur mit einem glaubhaften Wert.
+        age = max(0.0, (now - first_queued_at).total_seconds())
+        age_plausible = age_is_plausible(age, used)
+        expired = used >= DELIVERY_MAX_ATTEMPTS or (
+            age_plausible and age >= DELIVERY_DEADLINE_SECONDS
+        )
         if expired:
             self._db.outbox_done(item_id)
             if message_id_hash is not None:
@@ -304,6 +349,9 @@ class OutboxMessenger:
             remaining_parts=remaining,
             importance=message.importance if message is not None else None,
             is_warning=message.is_warning if message is not None else None,
+            # Bei unplausiblem Alter den Einreih-Zeitpunkt auf die neue Zeitbasis heben,
+            # sonst bliebe die Frist für immer verrechnet (HC-25).
+            first_queued_at=None if age_plausible else now,
         )
         logger.warning(
             "delivery_deferred",
@@ -314,6 +362,7 @@ class OutboxMessenger:
                 "error": type(exc).__name__,
                 "confirmed_parts": confirmed_parts,
                 "remaining_parts": len(remaining) if remaining is not None else None,
+                "clock_skew": not age_plausible,
             },
         )
         return "deferred"

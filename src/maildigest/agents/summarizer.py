@@ -43,6 +43,7 @@ __all__ = [
     "HEADLINE_MAX_CHARS",
     "REDACTION_MARKER",
     "SummarizerAgent",
+    "clamp_headline",
     "describe_without_body",
     "detect_injection_evidence",
     "enforce_output_policy",
@@ -255,26 +256,50 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def _attachments_noun(count: int) -> str:
+    """Singular/Plural für „attachment(s)" — sonst steht dort „1 blocked attachments"."""
+    return "attachment" if count == 1 else "attachments"
+
+
 def describe_without_body(mail: SanitizedMail) -> str:
     """Deterministischer Ersatztext, wenn keine Zusammenfassung übrig bleibt.
 
     Deckt insbesondere den Fall „Mail ohne darstellbaren Text, nur geblockte Anhänge" ab
     (WP3-Bericht (g)5): Der Nutzer soll trotzdem erfahren, dass und was angehängt war.
     Die verwendeten Werte stammen ausschließlich aus dem Sanitizer, nicht aus dem LLM.
+
+    „Mail without displayable content" wird **nicht** behauptet, wenn aus Anhängen Text
+    gelesen wurde (HC-2): Der Inhalt ist dann vorhanden, er steht nur woanders — im
+    Modellbetrieb in den `attachment_summaries`, ohne Modell in den Auszugszeilen.
     """
     blocked = [item for item in mail.attachments if not item.processed]
+    readable = len(mail.attachment_texts)
+    if readable:
+        head = f"No mail body; {readable} {_attachments_noun(readable)} with readable text"
+    else:
+        head = "Mail without displayable content"
     if not blocked:
-        return "Mail ohne darstellbaren Inhalt."
+        return f"{head}."
     listed = ", ".join(
         f"{item.filename_sanitized} ({prompts.format_size(item.size_bytes)})"
         for item in blocked[:_MAX_LISTED_BLOCKED]
     )
     rest = len(blocked) - len(blocked[:_MAX_LISTED_BLOCKED])
-    suffix = f" und {rest} weitere" if rest > 0 else ""
-    return (
-        f"Mail without displayable content, {len(blocked)} blocked attachments: "
-        f"{listed}{suffix}."
-    )
+    suffix = f" and {rest} more" if rest > 0 else ""
+    return f"{head}, {len(blocked)} blocked {_attachments_noun(len(blocked))}: {listed}{suffix}."
+
+
+def clamp_headline(text: str, limit: int = HEADLINE_MAX_CHARS) -> str:
+    """Kürzt eine Kopfzeile auf `limit` Zeichen; gekürzt wird mit „…" (SPEC-CLI §6).
+
+    Eigene Funktion, weil die Kürzung an zwei Stellen gebraucht wird: in der Nachkontrolle
+    einer Modellausgabe **und** vor der `Summary`-Konstruktion im Modus ohne Sprachmodell
+    (HC-1). Dort läuft die Nachkontrolle zu spät — Pydantic lehnt eine zu lange Headline
+    schon bei der Konstruktion ab und die Pipeline bricht fail-closed ab.
+    """
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 def _fallback_headline(mail: SanitizedMail) -> str:
@@ -282,9 +307,7 @@ def _fallback_headline(mail: SanitizedMail) -> str:
     subject = _one_line(mail.subject)
     if not subject:
         return "Mail ohne Betreff"
-    if len(subject) > HEADLINE_MAX_CHARS:
-        return subject[: HEADLINE_MAX_CHARS - 1] + "…"
-    return subject
+    return clamp_headline(subject)
 
 
 def enforce_output_policy(summary: Summary, mail: SanitizedMail) -> Summary:
@@ -311,9 +334,7 @@ def enforce_output_policy(summary: Summary, mail: SanitizedMail) -> Summary:
     headline = _one_line(headline)
     if not headline:
         headline = _fallback_headline(mail)
-    if len(headline) > HEADLINE_MAX_CHARS:
-        headline = headline[: HEADLINE_MAX_CHARS - 1].rstrip() + "…"
-    summary.headline = headline
+    summary.headline = clamp_headline(headline)
 
     summary_text, hit = scrub_text(summary.summary_text)
     suspicious = suspicious or hit

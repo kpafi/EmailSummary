@@ -33,6 +33,8 @@ from maildigest.output.sanitizer import (
     TELEGRAM_MAX_PART_CHARS,
 )
 from maildigest.pipeline import OutputComposer
+from maildigest.sanitize.attachments import sanitize_filename
+from maildigest.sanitize.links import LinkCollector
 
 
 def make_mail(**overrides: Any) -> SanitizedMail:
@@ -479,6 +481,61 @@ def test_ct14_die_fussnote_enthaelt_kein_lebendes_ziel() -> None:
     joined = "\n".join(message.parts)
     assert "://" not in joined
     assert "www." not in joined
+
+
+def test_hc7_markdown_in_der_fussnote_wird_neutralisiert() -> None:
+    """HC-7: Auch die Fußnote ist Teil derselben Nachricht — Markdown rendert dort nicht.
+
+    Bericht-Repro: zwei Body-Zeilen mit ```` ``` ````, ``*fett*``, ``||spoiler||``,
+    ``~~weg~~`` und ``` `code` ``` in der Query. Auf Discord öffnete das unpaarige
+    ```` ``` ```` einen Codeblock, der alle folgenden Fußnotenzeilen verschluckte.
+    `final_guard` kennt bewusst kein `_RE_MARKUP` (ADR-062), also fällt die Entscheidung
+    in `sanitize/links._defang`.
+    """
+    collector = LinkCollector()
+    collector.scrub("Eins https://ok.example/?a=```diff ENDE")
+    collector.scrub(
+        "Zwei https://ok.example/?b=*fett*&c=||spoiler||&d=~~weg~~&e=`code` ENDE"
+    )
+    mail = make_mail(links_found=collector.links_found)
+    text = compose_text(DigestComposer(link_footnote=True), mail, make_summary(), make_verdict())
+
+    assert "Link footnote (defanged):" in text
+    footnote = text.split("Link footnote (defanged):", 1)[1]
+    assert not set("`*|~\\") & set(footnote), f"Markup in der Fußnote: {footnote!r}"
+    # Die Defang-Klammern überleben — ohne `[` und `]` zerfielen `[.]`/`[:]`.
+    assert "hxxps[:]//ok[.]example" in footnote
+
+
+def test_hc22_gekuerzter_dateiname_zeigt_kuerzung_und_endung() -> None:
+    """HC-22/E7: Der 📎-Name ist mittig gekürzt, endet auf die Endung und bleibt ≤ 80.
+
+    Vorher schnitt `sanitize_filename` hart auf 80 — der Nutzer sah weder, dass gekürzt
+    wurde, noch die (bei geblockten Anhängen sicherheitsrelevante) Endung.
+    """
+    name = sanitize_filename("a" * 120 + ".exe")
+    mail = make_mail(
+        attachments=[
+            AttachmentInfo(
+                filename_sanitized=name,
+                declared_mime="application/octet-stream",
+                size_bytes=3,
+                detected_kind="unknown",
+                processed=False,
+            )
+        ]
+    )
+    text = compose_text(DigestComposer(), mail, make_summary(), make_verdict())
+    assert len(name) <= 80
+    line = next(row for row in text.splitlines() if row.startswith("📎"))
+    shown = line.split("Not processed: ", 1)[1].rsplit(" (", 1)[0]
+    # `final_guard` bricht den Punkt jedes domainartigen Tokens — auch in Dateinamen
+    # (ADR-036). Die Endung bleibt damit sichtbar, sie steht nur hinter `[.]`.
+    assert shown.endswith("[.]exe")
+    assert "..." in shown, f"keine sichtbare Kürzung: {shown!r}"
+    # NFKC bildet U+2026 auf drei Punkte ab; deshalb rechnet `sanitize_filename` mit
+    # dieser Reserve und der Composer kürzt nicht ein zweites Mal (HC-22).
+    assert not shown.endswith(" …")
 
 
 def test_ct14_from_config_reicht_die_option_durch() -> None:
