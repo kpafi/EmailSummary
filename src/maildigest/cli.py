@@ -172,7 +172,7 @@ _TELEGRAM_ACCEPT_COMMANDS_DEFAULT: bool = bool(
 class CliError(Exception):
     """Abbruch mit definiertem Exit-Code und einer Meldung für `stderr`.
 
-    Die Meldung ist deutsch, nennt nach Möglichkeit den nächsten Schritt und enthält
+    Die Meldung ist englisch (ADR-083), nennt nach Möglichkeit den nächsten Schritt und enthält
     niemals ein Secret (I5).
     """
 
@@ -317,11 +317,11 @@ class Console:
         """Ja/Nein-Frage; im nicht-interaktiven Modus gilt der Default."""
         if not self.interactive:
             return default
-        hint = "J/n" if default else "j/N"
+        hint = "Y/n" if default else "y/N"
         answer = self._readline(f"{prompt} [{hint}]: ").lower()
         if not answer:
             return default
-        return answer in {"j", "ja", "y", "yes"}
+        return answer in {"y", "yes"}
 
     def choose(self, prompt: str, options: Sequence[str], *, default_index: int = 0) -> int:
         """Lässt aus einer nummerierten Liste wählen und liefert den Index."""
@@ -357,7 +357,7 @@ def _isatty(stream: TextIO) -> bool:
 def _safe_name(value: str, *, max_chars: int = 80) -> str:
     """Reduziert einen vom Server gelieferten Namen auf eine Zeichen-Allowlist (ADR-055)."""
     cleaned = _SAFE_NAME_RE.sub("·", value.replace("\n", " ").replace("\r", " ")).strip()
-    return cleaned[:max_chars] if cleaned else "(namenlos)"
+    return cleaned[:max_chars] if cleaned else "(unnamed)"
 
 
 def _terminal_text(text: str) -> str:
@@ -1685,12 +1685,12 @@ def _report_test_result(
 
 
 def _parts_label(parts: Sequence[str]) -> str:
-    """`1 Teil` / `3 Teile` — die Nachricht wird auf das Messenger-Limit gesplittet."""
+    """`1 part` / `3 parts` — die Nachricht wird auf das Messenger-Limit gesplittet."""
     return "1 part" if len(parts) == 1 else f"{len(parts)} parts"
 
 
 def _count(number: int, singular: str, plural: str) -> str:
-    """`1 Anhang` / `2 Anhänge` — deutsche Zählform für die Zeile 4/5 (SPEC-CLI §4)."""
+    """`1 attachment` / `2 attachments` — Zählform für die Zeile 4/5 (SPEC-CLI §4)."""
     return f"{number} {singular}" if number == 1 else f"{number} {plural}"
 
 
@@ -1990,7 +1990,7 @@ def main(
         streams_err.write(f"Error: {_terminal_text(str(exc))}\n")
         return exc.code
     except KeyboardInterrupt:
-        streams_err.write("Abgebrochen.\n")
+        streams_err.write("Error: Aborted.\n")
         return EXIT_ERROR
     except (ConfigError, StateError, IngestError, MessengerError, LLMError) as exc:
         # Sicherheitsnetz: Eine hier durchgerutschte Ausnahme darf keinen Traceback mit

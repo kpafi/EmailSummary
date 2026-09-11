@@ -51,9 +51,9 @@ class DiscordMessenger:
         """
         url = webhook_url.get_secret_value().strip()
         if not url:
-            raise ValueError("Discord-Webhook-URL fehlt.")
+            raise ValueError("Discord webhook URL is missing.")
         if not url.startswith(("http://", "https://")):
-            raise ValueError("Discord-Webhook-URL muss mit http:// oder https:// beginnen.")
+            raise ValueError("Discord webhook URL has to start with http:// or https://.")
         self._webhook_url = webhook_url
         self._timeout = timeout
         self._max_attempts = max_attempts

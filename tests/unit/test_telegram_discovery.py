@@ -60,7 +60,7 @@ def test_uebernimmt_keine_namen_aus_dem_chat() -> None:
 def test_unbekannter_chat_typ_wird_neutralisiert() -> None:
     payload = {"result": [update({"id": 5, "type": "<script>alert(1)</script>"})]}
     found = discover_chat_ids(token=TOKEN, client=client_for(responder(payload)))
-    assert found == [ChatCandidate(chat_id="5", chat_type="unbekannt")]
+    assert found == [ChatCandidate(chat_id="5", chat_type="unknown")]
 
 
 def test_dedupliziert_und_haelt_die_reihenfolge() -> None:

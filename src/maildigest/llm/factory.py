@@ -111,8 +111,8 @@ def build_provider_from_settings(
     if provider == "anthropic":
         if api_key is None:
             raise ConfigError(
-                "[llm] api_key fehlt: Der Anthropic-Provider braucht einen API-Key. "
-                "Setze ihn in der Konfigurationsdatei oder über die Umgebungsvariable "
+                "[llm] api_key is missing: the Anthropic provider needs an API key. "
+                "Set it in the configuration file or through the environment variable "
                 "MAILDIGEST_LLM_API_KEY."
             )
         return AnthropicProvider(

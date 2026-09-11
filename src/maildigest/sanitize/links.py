@@ -188,7 +188,7 @@ def _host_of(url: str) -> str:
     # strippen (die defangte Vollform in `links_found` behält das Präfix).
     if cleaned.startswith("www.") and cleaned.count(".") >= 2:
         cleaned = cleaned[4:]
-    return cleaned or "unbekannt"
+    return cleaned or "unknown"
 
 
 def _defang(url: str) -> str:
@@ -261,10 +261,10 @@ class LinkCollector:
         def replace_mailto(match: re.Match[str]) -> str:
             core, tail = _split_trailing(match.group(0))
             address = _condense(core).split(":", 1)[-1].lower()
-            host = address.rsplit("@", 1)[-1] if "@" in address else "unbekannt"
+            host = address.rsplit("@", 1)[-1] if "@" in address else "unknown"
             cleaned_host, _ = clean_text(host)
             marker = self._record(
-                cleaned_host or "unbekannt", _defang(f"mailto:{address}"), kind="Mail"
+                cleaned_host or "unknown", _defang(f"mailto:{address}"), kind="Mail"
             )
             return stash(marker) + tail
 

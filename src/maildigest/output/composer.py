@@ -123,7 +123,7 @@ def _format_size(size_bytes: int) -> str:
 def _format_date(value: datetime | None) -> str:
     """`TT.MM. HH:MM` oder ein Platzhalter, wenn der Date-Header fehlte/kaputt war."""
     if value is None:
-        return "Datum unbekannt"
+        return "date unknown"
     return f"{value:%d.%m. %H:%M}"
 
 
@@ -188,7 +188,7 @@ class DigestComposer:
 
         headline = scrub_field(
             summary.headline, collector=collector, max_chars=_MAX_HEADLINE_CHARS
-        ) or "(keine Zusammenfassung)"
+        ) or "(no summary)"
         tag = " [important]" if summary.importance == "high" else ""
         lines.append(f"📧 {_one_line(headline)}{tag}")
         lines.append(self._sender_line(mail))
@@ -365,13 +365,13 @@ class DigestComposer:
         return f"⚠️ SUSPECTED PHISHING: {joined}" if joined else "⚠️ SUSPECTED PHISHING"
 
     def _sender_line(self, mail: SanitizedMail) -> str:
-        """`Von: <Anzeigename> (<domain>) · <TT.MM. HH:MM>`."""
+        """`From: <Anzeigename> (<domain>) · <TT.MM. HH:MM>`."""
         display = _one_line(scrub_plain(mail.from_display, max_chars=_MAX_DISPLAY_CHARS))
         domain = _one_line(scrub_plain(mail.from_domain, max_chars=_MAX_DOMAIN_CHARS))
         if display and domain and display.lower() != domain.lower():
             sender = f"{display} ({domain})"
         else:
-            sender = display or domain or "unbekannt"
+            sender = display or domain or "unknown"
         return f"From: {sender} · {_format_date(mail.date)}"
 
     def _attachment_summary_lines(
@@ -388,11 +388,11 @@ class DigestComposer:
             )
             if not name and not content:
                 continue
-            lines.append(f"— {name or '(Datei)'}: {content or '(keine Zusammenfassung)'}")
+            lines.append(f"— {name or '(file)'}: {content or '(no summary)'}")
         return lines
 
     def _unprocessed_line(self, attachments: list[AttachmentInfo]) -> str:
-        """`📎 Nicht verarbeitet: rechnung.docx (34 KB), setup.exe (1,2 MB)` (F-SEC-4)."""
+        """`📎 Not processed: rechnung.docx (34 KB), setup.exe (1,2 MB)` (F-SEC-4)."""
         blocked = [item for item in attachments if not item.processed]
         if not blocked:
             return ""
@@ -413,7 +413,7 @@ class DigestComposer:
         verdict: CriticVerdict,
         collector: LinkCollector,
     ) -> str:
-        """`🔍 Hinweise: …` aus deterministischen Signalen + Injection-Flag (T1/T12)."""
+        """`🔍 Notes: …` aus deterministischen Signalen + Injection-Flag (T1/T12)."""
         hints: list[str] = []
         if summary.injection_suspected:
             hints.append("the mail contained instructions aimed at the AI (ignored)")
@@ -482,4 +482,4 @@ def _one_line(text: str) -> str:
 def _label(value: str) -> str:
     """Normalisiert eine Stufen-/Fehlerklassen-Kennung auf ein knappes ASCII-Label (I5)."""
     kept = [char if char.isalnum() or char in "_-" else " " for char in value[:64]]
-    return " ".join("".join(kept).split()) or "unbekannt"
+    return " ".join("".join(kept).split()) or "unknown"

@@ -115,7 +115,7 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `[forged data-block marker removed]` und in `forged_markers` gezählt — **vor** dem
   Tag-Strip, der ihn sonst spurlos löscht, HC-5) → Link-Scrub (`links.LinkCollector`, eine
   Instanz pro Mail: `#n` läuft über Body, Anhänge, Betreff, Anzeigename durch) → Tag-Strip
-  auch für Klartext → Gesamt-Klartext-Budget (`[gekürzt]`).
+  auch für Klartext → Gesamt-Klartext-Budget (`[truncated]`).
 - **Anhänge:** `attachments.detect_kind(declared_mime, data)` liefert
   `pdf|text|html|mismatch|unknown`; verarbeitet werden nur `text` (Datei) und `pdf`
   (Subprozess, `extract_pdf.extract_pdf_text(...) -> str | None`, `None` ⇒ unverarbeitet).
@@ -756,18 +756,23 @@ erweitert.
 ## 7. Nachrichtenformat (final festgeschrieben in WP7, `output/composer.py`)
 
 ```
-⚠️ PHISHING-VERDACHT: <risk_reasons, kommasepariert, max. 5>   ← nur bei phishing_risk = high
-📧 <headline> [wichtig]                                         ← Tag nur bei importance = high
-Von: <from_display> (<from_domain>) · <TT.MM. HH:MM>            ← ohne Anzeigename nur Domain;
-                                                                  ohne Date-Header „Datum unbekannt"
+⚠️ SUSPECTED PHISHING: <risk_reasons, kommasepariert, max. 5>   ← nur bei phishing_risk = high
+📧 <headline> [important]                                       ← Tag nur bei importance = high
+From: <from_display> (<from_domain>) · <TT.MM. HH:MM>           ← ohne Anzeigename nur Domain;
+                                                                  ohne Date-Header `date unknown`
 <summary_text>
 — <datei>: <1–2 Sätze je verarbeitetem Anhang>
-📎 Nicht verarbeitet: <datei (größe)>, … [und N weitere]        ← alle AttachmentInfo mit processed = false
-🔍 Hinweise: <Injection-Flag; Auth-Fails; Punycode; gemischte Schriftsysteme;
-              versteckter Text im HTML entfernt; HTML-Teil weicht vom Textteil ab;
-              Reply-To-/Return-Path-Abweichung; Text gekürzt; Kritiker-Gründe bei risk = low>
+📎 Not processed: <datei (größe)>, … [and N more]               ← alle AttachmentInfo mit processed = false
+🔍 Notes: <Injection-Flag; verschlüsselt; Message-ID-Kollision; Auth-Fails; Punycode;
+           gemischte Schriftsysteme; HTML-Teil weicht vom Textteil ab; versteckter Text im
+           HTML entfernt; Reply-To-/Return-Path-Abweichung; Text gekürzt;
+           Kritiker-Gründe bei risk = low>
 <Link-Fußnote (defanged)>                                       ← nur bei [links] footnote = true
 ```
+
+Der **Rahmen ist englisch und sprachunabhängig** (ADR-083); `[general] language` steuert nur
+die vom Modell gefüllten Felder. Der wörtliche Vertrag steht in docs/SPEC-CLI.md §6 und ist
+über `tests/unit/test_hc14_spec_literals.py` maschinell an den Composer gebunden.
 
 Die **Präfixe dieses Formats sind reserviert**: Der Composer fügt sie nach dem Feld-Scrub an,
 und `output/sanitizer.neutralize_markup()` verhindert, dass modellgelieferter Text sie am
@@ -794,11 +799,11 @@ Verbindliche Zusatzregeln (WP7):
 4. Fail-closed-Notiz (`compose_failure`, F-OPS-3) — fünf Zeilen, ausschließlich Metadaten:
 
    ```
-   ⚠️ Mail konnte nicht sicher verarbeitet werden — kein Inhalt zugestellt.
-   Von: <from_domain>
-   Betreff: <not-sanitisierter Betreff>
-   Stufe: <stage> · Grund: <reason_class>
-   Zum Lesen ins echte Postfach schauen.
+   ⚠️ This mail could not be processed safely — no content delivered.
+   From: <from_domain>
+   Subject: <not-sanitisierter Betreff>
+   Stage: <stage> · Reason: <reason_class>
+   Open your real mailbox to read it.
    ```
 
    `importance = normal`, `is_warning = false`; Stufe und Grund werden auf
@@ -809,12 +814,12 @@ gruppiert nach Kategorie (größte Gruppe zuerst), je Mail eine Zeile
 `• <headline> (<from_domain>)`:
 
 ```
-🗂 12 unwichtige Mails: 8 newsletter, 3 benachrichtigung, 1 sonstiges
+🗂 12 low-priority mails: 8 newsletter, 3 benachrichtigung, 1 other
 
 newsletter (8):
 • Wochenrückblick KW 36 (news[.]example[.]org)
 …
-… und N weitere                                  ← ab 60 gelisteten Mails
+... and N more                                   ← ab 60 gelisteten Mails
 ```
 
 Die Nachricht entsteht wie jede andere über `_finalize()` (Nachbrenner + Split),

@@ -153,7 +153,7 @@ def test_banner_without_reasons_stays_readable() -> None:
 def test_missing_date_is_named_explicitly() -> None:
     """Ohne Date-Header steht ein Platzhalter statt eines erfundenen Datums."""
     text = compose_text(DigestComposer(), make_mail(date=None), make_summary(), make_verdict())
-    assert "Datum unbekannt" in text
+    assert "date unknown" in text
 
 
 def test_attachment_summaries_and_unprocessed_line() -> None:
@@ -260,7 +260,7 @@ def test_long_message_is_split_into_valid_parts() -> None:
 def test_empty_headline_gets_placeholder() -> None:
     """Eine leere Headline erzeugt keinen nackten Kopf ohne Text."""
     text = compose_text(DigestComposer(), make_mail(), make_summary(headline=" "), make_verdict())
-    assert "📧 (keine Zusammenfassung)" in text
+    assert "📧 (no summary)" in text
 
 
 def test_message_metadata_is_carried_through() -> None:

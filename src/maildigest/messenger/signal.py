@@ -11,7 +11,7 @@ Zwei bewusste Einschränkungen (ADR zu WP7):
   `[messenger.signal] enabled` und `signal_cli_socket`, keine Empfängernummer. Statt das
   Config-Schema aus diesem Arbeitspaket heraus zu erweitern, nutzt der Adapter
   `note-to-self` — für ein persönliches Mail-Digest der Normalfall.
-* **Kein Prozess-Management:** Läuft kein signal-cli, gibt es eine klare, deutsche
+* **Kein Prozess-Management:** Läuft kein signal-cli, gibt es eine klare, englische
   Fehlermeldung statt eines Startversuchs. MailDigest startet keine fremden Prozesse.
 """
 

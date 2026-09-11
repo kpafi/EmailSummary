@@ -37,9 +37,20 @@ Ein Wert, der als Zahl im erlaubten Bereich liegt, aber als **Konfiguration** un
 bleibt Exit-Code 1 — etwa `--port 143` (Klartext-IMAP) oder `--low-digest-time 25:99`
 (ADR-069).
 
-Jede Fehlermeldung geht auf **stderr** und beginnt mit `Fehler: `. Fortschritts- und
+Jede Fehlermeldung geht auf **stderr** und beginnt mit `Error: `. Fortschritts- und
 Ergebnismeldungen gehen auf **stdout**. Warnungen (Hinweise, die den Ablauf nicht
-abbrechen) gehen auf stderr, ohne `Fehler: `-Präfix.
+abbrechen) gehen auf stderr, ohne `Error: `-Präfix.
+
+**Sprache der Ausgabe:** Jeder Text, den das Programm ausgibt — Abfragen, Schritt- und
+Bilanzzeilen, Fehler- und Warnmeldungen sowie der gesamte Rahmen jeder zugestellten
+Nachricht — ist **englisch**, unabhängig von jeder Einstellung und jeder Locale.
+`[general] language` steuert ausschließlich die Sprache der vom Sprachmodell erzeugten
+Textfelder (Zusammenfassung, Kopfzeile, Begründungen, Kategorie); ohne Sprachmodell gibt es
+diese Felder nicht. Dieses Dokument ist damit der wörtliche Vertrag der **englischen**
+Ausgabe (ADR-083).
+
+Ein `SIGINT` (Strg-C) während einer Abfrage beendet das Kommando mit `Error: Aborted.` auf
+stderr und **Exit-Code 1**; geschrieben wird dabei nichts.
 
 Dazu kommt das **Protokoll** der inneren Schichten (etwa ein Wiederholversuch beim
 Modell-Aufruf). Es besteht immer aus JSON-Zeilen im Format aus §4 `run`. Bei `run` gehen
@@ -79,14 +90,17 @@ Exit-Code 1 ab und ändert nichts (außer mit `--force`).
 Interaktive Abfragen in dieser Reihenfolge; in Klammern der Default, der bei leerer
 Eingabe gilt:
 
-1. `Sprache der Zusammenfassungen (de/en) [de]: `
-2. `Länge der Zusammenfassungen (short/medium/long) [medium]: `
-3. `Einzeln zustellen ab Wichtigkeit (low/normal/high) [normal]: `
-4. `Uhrzeit des täglichen Sammel-Digests (HH:MM) [18:00]: `
-5. `Custom-Instructions: ` (eine Zeile; leer = keine; wird auf 2000 Zeichen gekürzt)
+1. `Language of the summaries (de/en) [de]: `
+2. `Length of the summaries (short/medium/long) [medium]: `
+3. `Deliver individually from importance (low/normal/high) [normal]: `
+4. `Time of the daily digest (HH:MM) [18:00]: `
+5. `Custom-Instructions: ` (eine Zeile; leer = keine; wird auf 2000 Zeichen gekürzt);
+   davor steht im interaktiven Modus die Erläuterung
+   `Custom instructions: one line about what matters to you (leave empty for none).`
 
-Eine unerlaubte Eingabe bei 1–3 wird abgelehnt (`Ungültiger Wert. Erlaubt: …` auf stderr)
-und erneut gefragt; nach drei Fehlversuchen endet das Kommando mit Exit-Code 2.
+Eine unerlaubte Eingabe bei 1–3 wird abgelehnt (`Invalid value. Allowed: …` auf stderr)
+und erneut gefragt; nach drei Fehlversuchen endet das Kommando mit
+`Error: Too many invalid entries — aborted.` und Exit-Code 2.
 
 Danach entsteht die Datei mit **Dateirechten 0600** und dem vollständigen Feldsatz aus
 Abschnitt 5: Jedes Feld mit Default steht mit diesem Default darin. Pflichtfelder ohne
@@ -97,9 +111,19 @@ vollständige Konfiguration. `[llm] model` gehört **nicht** dazu: Es hat laut A
 den Default `""` und ist erst Pflicht, sobald `provider` nicht `none` ist (ADR-076). Die
 Frage-Erläuterung zu den Custom-Instructions erscheint nur im interaktiven Modus.
 
-Danach folgt ein Absatz, der einordnet, was MailDigest ohne Sprachmodell zustellt; **zum
-Schluss** steht die Liste der nächsten Schritte (`connect-mail`, `connect-messenger`,
-`connect-llm` als optionaler Punkt, `test`, `run`). Die Ausgabe endet mit dieser Liste.
+Die erste Zeile lautet `Setting up MailDigest — configuration: <pfad>`, nach dem Schreiben
+folgt `Configuration created: <pfad> (file mode 0600).` Danach folgt ein Absatz, der
+einordnet, was MailDigest ohne Sprachmodell zustellt; **zum Schluss** steht die Liste der
+nächsten Schritte. Die Ausgabe endet mit dieser Liste:
+
+```
+Next steps:
+  1) maildigest connect-mail        (mirror mailbox)
+  2) maildigest connect-messenger   (Telegram/Discord/Signal)
+  3) maildigest connect-llm         (optional: real summaries)
+  4) maildigest test                (self-test)
+  5) maildigest run                 (continuous operation)
+```
 
 Ein unzulässiger Wert (z. B. `--low-digest-time 25:99`) führt zu Exit-Code 1 mit einer
 feldbezogenen Meldung; die Datei wird dann **nicht** angelegt.
@@ -130,7 +154,7 @@ ein Spiegel-Postfach mit dem geringsten Aufwand anlegen lässt.
 Anbieterliste geprüft (Datenstand 2026-09-09):
 
 * Eine **Mailadresse oder blanke Domain** eines bekannten Anbieters wird in dessen
-  IMAP-Host übersetzt; die Übersetzung wird als Zeile `  → IMAP-Host für <Anbieter>: <Host>`
+  IMAP-Host übersetzt; die Übersetzung wird als Zeile `  -> IMAP host for <Anbieter>: <Host>`
   angezeigt. Ein unbekannter Wert bleibt unverändert — geraten wird nicht.
 * Für einen **erkannten Anbieter** folgt eine Anleitung: welche Art Passwort der Server
   verlangt (Konto- oder App-Passwort), die nötigen Schritte, gegebenenfalls ein Direktlink
@@ -150,16 +174,16 @@ steht bei erkanntem Anbieter, welche Art Passwort erwartet wird.
 
 Abfragen in dieser Reihenfolge:
 
-1. `IMAP-Host [<bisheriger Wert>]: ` — Pflichtangabe
+1. `IMAP host [<bisheriger Wert>]: ` — Pflichtangabe
 2. `Port [993]: ` — ganze Zahl von 1 bis 65535
-3. `Benutzername [<bisheriger Wert>]: ` — Pflichtangabe
-4. `Passwort (leer lassen, wenn MAILDIGEST_IMAP_PASSWORD gesetzt werden soll): ` — ohne
+3. `Username [<bisheriger Wert>]: ` — Pflichtangabe
+4. `Password (leave empty to use MAILDIGEST_IMAP_PASSWORD instead): ` — ohne
    Bildschirmecho, sofern ein Terminal vorhanden ist. Ist die Umgebungsvariable
    `MAILDIGEST_IMAP_PASSWORD` gesetzt, entfällt diese Frage; es wird dann **kein** Passwort
    in die Datei geschrieben. Liegt weder ein eingegebenes noch ein gespeichertes noch ein
    Umgebungs-Passwort vor, endet das Kommando mit Exit-Code 2.
-5. Nach erfolgreicher Verbindung: nummerierte Ordnerliste des Servers und
-   `Ordner [<Nummer des aktuellen Ordners>]: `
+5. Nach erfolgreicher Verbindung: die Zeile `Which folder should MailDigest read?`, die
+   nummerierte Ordnerliste des Servers und `Folder [<Nummer des aktuellen Ordners>]: `
 
 Port 143 (Klartext-IMAP) wird immer abgelehnt (Exit-Code 1). Verbindet sich MailDigest
 nicht, endet das Kommando mit Exit-Code 1 und schreibt **nichts** in die Datei. Die
@@ -173,11 +197,23 @@ docs/SECURITY.md §6). Danach folgt eine Erklärung, die zur Fehlerklasse passt:
 * **Transportfehler** (Verbindung abgelehnt, Zeitüberschreitung, TLS): der Hinweis, dass
   gar kein Login versucht wurde und Host, Port und Netzverbindung zu prüfen sind.
 
-Zum Schluss steht in beiden Fällen der Verweis auf `--no-test`. Lässt sich die Ordnerliste
-nicht abrufen, bleibt es bei einer Warnung auf stderr und beim bisherigen Ordner. Existiert
-der eingestellte Ordner nicht und läuft das Kommando nicht-interaktiv, wird die nummerierte
-Ordnerliste zuerst auf stdout gedruckt und danach auf stderr darauf verwiesen; der
-eingestellte Ordner bleibt unverändert.
+Zum Schluss steht in beiden Fällen der Verweis auf `--no-test`
+(`With --no-test the values can also be saved without testing them.`). Lässt sich die
+Ordnerliste nicht abrufen, bleibt es bei der Warnung
+`Folder list unavailable (<klasse>); keeping the current setting.` auf stderr und beim
+bisherigen Ordner. Existiert der eingestellte Ordner nicht, steht auf stderr
+`The configured folder "<name>" does not exist on the server.`; läuft das Kommando
+nicht-interaktiv, wird danach die nummerierte Ordnerliste auf stdout gedruckt und
+anschließend auf stderr darauf verwiesen (`Keeping it unchanged — pick one of the folders
+listed on stdout with --folder, otherwise the next run will fail.`); der eingestellte
+Ordner bleibt unverändert.
+
+Weitere wörtliche Zeilen dieses Kommandos auf stdout:
+`Connecting the mirror mailbox (IMAPS only, certificate check always on)`,
+`Detected: <Anbieter>`, `Username = <Beispiel>`, `Password = <Art des Passworts>.`,
+`Password: from MAILDIGEST_IMAP_PASSWORD (not written to the file)`, `Connecting ...`,
+`Connection established.`, `Connection test skipped (--no-test).` und
+`Saved to <pfad> (file mode 0600).`
 
 Gespeichert wird erst nach dem Test. Die Datei behält die Rechte 0600.
 
@@ -206,13 +242,17 @@ Abfragen in dieser Reihenfolge:
 1. Eine nummerierte **Auswahlliste der Betriebsarten** (interaktiv; mit `--provider` oder
    `--non-interactive` entfällt sie und die Option entscheidet):
 
-   1. kein Sprachmodell — funktioniert sofort, keine Anmeldung nötig (Vorgabe)
-   2. Groq — Gratis-Kontingent ohne Kreditkarte
-   3. OpenRouter — Gratis-Modelle ohne Kreditkarte
-   4. Cerebras — Gratis-Kontingent ohne Kreditkarte
-   5. lokales Modell (Ollama/LM Studio/vLLM) — gratis und vollständig privat
-   6. Anthropic — kostenpflichtig, beste Qualität
-   7. anderer OpenAI-kompatibler Endpunkt — Basis-URL selbst eintragen
+   ```
+    1) No language model — works immediately, nothing to sign up for (default)
+    2) Groq — free tier, no credit card (fast, OpenAI-compatible)
+    3) OpenRouter — free models, no credit card
+    4) Cerebras — free tier, no credit card
+    5) Local model (Ollama, LM Studio, vLLM) — free and fully private
+    6) Anthropic — paid, best summary quality
+    7) Other OpenAI-compatible endpoint — enter the base URL yourself
+   ```
+
+   Die Auswahl selbst lautet `Option [1]: `.
 
    Danach folgt die Anleitung zur gewählten Option: woher der Schlüssel kommt, welche
    Stolperfalle dort typisch ist und — bei den Gratis-Anbietern — wo die aktuellen
@@ -227,22 +267,28 @@ Abfragen in dieser Reihenfolge:
    noch Schlüssel noch Testaufruf, `[llm] model` und `base_url` werden geleert und ein
    etwaiger gespeicherter Schlüssel entfernt.
 
-2. `Modellname (exakte Modell-ID des Anbieters) [<bisheriger Wert>]: ` — Pflichtangabe, es
-   gibt bewusst keinen Default
+2. `Model name (exact model ID used by the provider) [<bisheriger Wert>]: ` —
+   Pflichtangabe, es gibt bewusst keinen Default
 3. nur bei `openai_compatible`:
-   `Basis-URL des Endpunkts (z. B. http://localhost:11434/v1) [<bisheriger Wert>]: `
-4. `API-Key (leer lassen, wenn MAILDIGEST_LLM_API_KEY gesetzt werden soll oder der Endpunkt
-   keinen Key braucht): ` — ohne Bildschirmecho. Ist `MAILDIGEST_LLM_API_KEY` gesetzt,
-   entfällt die Frage und es wird kein Key in die Datei geschrieben.
+   `Base URL of the endpoint (e.g. http://localhost:11434/v1) [<bisheriger Wert>]: `
+4. `API key (leave empty to use MAILDIGEST_LLM_API_KEY, or if the endpoint needs no key): `
+   — ohne Bildschirmecho. Ist `MAILDIGEST_LLM_API_KEY` gesetzt, entfällt die Frage, es
+   erscheint `API key: from MAILDIGEST_LLM_API_KEY (not written to the file)` und es wird
+   kein Key in die Datei geschrieben.
 
 Ist die Basis-URL weder `https://` noch `http://localhost`/`http://127.`, erscheint eine
 Warnung auf stderr; das Kommando läuft weiter.
 
-Der Testaufruf schickt einen kurzen, im Programm formulierten Prompt (kein Mail-Inhalt) mit
+Der Testaufruf (`Test call ...` auf stdout, `Test call skipped (--no-test).` mit
+`--no-test`) schickt einen kurzen, im Programm formulierten Prompt (kein Mail-Inhalt) mit
 `max_tokens = 16`. Die Antwort des Modells wird **nicht** angezeigt — gemeldet werden nur
 ihre Länge und ob sie das erwartete Wort enthält:
-`Antwort erhalten (N Zeichen, erwartete Antwort).` bzw. `… unerwartete Antwort).`
-Schlägt der Aufruf fehl, endet das Kommando mit Exit-Code 1 und schreibt nichts.
+`Response received (N characters, expected reply).` bzw. `… unexpected reply).`
+Schlägt der Aufruf fehl, endet das Kommando mit Exit-Code 1
+(`Error: Test call failed (<Fehlerklasse>): …` plus `Check the model name, API key and base
+URL.`) und schreibt nichts. Bei Auswahl 1 lauten die beiden letzten Zeilen
+`Saved to <pfad> (file mode 0600).` und `MailDigest now runs without a language model. Run
+this command again at any time to connect one.`
 
 **Optionen**
 
@@ -261,38 +307,53 @@ Für den API-Key gibt es keine Option; er kommt aus der Abfrage oder aus
 Richtet den Zustellweg ein und schickt eine Testnachricht. Setzt eine vorhandene
 Konfigurationsdatei voraus.
 
-Erste Abfrage immer:
+Die erste Zeile lautet `Connecting the messenger`, danach immer die Abfrage
 `Messenger (telegram/discord/signal) [telegram]: `
 
 **Telegram.** Anleitung zum Anlegen des Bots über @BotFather — einschließlich des
 Schrittes, dem eigenen Bot zuerst selbst eine Nachricht zu schreiben, ohne den die
 Chat-Ermittlung im nächsten Schritt nichts finden kann. Dann
-`Bot-Token (leer lassen, wenn MAILDIGEST_TELEGRAM_TOKEN gesetzt werden soll): ` (ohne Echo;
-entfällt, wenn die Umgebungsvariable gesetzt ist — dann steht kein Token in der Datei).
-Ohne `--chat-id` folgt der getUpdates-Flow: Die Ausgabe fordert auf, dem Bot jetzt eine
+`Bot token (leave empty to use MAILDIGEST_TELEGRAM_TOKEN instead): ` (ohne Echo;
+entfällt, wenn die Umgebungsvariable gesetzt ist — dann erscheint `Bot token: from
+MAILDIGEST_TELEGRAM_TOKEN (not written to the file)` und es steht kein Token in der Datei).
+Ohne `--chat-id` folgt der getUpdates-Flow: Die Ausgabe fordert mit
+`Now send your bot a message in Telegram (e.g. /start).` dazu auf, dem Bot jetzt eine
 Nachricht zu schreiben, und fragt Telegram bis zu 10-mal im Abstand von 3 Sekunden ab
-(`Noch keine Nachricht empfangen — warte (n/10) …`). Gefunden wird die Chat-ID aus der
-ersten passenden Nachricht (`Chat-ID gefunden: <id>`); bei mehreren Chats erscheint eine
-nummerierte Auswahl, die **nur** die numerische Chat-ID und den Chat-Typ (`private`,
-`group`, `supergroup`, `channel`, `unbekannt`) zeigt — nie einen Namen aus dem Chat. Wird
-nichts gefunden, endet das Kommando mit Exit-Code 1 (steht bereits eine Chat-ID in der
-Datei, bleibt sie stehen und es gibt nur eine Warnung). Ein abgelehntes Token führt zu
-Exit-Code 1 mit dem Hinweis auf das Bot-Token.
+(`No message received yet — waiting (n/10) ...`). Gefunden wird die Chat-ID aus der
+ersten passenden Nachricht (`Chat ID found: <id>`); bei mehreren Chats erscheint nach
+`Several chats found — which one should it be?` eine nummerierte Auswahl (`Chat [1]: `),
+die **nur** die numerische Chat-ID und den Chat-Typ (`private`, `group`, `supergroup`,
+`channel`, `unknown`) zeigt — nie einen Namen aus dem Chat. Wird nichts gefunden, endet das
+Kommando mit Exit-Code 1 (`Error: No message to the bot found. …`); steht bereits eine
+Chat-ID in der Datei, bleibt sie stehen und es gibt nur die Warnung
+`No new message found — keeping the existing chat ID.` Ein abgelehntes Token führt zu
+Exit-Code 1 mit `Error: Telegram request failed: … / Is the bot token correct?`.
 
 Nach jeder erfolgreichen Telegram-Einrichtung nennt die Ausgabe **genau einmal** die optionalen Befehle `/digest` und `/status` samt des Schalters `accept_commands` (ADR-077), damit der Nutzer von ihrer Existenz erfaehrt — auf dem getUpdates-Weg ebenso wie mit `--chat-id`; die zugestellte Testnachricht enthaelt dieselbe Auskunft. Fehlt `[messenger.telegram] accept_commands` in einer aelteren Datei, traegt `connect-messenger` den Default nach, damit der Feldsatz aus Abschnitt 5 vollstaendig bleibt.
 
-**Discord.** Hinweis zum Anlegen des Webhooks, dann `Webhook-URL: ` (ohne Echo, weil die
+**Discord.** Hinweis zum Anlegen des Webhooks, dann `Webhook URL: ` (ohne Echo, weil die
 URL selbst das Secret ist). Ohne URL: Exit-Code 2.
 
-**Signal.** Hinweis auf ein laufendes `signal-cli --daemon --socket <pfad>`, dann
-`Pfad des signal-cli-Sockets [<bisheriger Wert>]: ` (Pflichtangabe). Das Kommando setzt
+**Signal.** Der Hinweis
+`Prerequisite: \`signal-cli --daemon --socket <path>\` is already running.`, dann
+`Path of the signal-cli socket [<bisheriger Wert>]: ` (Pflichtangabe). Das Kommando setzt
 `[messenger.signal] enabled = true`. Zugestellt wird an „Notiz an mich".
 
-Danach folgt (außer bei `--no-test`) ein Erreichbarkeitstest und **eine Testnachricht**:
+Danach folgt (außer bei `--no-test`; sonst `Test message skipped (--no-test).`) ein
+Erreichbarkeitstest und **eine Testnachricht**:
 
 ```
-✅ MailDigest Testnachricht
-Die Zustellung funktioniert — ab jetzt landen hier deine Mail-Zusammenfassungen
+✅ MailDigest test message
+Delivery works — your mail summaries will arrive here from now on
+```
+
+Bei Telegram hängt daran — und nur dort — der Befehls-Absatz:
+
+```
+
+This chat can also trigger MailDigest:
+/digest — fetch and summarise right now
+/status — short report on what is waiting
 ```
 
 Ist der Dienst nicht erreichbar oder scheitert die Zustellung, endet das Kommando mit
@@ -313,7 +374,16 @@ Für das Bot-Token gibt es keine Option; es kommt aus der Abfrage oder aus
 
 ### `maildigest test`
 
-Ohne `--dry-run` geht der eigentlichen Nachricht ein kurzer Vorspann voraus (Kennzeichnung als Selbsttest mit dem Hinweis, dass die Mail nicht aus dem Postfach stammt). Ohne ihn waere die zugestellte Zusammenfassung von einer echten nicht zu unterscheiden, und der Nutzer suchte im Postfach nach einer Mail, die es nie gab. Der Vorspann nennt die **Herkunft der Testmail** in zwei Fassungen — mitgelieferte Beispielmail oder die mit `--eml` uebergebene Datei —, aber nie den Dateipfad: Punkte im Pfad wuerde der Output-Sanitizer sichtbar entschaerfen.
+Ohne `--dry-run` geht der eigentlichen Nachricht ein kurzer Vorspann voraus (Kennzeichnung als Selbsttest mit dem Hinweis, dass die Mail nicht aus dem Postfach stammt). Ohne ihn waere die zugestellte Zusammenfassung von einer echten nicht zu unterscheiden, und der Nutzer suchte im Postfach nach einer Mail, die es nie gab. Der Vorspann nennt die **Herkunft der Testmail** in zwei Fassungen — mitgelieferte Beispielmail oder die mit `--eml` uebergebene Datei —, aber nie den Dateipfad: Punkte im Pfad wuerde der Output-Sanitizer sichtbar entschaerfen. Wortlaut:
+
+```
+🧪 MailDigest self-test
+The next message is built from the bundled example mail, not from your mailbox — there is no such mail to look for
+```
+
+bzw. `… built from the file you supplied, not from your mailbox — …`. Laesst sich der
+Vorspann nicht zustellen, steht auf stderr `Note: the self-test marker could not be
+delivered.`; der Selbsttest laeuft weiter.
 
 Ende-zu-Ende-Selbsttest: verarbeitet **eine `.eml`-Datei** durch dieselbe Pipeline wie im
 Betrieb (Sanitizer → Summarizer → Kritiker → Output-Sanitizer → Messenger) und stellt das
@@ -336,50 +406,51 @@ Zwei Eigenschaften sind für den Test wichtig:
 Die Ausgabe hat fünf nummerierte Schritte:
 
 ```
-1/5 Konfiguration geladen: <pfad>
-2/5 Testmail gelesen: <pfad|mitgelieferte Beispielmail> (N Bytes)
-3/5 Pipeline läuft (Sanitizer → Summarizer → Kritiker → Zustellung) …
-4/5 Sanitizer: N Zeichen Klartext, N Anhänge (N verarbeitet), N Links entfernt, N Steuerzeichen entfernt
-  Summarizer: Wichtigkeit=<high|normal|low>, Injection-Verdacht=<ja|nein>
-  Kritiker: Phishing-Risiko=<none|low|high>, Zusammenfassung korrekt=<ja|nein>
-5/5 Zugestellt (N Teile). Schau in deinen Messenger.
+1/5 Configuration loaded: <pfad>
+2/5 Test mail read: <pfad|bundled example mail> (N bytes)
+3/5 Pipeline running (sanitizer -> summarizer -> critic -> delivery) ...
+4/5 Sanitizer: N characters of text, N attachments (N processed), N links removed, N control characters removed
+  Summarizer: importance=<high|normal|low>, injection suspected=<yes|no>
+  Critic: phishing risk=<none|low|high>, summary accurate=<yes|no>
+5/5 Delivered (N parts). Check your messenger.
 ```
 
-Bei genau einem Teil lautet die Klammer `(1 Teil)` — hier und ebenso in
-`5/5 Nachricht erzeugt (N Teile) — Trockenlauf, nicht gesendet:`. Ebenso stehen in Zeile 4/5
-die deutschen Einzahlformen, wenn der Zähler 1 ist: `1 Anhang`, `1 Link entfernt`.
+Bei genau einem Teil lautet die Klammer `(1 part)` — hier und ebenso in
+`5/5 Message created (N parts) — dry run, not sent:`. Ebenso stehen in Zeile 4/5 die
+Einzahlformen, wenn der Zähler 1 ist: `1 attachment`, `1 link removed`,
+`1 control character removed`.
 
 Weder der Mail-Text noch die Modellausgabe erscheinen dabei auf dem Terminal; nur die
 fertige, sanitisierte Nachricht bei `--dry-run`. Mit `--dry-run` steht zwischen Schritt 2
-und 3 zusätzlich die Zeile `    Trockenlauf: es wird nichts an den Messenger geschickt
-(--dry-run).`, und Schritt 5 lautet
-`5/5 Nachricht erzeugt (N Teile) — Trockenlauf, nicht gesendet:`, gefolgt von der
+und 3 zusätzlich die Zeile `    Dry run: nothing is sent to the messenger (--dry-run).`,
+und Schritt 5 lautet `5/5 Message created (N parts) — dry run, not sent:`, gefolgt von der
 Nachricht selbst.
 
 Wurde die Nachricht erzeugt, aber nicht zugestellt (der Messenger nimmt sie nicht an, sie
 wartet in der Warteschlange), lautet Schritt 5
-`5/5 Nicht zugestellt (N Teile) — in der Warteschlange.`; die Erklärung dazu steht auf
+`5/5 Not delivered (N parts) — queued for retry.`; die Erklärung dazu steht auf
 stderr, der Exit-Code ist 1. Damit hat die Schrittfolge in allen drei Ausgängen —
 zugestellt, nicht zugestellt, fail-closed — eine abschließende 5/5-Zeile.
 
 Exit-Codes: 0, wenn die Nachricht erzeugt **und** zugestellt wurde (bzw. bei `--dry-run`
-erzeugt und ausgegeben). 1, wenn die Pipeline fail-closed endete (dann steht in Schritt 5
-`Fail-closed: Stufe <stufe>, Grund <grund>`, und der Messenger bekommt die Metadaten-Notiz
-aus Abschnitt 6) oder wenn die Zustellung nicht bestätigt wurde. 1 auch bei fehlender,
-unlesbarer oder unvollständiger Konfiguration und bei nicht lesbarer `--eml`-Datei.
+erzeugt und ausgegeben). 1, wenn die Pipeline fail-closed endete (dann lautet Zeile 4/5
+`4/5 Sanitizer: failed.` und Schritt 5 `5/5 Fail-closed: stage <stufe>, reason <grund>.`,
+und der Messenger bekommt die Metadaten-Notiz aus Abschnitt 6) oder wenn die Zustellung
+nicht bestätigt wurde. 1 auch bei fehlender, unlesbarer oder unvollständiger Konfiguration
+und bei nicht lesbarer `--eml`-Datei.
 
 Endet die Pipeline mit `--dry-run` fail-closed, geht **nichts** an den Messenger. Schritt 5
 lautet dann
 
 ```
-5/5 Fail-closed: Stufe <stufe>, Grund <grund>.
-    Metadaten-Notiz erzeugt — Trockenlauf, nicht gesendet:
+5/5 Fail-closed: stage <stufe>, reason <grund>.
+    Metadata notice created — dry run, not sent:
 ```
 
-gefolgt von der Notiz selbst auf stdout; auf stderr steht `Selbsttest fehlgeschlagen — es
-wurde nur die Metadaten-Notiz erzeugt (zugestellt: nein — Trockenlauf).` Ohne `--dry-run`
-steht dort `(zugestellt: ja)` nur, wenn die Notiz den Messenger tatsächlich erreicht hat;
-blieb sie in der Warteschlange liegen, steht dort `(zugestellt: nein)` (ADR-071).
+gefolgt von der Notiz selbst auf stdout; auf stderr steht `Self-test failed — only the
+metadata notice was created (delivered: no — dry run).` Ohne `--dry-run` steht dort
+`(delivered: yes)` nur, wenn die Notiz den Messenger tatsächlich erreicht hat; blieb sie in
+der Warteschlange liegen, steht dort `(delivered: no)` (ADR-071).
 
 **Optionen**
 
@@ -414,24 +485,24 @@ Ausgabe: strukturierte **JSON-Zeilen auf stdout** (ein Objekt je Ereignis, Felde
 `level`, `logger`, `event` und ereignisabhängige Zusatzfelder). Der Schwellwert kommt aus
 `[general] log_level`. Mail-Inhalte, Betreffzeilen und Secrets erscheinen dort nie — nur
 gekürzte Hashes, Absender-Domains, Statuswerte und Zähler. Bei `--once` kommt zusätzlich
-eine deutsche Bilanzzeile auf **stderr**:
+eine Bilanzzeile auf **stderr**:
 
 ```
-Lauf beendet: N Mails geholt, N verarbeitet, N Duplikate, N Fehler, N Nachrichten zugestellt, N in der Warteschlange.
+Run finished: N mails fetched, N processed, N duplicates, N errors, N messages delivered, N queued.
 ```
 
-`N Nachrichten zugestellt` zählt **alle** in diesem Lauf zugestellten Nachrichten: direkt
+`N messages delivered` zählt **alle** in diesem Lauf zugestellten Nachrichten: direkt
 zugestellte Einzelnachrichten, zugestellte Metadaten-Notizen, den Sammel-Digest und aus der
 Warteschlange nachgelieferte Nachrichten (ADR-070). Nachrichten, die in der Warteschlange
 verbleiben, zählen erst in dem Lauf, in dem sie durchgehen; bis dahin erscheinen sie unter
-`N in der Warteschlange`.
+`N queued`.
 
 Exit-Codes: 0 bei sauberem Ende, 1 bei unvollständiger Konfiguration, unbenutzbarer
 State-Datenbank oder — nur bei `--once` — nicht erreichbarem Postfach
-(`Fehler: Postfach nicht erreichbar: …`). Ein fehlendes IMAP-Passwort (weder `[imap]
+(`Error: Mailbox unreachable: …`). Ein fehlendes IMAP-Passwort (weder `[imap]
 password` noch `MAILDIGEST_IMAP_PASSWORD`) zählt zum **ersten** Fall: Es wird vor dem
 Verbindungsaufbau erkannt und als Konfigurationsfehler gemeldet
-(`Fehler: Ungültige Konfiguration (<pfad>): [imap] password: Pflichtangabe fehlt …`),
+(`Error: Invalid configuration (<pfad>):` / `  - [imap] password: required value missing. …`),
 nicht als Erreichbarkeitsproblem. Ein fehlgeschlagenes Verschieben ist **kein**
 solcher Fall: Es betrifft eine einzelne Mail, wird als `imap_postprocess_failed`
 protokolliert und bricht den Lauf nicht ab (ADR-065). Im Dauerbetrieb ist ein Postfach-Ausfall kein
@@ -511,8 +582,10 @@ Anhang, nie HTML oder Markdown. Markdown-Konstrukte werden neutralisiert, auch d
 Zeilenanfang wirkenden (Überschriften, Listen, Zitate, Discord-Subtext) und Unterstriche am
 Wortrand; Aufzählungen erscheinen als `•`, nummerierte Zeilen als `12 · …`. `@everyone` und
 `@here` erscheinen als `(at)everyone`/`(at)here`. Die strukturgebenden Zeilenanfänge (`⚠️`,
-`📧`, `📎`, `🔍 Hinweise:`, `Von:`) erzeugt ausschließlich das Programm; identische Anfänge in
-Modelltext werden neutralisiert (ADR-062). Alle Domains und Dateinamen erscheinen mit gebrochenem
+`📧`, `📎`, `🔍 Notes:`, `From:`) erzeugt ausschließlich das Programm; identische Anfänge in
+Modelltext werden neutralisiert — **in beiden Sprachen**, also auch `Von:`, `Betreff:`,
+`Hinweise:`, `Stufe:`, `Grund:`, `PHISHING-VERDACHT:` (ADR-062, ADR-083: die Ausgabe ist
+englisch, ein Modelltext darf aber auch keine deutsch aussehende Kopfzeile fälschen können). Alle Domains und Dateinamen erscheinen mit gebrochenem
 Punkt (`beispiel[.]de`, `rechnung[.]pdf`), weil Messenger nackte Domains automatisch
 verlinken. Ist die Nachricht länger als das Limit des Zielsystems (Telegram 4096, Discord
 2000, Signal 2000 Zeichen), wird sie an Zeilengrenzen auf mehrere Nachrichten aufgeteilt.
@@ -523,18 +596,33 @@ der reservierten Zeilenanfänge an den Anfang einer Nachricht schiebt.
 **Normale Zustellung**
 
 ```
-⚠️ PHISHING-VERDACHT: <Gründe, kommasepariert, max. 5>   ← nur bei Phishing-Risiko high
-📧 <Kopfzeile> [wichtig]                                  ← Tag nur bei Wichtigkeit high
-Von: <Anzeigename> (<domain>) · <TT.MM. HH:MM>            ← ohne Date-Header: „Datum unbekannt"
+⚠️ SUSPECTED PHISHING: <Gründe, kommasepariert, max. 5>   ← nur bei Phishing-Risiko high
+📧 <Kopfzeile> [important]                                ← Tag nur bei Wichtigkeit high
+From: <Anzeigename> (<domain>) · <TT.MM. HH:MM>           ← ohne Date-Header: `date unknown`
 <Zusammenfassung>
 — <datei>: <1–2 Sätze je verarbeitetem Anhang>
-📎 Nicht verarbeitet: <datei (größe)>, … [und N weitere]
-🔍 Hinweise: <Injection-Verdacht; verschlüsselte Mail; Message-ID-Kollision; Auth-Fehler;
-              Punycode; gemischte Schriftsysteme; versteckter Text im HTML entfernt;
-              HTML-Teil weicht vom Textteil ab; Reply-To-/Return-Path-Abweichung;
-              Text gekürzt; Kritiker-Gründe bei Risiko low>
+📎 Not processed: <datei (größe)>, … [and N more]
+🔍 Notes: <Injection-Verdacht; verschlüsselte Mail; Message-ID-Kollision; Auth-Fehler;
+           Punycode; gemischte Schriftsysteme; versteckter Text im HTML entfernt;
+           HTML-Teil weicht vom Textteil ab; Reply-To-/Return-Path-Abweichung;
+           Text gekürzt; Kritiker-Gründe bei Risiko low>
 <Link-Fußnote (defanged), eine Adresse je Zeile>          ← nur bei [links] footnote = true
 ```
+
+Die Hinweise hinter `🔍 Notes: ` sind kommasepariert und lauten wörtlich, in genau dieser
+Reihenfolge: `the mail contained instructions aimed at the AI (ignored)`,
+`encrypted (PGP/S-MIME) — content not readable by design`,
+`Message-ID collides with an earlier mail`, `sender checks failed: <SPF=…, DKIM=…>`,
+`punycode domain(s): <…>`, `mixed writing systems: <…>`,
+`HTML part differs from the text part`, `hidden text removed from the HTML`,
+`reply address differs from the sender`, `return-path domain differs`, `text truncated`,
+`critic: <Gründe>`. Fehlt jeder Hinweis, entfällt die Zeile.
+
+Ersatztexte, wenn ein Feld leer ist: `📧 (no summary)` für die Kopfzeile, `(no summary)`
+bzw. `(file)` in der Anhangszeile, `unknown` für einen fehlenden Absender, `(unnamed)` für
+einen Anhang ohne Dateinamen. Ein Link ohne erkennbaren Host erscheint als
+`[Link #n: unknown]`, eine `mailto:`-Adresse ohne Domain als `[Mail #n: unknown]`. Kürzt der
+Sanitizer den Mail-Text, endet er auf `[truncated]`.
 
 Zwei Hinweise erklären, warum eine Mail anders aussieht als erwartet, und haben deshalb
 einen festen Wortlaut:
@@ -552,6 +640,10 @@ Ohne Sprachmodell (`[llm] provider = "none"`) steht in der Anhangszeile statt de
 Zusammenfassung ein beschrifteter Auszug des gelesenen Anhangstextes
 (`— datei.txt: Excerpt: …`) — genau wie die Zusammenfassungszeile dort ein Auszug ist.
 
+**Zahl- und Datumsformate** sind keine Literale und bleiben unabhängig von der
+Ausgabesprache: Größen erscheinen als `34 KB` bzw. mit Dezimalkomma als `1,2 MB`, das Datum
+der Absenderzeile als `TT.MM. HH:MM` (ADR-083).
+
 Zeilen ohne Inhalt entfallen. Einzellimits: Kopfzeile 120, Zusammenfassung 3000,
 Anhangs-Zusammenfassung 400, Kritiker-Grund 200, Anzeigename 80, Domain 100, Dateiname
 80 Zeichen; höchstens 10 namentlich genannte Anhänge und 5 Banner-Gründe. Gekürzt wird
@@ -561,12 +653,15 @@ mit `…`. Bei Dateinamen wird in der **Mitte** gekürzt, damit die Endung erhal
 **Metadaten-Notiz (fail-closed)** — immer genau diese fünf Zeilen:
 
 ```
-⚠️ Mail konnte nicht sicher verarbeitet werden — kein Inhalt zugestellt.
-Von: <domain>
-Betreff: <Betreff>
-Stufe: <sanitize|summarize|critic|compose|deliver> · Grund: <fehlerklasse>
-Zum Lesen ins echte Postfach schauen.
+⚠️ This mail could not be processed safely — no content delivered.
+From: <domain>
+Subject: <Betreff>
+Stage: <sanitize|summarize|critic|compose|deliver> · Reason: <fehlerklasse>
+Open your real mailbox to read it.
 ```
+
+Fehlt die Domain, steht dort `unknown`; fehlt der Betreff, `(no subject)`. Lässt sich eine
+Stufe oder Fehlerklasse nicht als Label darstellen, steht dort `unknown`.
 
 Fehlerklassen: `sanitize_error`, `llm_timeout`, `llm_rate_limited`, `llm_invalid_response`,
 `llm_transport_error`, `schema_invalid`, `summary_inaccurate`, `delivery_error`,
@@ -577,13 +672,17 @@ Kategorie (größte Gruppe zuerst), je Mail eine Zeile; ab 60 Mails wird der Res
 Eine leere Warteschlange erzeugt keine Nachricht.
 
 ```
-🗂 12 unwichtige Mails: 8 newsletter, 3 benachrichtigung, 1 sonstiges
+🗂 12 low-priority mails: 8 newsletter, 3 benachrichtigung, 1 other
 
 newsletter (8):
 • Wochenrückblick KW 36 (news[.]example[.]org)
 …
-… und N weitere
+... and N more
 ```
+
+Die Kategorienamen stammen aus der Modellausgabe und folgen deshalb `[general] language`;
+eine leere Kategorie heißt `other`. Fehlt eine Kopfzeile, steht `(no subject)`, fehlt die
+Domain, `unknown`.
 
 ## 7. Zusicherungen des Programms
 
@@ -596,8 +695,8 @@ Diese Punkte sind Teil des Vertrags und in REQUIREMENTS.md als F-SEC-* nachlesba
    Nachrichten endgültig löschen (ADR-064).
 2. Kein Sprachmodell sieht rohes HTML, rohe MIME-Teile oder Anhangs-Binärdaten.
 3. Anhänge werden nie zugestellt. Inhaltlich verarbeitet werden nur `text/plain`-Dateien
-   und PDFs (nach Prüfung der Magic-Bytes); alles andere erscheint nur als Zeile
-   „Nicht verarbeitet".
+   und PDFs (nach Prüfung der Magic-Bytes); alles andere erscheint nur in der Zeile
+   `📎 Not processed:`.
 4. Schlägt irgendeine Stufe fehl, kommt die Metadaten-Notiz — nie ungeprüfter Inhalt und
    nie stilles Verschwinden.
 5. Secrets stehen ausschließlich in der Konfigurationsdatei (0600) oder in

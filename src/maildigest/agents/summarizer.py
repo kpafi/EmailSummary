@@ -340,7 +340,7 @@ def _fallback_headline(mail: SanitizedMail) -> str:
     """Headline-Ersatz aus dem (bereits sanitisierten) Betreff."""
     subject = _one_line(mail.subject)
     if not subject:
-        return "Mail ohne Betreff"
+        return "Mail without subject"
     return clamp_headline(subject)
 
 

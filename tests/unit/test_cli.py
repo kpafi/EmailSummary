@@ -301,9 +301,14 @@ def test_choose_nimmt_default_bei_leerer_eingabe() -> None:
     assert console.choose("Ordner", ["INBOX", "Archiv"], default_index=1) == 1
 
 
-def test_confirm_versteht_ja() -> None:
+def test_confirm_versteht_yes() -> None:
+    """Die Ja/Nein-Abfrage ist englisch (ADR-083): `yes`/`y` gelten, `ja` nicht mehr."""
+    console, _err = _console("yes\n")
+    assert console.confirm("Continue?") is True
+    console, _err = _console("y\n")
+    assert console.confirm("Continue?") is True
     console, _err = _console("ja\n")
-    assert console.confirm("Weiter?") is True
+    assert console.confirm("Continue?") is False
 
 
 def test_ask_secret_liest_ohne_terminal_aus_stdin() -> None:
@@ -427,7 +432,7 @@ def test_tastaturunterbrechung_wird_sauber_gemeldet(tmp_path: Path) -> None:
         hooks=Hooks(),
     )
     assert code == EXIT_ERROR
-    assert "Abgebrochen" in err.getvalue()
+    assert "Error: Aborted." in err.getvalue()  # ADR-083: englisch, mit `Error: `-Präfix
     assert not (tmp_path / "config.toml").exists()
 
 

@@ -20,8 +20,9 @@ Echtes Postfach ──Weiterleitung──► Mirror-Postfach ──► MailDiges
    Einzige, was sie bewirken können, ist Text in einem geprüften JSON-Feld.
 4. Was bei dir ankommt, hat als Letztes wieder Code geprüft: keine klickbaren Links, keine
    Anhänge, kein Markup — Domains erscheinen nur entschärft als `beispiel[.]de`.
-5. Geht irgendwo etwas schief, bekommst du eine Notiz „konnte nicht sicher verarbeitet
-   werden" statt ungeprüften Inhalts — nichts verschwindet stillschweigend.
+5. Geht irgendwo etwas schief, bekommst du eine Notiz („This mail could not be processed
+   safely — no content delivered.") statt ungeprüften Inhalts — nichts verschwindet
+   stillschweigend.
 
 Der Weg einer Mail — jede Stufe sieht nur, was die vorige durchgelassen hat:
 
@@ -208,11 +209,15 @@ Für Cron statt Dauerbetrieb: `maildigest run --once`.
 
 ```
 📧 Heizungsablesung am Donnerstag
-Von: Hausverwaltung Meier (hausverwaltung-meier[.]example) · 12.03. 09:14
+From: Hausverwaltung Meier (hausverwaltung-meier[.]example) · 12.03. 09:14
 Die Hausverwaltung kündigt eine Ablesung der Heizkörper an. Zutritt zwischen 9 und 13 Uhr nötig.
 ```
 
-Die Zeile `🔍 Hinweise: …` kommt nur dazu, wenn es etwas zu melden gibt — eine
+Der Rahmen der Nachricht (`From:`, `📎 Not processed:`, `🔍 Notes:` …) ist immer englisch;
+die Zusammenfassung selbst schreibt das Sprachmodell in der Sprache aus
+`[general] language` (ADR-083).
+
+Die Zeile `🔍 Notes: …` kommt nur dazu, wenn es etwas zu melden gibt — eine
 fehlgeschlagene Absender-Prüfung, eine Punycode-Domain, versteckter Text im HTML,
 gekürzter Text. Entfernte Links sind kein Hinweis wert: Sie stehen als
 `[Link #1: beispiel[.]de]` an ihrer Stelle im Text.
@@ -220,17 +225,17 @@ gekürzter Text. Entfernte Links sind kein Hinweis wert: Sie stehen als
 Unwichtige Mails kommen nicht einzeln, sondern einmal am Tag gesammelt:
 
 ```
-🗂 12 unwichtige Mails: 8 newsletter, 3 benachrichtigung, 1 sonstiges
+🗂 12 low-priority mails: 8 newsletter, 3 benachrichtigung, 1 other
 ```
 
 Und wenn etwas faul ist:
 
 ```
-⚠️ PHISHING-VERDACHT: Absenderdomain passt nicht zum angeblichen Absender, Antwortadresse abweichend
-📧 Dringende Zahlungsaufforderung [wichtig]
-Von: Chef (mail-sicherheit[.]example) · 12.03. 03:41
+⚠️ SUSPECTED PHISHING: Absenderdomain passt nicht zum angeblichen Absender, Antwortadresse abweichend
+📧 Dringende Zahlungsaufforderung [important]
+From: Chef (mail-sicherheit[.]example) · 12.03. 03:41
 Angebliche Zahlungsaufforderung des Chefs, Überweisung noch heute.
-🔍 Hinweise: Antwortadresse weicht vom Absender ab
+🔍 Notes: reply address differs from the sender
 ```
 
 ## Vom Handy aus anstoßen (optional)
@@ -302,7 +307,7 @@ ausschließlich reine Textdateien und PDFs — und auch die nur, wenn die ersten
 Datei zum angegebenen Dateityp passen und die Extraktion in einem abgeschotteten
 Unterprozess durchläuft. Office-Dateien können Makros ausführen, Archive schmuggeln
 Inhalte an Filtern vorbei, `.html`-Anhänge sind ein eigener Angriffsweg. Alles davon
-erscheint als Zeile „📎 Nicht verarbeitet: rechnung[.]docx (34 KB)" — du weißt also, dass
+erscheint als Zeile „📎 Not processed: rechnung[.]docx (34 KB)" — du weißt also, dass
 es da ist, und entscheidest selbst.
 
 **Was ist mit Phishing als Bild?**
@@ -374,8 +379,8 @@ ist auffällig, aber es ist keine Prüfung.
 
 **Verschlüsselte Mail wird nicht gelesen.** PGP und S/MIME werden nicht entschlüsselt. Du
 bekommst trotzdem eine reguläre Nachricht — Kopfzeile, Absender, die Liste der nicht
-verarbeiteten Teile (`📎 Nicht verarbeitet: …`) und die Hinweiszeile
-`🔍 Hinweise: encrypted (PGP/S-MIME) — content not readable by design`. Zum Lesen musst du
+verarbeiteten Teile (`📎 Not processed: …`) und die Hinweiszeile
+`🔍 Notes: encrypted (PGP/S-MIME) — content not readable by design`. Zum Lesen musst du
 ins echte Postfach. Signierte, aber unverschlüsselte Mail ist davon nicht betroffen.
 
 **Signal nur als Notiz an dich selbst.** Der Signal-Adapter schreibt in „Notiz an mich" und

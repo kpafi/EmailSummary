@@ -102,8 +102,8 @@ def build_messenger_from_section(
         webhook_url = messenger.discord.webhook_url
         if webhook_url is None or not webhook_url.get_secret_value().strip():
             raise ConfigError(
-                "[messenger.discord] webhook_url fehlt: Lege im Kanal einen Webhook an "
-                "und trage seine URL in die Konfigurationsdatei ein (Datei bleibt 0600)."
+                "[messenger.discord] webhook_url is missing: create a webhook in the "
+                "channel and put its URL into the configuration file (the file stays 0600)."
             )
         try:
             return DiscordMessenger(
@@ -124,7 +124,7 @@ def build_messenger_from_section(
         )
     if not signal_config.signal_cli_socket:
         raise ConfigError(
-            "[messenger.signal] signal_cli_socket fehlt: Pfad des Sockets von "
-            "`signal-cli --daemon --socket <pfad>` eintragen."
+            "[messenger.signal] signal_cli_socket is missing: enter the path of the "
+            "socket from `signal-cli --daemon --socket <path>`."
         )
     return SignalMessenger(socket_path=signal_config.signal_cli_socket, timeout=timeout)

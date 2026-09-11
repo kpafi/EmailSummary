@@ -165,13 +165,13 @@ def test_secrets_are_masked_in_repr(tmp_path: Path) -> None:
 # --- Fehlerfälle ---------------------------------------------------------------------------
 
 
-def test_missing_file_raises_german_error(tmp_path: Path) -> None:
-    """Fehlende Datei ⇒ verständliche deutsche Meldung mit Pfad."""
+def test_missing_file_raises_english_error(tmp_path: Path) -> None:
+    """Fehlende Datei ⇒ verständliche englische Meldung mit Pfad (ADR-083)."""
     with pytest.raises(ConfigError) as excinfo:
         load_config(tmp_path / "gibtsnicht.toml", env={})
 
     message = str(excinfo.value)
-    assert "nicht gefunden" in message
+    assert "not found" in message
     assert "gibtsnicht.toml" in message
 
 

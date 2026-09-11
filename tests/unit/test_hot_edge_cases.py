@@ -296,7 +296,7 @@ def test_text_budget_boundaries(budget: int) -> None:
         raw_mail(b"Content-Type: text/plain\r\n\r\n" + (body + "y").encode())
     )
     assert over.sanitization_report.truncated is True
-    assert "[gekürzt]" in over.body_text
+    assert "[truncated]" in over.body_text
 
 
 def test_text_budget_is_shared_between_body_and_attachments() -> None:
@@ -308,7 +308,7 @@ def test_text_budget_is_shared_between_body_and_attachments() -> None:
     )
     mail = sanitizer.sanitize(raw_mail(mime))
     assert mail.sanitization_report.truncated is True
-    assert all("[gekürzt]" in text or len(text) <= 30 for text in mail.attachment_texts.values())
+    assert all("[truncated]" in text or len(text) <= 30 for text in mail.attachment_texts.values())
 
 
 def test_pdf_over_input_limit_stays_unprocessed() -> None:
@@ -413,8 +413,8 @@ def test_compose_survives_completely_empty_fields() -> None:
         _verdict(),
     )
     text = "\n".join(message.parts)
-    assert "(keine Zusammenfassung)" in text
-    assert "unbekannt" in text
+    assert "(no summary)" in text
+    assert "unknown" in text
 
 
 def test_compose_of_a_message_longer_than_one_part() -> None:
@@ -472,7 +472,7 @@ def test_failure_notice_needs_no_sanitizer_output() -> None:
 def test_date_without_value_is_labelled() -> None:
     """Fehlender/kaputter `Date`-Header erzeugt einen Platzhalter, keinen Absturz."""
     text = "\n".join(DigestComposer().compose(_sanitized(date=None), _summary(), _verdict()).parts)
-    assert "Datum unbekannt" in text
+    assert "date unknown" in text
 
 
 def test_date_at_midnight_is_formatted() -> None:

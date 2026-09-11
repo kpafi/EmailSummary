@@ -141,7 +141,7 @@ def _chat_of(update: object) -> ChatCandidate | None:
         if not isinstance(chat_id, int) or isinstance(chat_id, bool):
             continue
         chat_type = chat.get("type")
-        kind = chat_type if chat_type in _KNOWN_CHAT_TYPES else "unbekannt"
+        kind = chat_type if chat_type in _KNOWN_CHAT_TYPES else "unknown"
         return ChatCandidate(chat_id=str(chat_id), chat_type=str(kind))
     return None
 
@@ -223,7 +223,7 @@ class TelegramMessenger:
             )
             if data.get("ok") is False:
                 raise MessengerError(
-                    "telegram: API meldet Fehler "
+                    "telegram: the API reports an error "
                     f"(error_code={data.get('error_code')!r})."
                 )
 

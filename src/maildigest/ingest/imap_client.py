@@ -615,11 +615,11 @@ class ImapClient:
             ) from exc
         except Exception as exc:  # imaplib wirft bei Protokollfehlern eigene Typen
             raise ImapConnectionError(
-                f"IMAP-Kommando {command} fehlgeschlagen: {type(exc).__name__}"
+                f"IMAP command {command} failed: {type(exc).__name__}"
             ) from exc
         if str(status).upper() != "OK":
             raise MailboxPostProcessError(
-                f"Der Server hat das Kommando {command} mit „{status}“ beantwortet."
+                f"The server answered the {command} command with “{status}”."
             )
         del data  # Die Serverantwort enthält Mail-Metadaten und wird nicht geloggt (I5).
 

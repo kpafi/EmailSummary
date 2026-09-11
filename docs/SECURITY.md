@@ -125,7 +125,7 @@ zu sein.
   stderr wird verworfen (I5). Jeder Fehler ⇒ Anhang „nicht verarbeitet", Pipeline läuft.
 - **Limits (Defaults, per Config änderbar):** Mail gesamt 25 MB (drüber ⇒
   `SanitizeError` ⇒ Metadaten-Notiz, T10), Gesamt-Klartext 30 000 Zeichen über Body und
-  Anhangs-Texte hinweg (Kürzung mit `[gekürzt]`-Marker, `truncated=true`), PDF-Input
+  Anhangs-Texte hinweg (Kürzung mit `[truncated]`-Marker, `truncated=true`), PDF-Input
   10 MB, PDF-Output 50 000 Zeichen, PDF-Timeout 20 s, MIME-Tiefe 10 (tiefere Teile ⇒
   Metadatum „mime-tiefe ueberschritten"), Anhänge max. 20 Stück verarbeitet (weitere ⇒
   Metadatum), Anhang-Metadatenliste max. 100 Einträge (`blocked_attachments` zählt
@@ -219,7 +219,9 @@ docs/TESTING.md §6):**
 - Die Markup-Neutralisierung ist nicht mehr nur zeichenweise: Zeilenanfangs-Markdown
   (Überschrift, Liste, Zitat, Discord-Subtext), Unterstriche am Wortrand und Massen-Pings
   (`@everyone`/`@here`) werden ebenfalls entschärft, und die Zeilen-Präfixe des
-  Nachrichtenformats (`⚠️`, `📧`, `📎`, `🔍 Hinweise:`, `Von:`) dürfen in untrusted Text nicht
+  Nachrichtenformats (`⚠️`, `📧`, `📎`, `🔍 Notes:`, `From:` — und weiterhin die deutschen
+  Formen `Hinweise:`, `Von:`, `Betreff:`, `Stufe:`, `Grund:`, `PHISHING-VERDACHT:`, obwohl
+  die Ausgabe englisch ist, ADR-083/CT-8) dürfen in untrusted Text nicht
   am Zeilenanfang stehen — sonst ist der einzige Warnkanal des Produkts vom Angreifer
   beschreibbar (ADR-062). Das gilt auch auf dem Fail-closed-Pfad: `compose_failure` scrubbt
   den Betreff über dieselbe Funktion (CT-7a).

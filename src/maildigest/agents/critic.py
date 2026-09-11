@@ -229,11 +229,11 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
             )
         )
     signals.append(
-        Signal("links_removed", f"Entfernte/ersetzte Links: {report.links_removed}")
+        Signal("links_removed", f"links removed/replaced: {report.links_removed}")
     )
     if report.hidden_text_removed:
         signals.append(
-            Signal("hidden_text", "Im HTML war versteckter Text enthalten (entfernt)")
+            Signal("hidden_text", "the HTML contained hidden text (removed)")
         )
     if report.html_divergent:
         # Weich im Sinne von ADR-043: Die Divergenz sagt über die Echtheit des Absenders

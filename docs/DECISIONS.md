@@ -2315,3 +2315,65 @@ ihre *Erkennung* zu eng.
 - Konsequenzen: Ein neues Report-Feld (`encrypted`, additiv, Default `False`), eine neue
   Hinweiszeile in SPEC-CLI §6, ein neues Kritiker-Signal. `multipart/signed` bleibt
   ausdrücklich draußen — signierte Mail ist lesbar.
+
+## ADR-083: Ausgabesprache — englischer Rahmen, `[general] language` steuert nur die Zusammenfassung
+- Status: accepted
+- WP / Datum: Fixrunde, 2026-09-11 (Befund HC-14)
+- Kontext: Vier Commits (4976306, 98099d4, 095942d, 097c00a — „Englisch 1/n … 3/3") haben
+  Programmoberfläche und Nachrichtenformat auf Englisch umgestellt und die Tests mitgezogen,
+  aber kein Dokument und kein ADR. SPEC-CLI §2/§4/§6 bezeichnet sich als **Vertrag** und legt
+  den Wortlaut fest — dort standen weiterhin `Fehler: `, `Von:`, `🔍 Hinweise:`,
+  `📎 Nicht verarbeitet:` und die deutschen Schrittzeilen. Alle fünf kalten Testspuren der
+  Abschluss-Testrunde sind darüber gestolpert und haben denselben Befund gemeldet; ein
+  Cold-Tester, der laut Vertragsvorspann jede Textabweichung melden muss, kann gegen eine
+  solche Spec nicht arbeiten. Zusätzlich war die Umstellung **unvollständig**: Innerhalb einer
+  Zeile mischten sich die Sprachen (`From: (unbekannter Absender) · Datum unbekannt`).
+- Entscheidung: Der **Code gewinnt, der Vertrag wird nachgezogen.**
+  1. Jeder Text, den ein Nutzer sieht, ist **englisch** und sprachunabhängig: CLI-Abfragen,
+     Schritt-, Fortschritts- und Bilanzzeilen, Fehler- und Warnmeldungen, der Rahmen jeder
+     zugestellten Nachricht (`📧`, `From:`, `Subject:`, `📎 Not processed:`, `🔍 Notes:`,
+     `⚠️ SUSPECTED PHISHING:`, die fünf Zeilen der Metadaten-Notiz, Sammel-Digest-Kopf,
+     Testnachricht, Selbsttest-Vorspann, `/status`-Antwort, Link-Fußnote).
+  2. `[general] language` steuert **ausschließlich** die Sprache der vom Modell erzeugten
+     Textfelder (`summary_text`, `headline`, `importance_reason`, `category`, Anhangs-
+     Zusammenfassungen, Kritiker-Gründe). Es ist keine Oberflächensprache und ändert am
+     Rahmen nichts. Im Werkszustand ohne Sprachmodell gibt es keine Modellfelder — dort ist
+     die Nachricht bis auf den zitierten Mail-Auszug vollständig englisch.
+  3. Die **Modell-Prompts** bleiben deutsch (`llm/prompts.py`). Sie sind kein nutzersichtbarer
+     Text, sie sind sorgfältig formulierte Sicherheitsregeln, und eine Übersetzung wäre ein
+     Eingriff in geprüfte Formulierungen ohne Nutzen für irgendeinen Leser.
+  4. `docs/`, Docstrings und Kommentare bleiben **deutsch** — sie richten sich an Betreiber
+     und Entwickler dieses Projekts, nicht an den Nutzer der Oberfläche.
+- Warum Englisch und nicht zurück auf Deutsch: Die Umstellung war gewollt und flächendeckend
+  umgesetzt; sie zurückzudrehen wäre die größere Änderung mit dem größeren Regressionsrisiko.
+  Englisch erreicht mehr Nutzer, und ein **einziger** Wortlaut je Zeile hält den Vertrag
+  prüfbar — eine zweisprachige Oberfläche hieße, jede Vertragszeile doppelt zu pflegen und
+  jede Cold-Runde doppelt zu fahren.
+- Warum `language` nicht auch die Oberfläche steuert: Der Rahmen ist der Teil, an dem der
+  Output-Sanitizer hängt. `_RE_STRUCTURE_LABEL` in `output/sanitizer.py` erkennt gefälschte
+  Kopfzeilen an ihrer Beschriftung; eine vom Nutzer umschaltbare Beschriftung hieße, diese
+  Schutzschicht von einem Konfigurationswert abhängig zu machen. (Die **deutschen**
+  Alternativen bleiben dort trotzdem stehen — ein Modelltext darf auch keine deutsch
+  aussehende Kopfzeile fälschen können, CT-8.)
+- Konsequenzen:
+  - SPEC-CLI ist ab jetzt der wörtliche Vertrag der **englischen** Ausgabe; §2, §4, §6 und §7
+    sind auf die tatsächlichen Literale gebracht. `tests/unit/test_hc14_spec_literals.py`
+    liest die strukturgebenden Zeilen maschinell aus §6/§4 und vergleicht sie mit Composer
+    und CLI — der Vertrag kann nicht mehr still veralten.
+  - Restliterale sind übersetzt: `[gekürzt]` → `[truncated]`, `(unbekannter Absender)` →
+    `(unknown sender)`, `Datum unbekannt` → `date unknown`, `Mail ohne Betreff` →
+    `Mail without subject`, `(keine Zusammenfassung)` → `(no summary)`, `(Datei)` → `(file)`,
+    `(namenlos)` → `(unnamed)`, `unbekannt` → `unknown` (Marker `[Mail #n: …]`, Absenderzeile,
+    Fehlerklassen-Label, Telegram-Chat-Typ), Konfigurations-, IMAP-, LLM- und
+    Messenger-Fehlermeldungen, die Ja/Nein-Abfrage (`[Y/n]`, akzeptiert `y`/`yes`).
+  - `KeyboardInterrupt` (Strg-C) meldet jetzt `Error: Aborted.` auf stderr — mit dem in §2
+    vorgeschriebenen Präfix — und behält den bisherigen **Exit-Code 1**. Bewusst nicht 130:
+    §2 kennt nur 0/1/2, und ein vierter Code wäre eine Vertragsänderung ohne Nutzen.
+  - **Nicht** nutzersichtbar und deshalb unverändert deutsch: Docstrings und Kommentare, die
+    Modell-Prompts, die internen Ausnahmetexte `mail_zu_gross`/`mime_unparsbar` (sie werden
+    nie ausgegeben — `pipeline.failure_detail` liefert für `SanitizeError` `""`, die Notiz
+    zeigt `sanitize_error`), das DB-interne Label `unbekannt` in `state/db.py` sowie
+    `ValueError`-Texte für Programmierfehler (`part_limit muss mindestens 1 sein.`).
+  - Zahlformate bleiben, wie sie sind: Größen mit Dezimalkomma (`1,2 MB`) und Datum als
+    `TT.MM. HH:MM`. Das sind Formate, keine Literale; sie sind in SPEC-CLI §6 als solche
+    festgehalten. Eine Umstellung wäre eine eigene Entscheidung mit eigener Cold-Runde.

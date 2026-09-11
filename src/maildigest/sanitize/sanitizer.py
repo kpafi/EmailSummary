@@ -72,7 +72,7 @@ _RE_ANGLE_CHUNK = re.compile(r"<+[^<>\n]{0,300}>+")
 _FORGED_MARKER_WORDS = ("MAILDIGEST", "UNTRUSTED")
 
 #: Marker, der ans Ende gekürzter Texte gesetzt wird (SECURITY §4).
-_TRUNCATION_MARKER = "[gekürzt]"
+_TRUNCATION_MARKER = "[truncated]"
 
 #: HTML-Tag-artige Sequenzen, die auch in *Klartext*-Teilen neutralisiert werden.
 #: Akzeptanzkriterium WP3: kein Output-Feld enthält ein HTML-Tag — auch nicht, wenn ein
@@ -424,7 +424,7 @@ class MailSanitizer:
         cleaned, removed = clean_text(address or raw.from_addr)
         state.control_chars_removed += removed
         collapsed = " ".join(cleaned.split())
-        return collapsed[:_MAX_DISPLAY_CHARS] or "(unbekannter Absender)"
+        return collapsed[:_MAX_DISPLAY_CHARS] or "(unknown sender)"
 
     def _build_report(
         self,

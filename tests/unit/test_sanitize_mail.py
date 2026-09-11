@@ -75,8 +75,8 @@ class TestBodyUndLimits:
         sanitizer = MailSanitizer(LimitsConfig(max_text_chars=50))
         mail = sanitizer.sanitize(make_raw(plain_mail("Wort " * 100)))
         assert mail.sanitization_report.truncated is True
-        assert mail.body_text.endswith("[gekürzt]")
-        assert len(mail.body_text) <= 50 + len("\n[gekürzt]")
+        assert mail.body_text.endswith("[truncated]")
+        assert len(mail.body_text) <= 50 + len("\n[truncated]")
 
     def test_budget_gilt_ueber_anhaenge_hinweg(self) -> None:
         mime = (
@@ -89,7 +89,7 @@ class TestBodyUndLimits:
         sanitizer = MailSanitizer(LimitsConfig(max_text_chars=50))
         mail = sanitizer.sanitize(make_raw(mime))
         assert mail.sanitization_report.truncated is True
-        assert mail.attachment_texts["notiz.txt"].endswith("[gekürzt]")
+        assert mail.attachment_texts["notiz.txt"].endswith("[truncated]")
 
     def test_leerer_body_bleibt_leer(self) -> None:
         mail = MailSanitizer().sanitize(make_raw(plain_mail("")))

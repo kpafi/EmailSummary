@@ -7,7 +7,7 @@ Ablauf von :func:`load_config`:
 1. TOML-Datei mit `tomllib` (stdlib) lesen,
 2. Secrets aus den Umgebungsvariablen in das Roh-Dict einspiegeln (Env schlägt Datei, I5),
 3. gegen das pydantic-Schema validieren,
-4. Fehler in eine :class:`ConfigError` mit deutscher, feldbezogener Meldung übersetzen.
+4. Fehler in eine :class:`ConfigError` mit englischer, feldbezogener Meldung übersetzen.
 
 Secrets werden nie geloggt und nie in `__repr__`/`__str__` ausgegeben (I5): Die betroffenen
 Felder sind `pydantic.SecretStr`.
@@ -60,7 +60,7 @@ ENV_TELEGRAM_TOKEN = "MAILDIGEST_TELEGRAM_TOKEN"
 class ConfigError(Exception):
     """Konfiguration fehlt, ist kein gültiges TOML oder verletzt das Schema.
 
-    Die Meldung ist bewusst für Endnutzer formuliert (deutsch, feldbezogen) und enthält
+    Die Meldung ist bewusst für Endnutzer formuliert (englisch, feldbezogen) und enthält
     niemals Secret-Werte.
     """
 
@@ -306,7 +306,7 @@ def _format_location(location: tuple[int | str, ...]) -> str:
 
 
 def _translate_error(error: dict[str, Any]) -> str:
-    """Übersetzt genau einen pydantic-Fehler in eine deutsche, nutzbare Zeile."""
+    """Übersetzt genau einen pydantic-Fehler in eine englische, nutzbare Zeile."""
     error_type = str(error.get("type", ""))
     context = error.get("ctx") or {}
     if error_type == "missing":
@@ -338,7 +338,7 @@ def _translate_error(error: dict[str, Any]) -> str:
 
 
 def _validation_error_message(exc: ValidationError, source: str) -> str:
-    """Baut die vollständige, mehrzeilige deutsche Fehlermeldung für alle Einzelfehler."""
+    """Baut die vollständige, mehrzeilige englische Fehlermeldung für alle Einzelfehler."""
     lines = [f"Invalid configuration ({source}):"]
     lines += [
         f"  - {_format_location(tuple(error['loc']))}: {_translate_error(dict(error))}"
@@ -370,15 +370,15 @@ def load_config(path: str | Path, *, env: dict[str, str] | None = None) -> Confi
 
     Raises:
         ConfigError: Datei fehlt, ist kein lesbares/gültiges TOML oder verletzt das Schema.
-            Die Meldung ist deutsch, feldbezogen und secret-frei.
+            Die Meldung ist englisch, feldbezogen und secret-frei (ADR-083).
     """
     config_path = Path(path)
     try:
         raw_bytes = config_path.read_bytes()
     except FileNotFoundError as exc:
         raise ConfigError(
-            f"Konfigurationsdatei nicht gefunden: {config_path}. "
-            "Mit `maildigest init` anlegen oder Pfad korrigieren."
+            f"Configuration file not found: {config_path}. "
+            "Create it with `maildigest init` or correct the path."
         ) from exc
     except OSError as exc:
         raise ConfigError(
@@ -427,7 +427,7 @@ def validate_section(model: type[_SectionT], data: Any, *, source: str) -> _Sect
     `connect-messenger`) arbeiten auf einer noch unvollständigen Konfiguration: Solange
     `[llm] model` fehlt, würde eine Gesamtvalidierung jeden `connect-mail`-Lauf mit einem
     themenfremden Fehler abbrechen. Diese Funktion prüft deshalb nur die gerade
-    bearbeitete Sektion — mit derselben deutschen, feldbezogenen Fehlermeldung wie
+    bearbeitete Sektion — mit derselben englischen, feldbezogenen Fehlermeldung wie
     :func:`load_config`.
 
     Args:
@@ -439,7 +439,7 @@ def validate_section(model: type[_SectionT], data: Any, *, source: str) -> _Sect
         Die validierte Sektion.
 
     Raises:
-        ConfigError: Die Sektion verletzt das Schema. Die Meldung ist deutsch und
+        ConfigError: Die Sektion verletzt das Schema. Die Meldung ist englisch und
             secret-frei (I5).
     """
     try:
