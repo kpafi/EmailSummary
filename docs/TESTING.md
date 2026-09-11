@@ -462,7 +462,11 @@ vier Wellen (`4697231`, `4b6f709`, `a9a4d87`, `64c0ae4`); die Testzahl stieg dab
 | HC-37 | info | Zwei Schichtgrenzen der Befehlserkennung | **gefixt (Doku)** — (a) README/SPEC beschreiben die tolerante Erkennung jetzt korrekt, das Verhalten war richtig; (b) als Schichtgrenze unten festgehalten | `test_commands.py::test_bekannte_befehle_werden_erkannt`, `::test_botname_anhang_wird_abgetrennt`, `::test_argumente_werden_ignoriert_nicht_gelesen`, `::test_freier_text_wird_verworfen` | — |
 | HC-38 | low | Testabdeckung Standardmodus, `/digest`-Zweig, mechanische Zusagen | **gefixt** (drei Teile in FP-1/FP-6/FP-9) | `test_runner.py::test_hc38_*` (2), `test_cli_connect.py::test_hc38_*`, `test_cli.py::test_hc38_*` (2), `test_invarianten.py::test_hc38_*` (3) | — |
 
-„(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11**. Fett gesetzte ADRs sind neu.
+| HC2-1-Rest (a) Schranke greift erst nach dem vollständigen lxml-Parse (24 MB = 47,4 s), (b) Schranke gilt je Teil statt je Mail (34 Teile = 29,6 s ohne Ablehnung) — **zweite Iteration** | medium | **gefixt** | `test_sanitize_html.py::TestHc21Schranken::test_hc2_1_byte_deckel_*`/`*_budget_*` (5), `test_sanitize_mail.py::TestHc21SchrankenDerHtmlKonvertierung::test_hc2_1_riesiger_html_teil_*`, `*_viele_html_teile_*`, `*_teuerste_mail_*`, `*_byte_budget_*`, `*_gewoehnliche_html_mail_*` (5) | ADR-084 (N, 2026-09-12) |
+| HC2-2-Rest RFC-2047-Q-Wort mit rohem `@`/`,` verfälscht `from_domain` weiter — **zweite Iteration** | medium | **gefixt** | `test_ingest_rawmail.py::test_hc2_2_q_wort_*`, `*_b_wort_*`, `*_kodiertes_wort_direkt_*`, `*_zwei_kodierte_woerter`, `*_gewoehnlicher_kodierter_name_*` (8) | ADR-020 (N, 2026-09-12) |
+
+„(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11** (zweite Iteration:
+**2026-09-12**). Fett gesetzte ADRs sind neu.
 
 **Bilanz:** 35 offene Befunde, davon 33 mit Code-Fix und Regressionstest, einer rein
 dokumentarisch (HC-37 a), einer in einem anderen aufgegangen (HC-36); dazu zwei bereits in
@@ -589,6 +593,19 @@ Adresse im **Rohheader**, unabhängig vom Produktionscode ermittelt (kodierte W�
 entfernen, dann die Adresse lesen) — nicht `build_raw_mail` selbst. Fünf der sieben
 HC2-2-Tests schlagen auf dem Stand vor dem Fix fehl, die beiden Kontrollfälle
 (unkodierte Mail, HC-23-Fall) bleiben grün.
+
+**Zweite Iteration (2026-09-12).** Der Skeptiker bestätigte die Original-Repros als behoben,
+belegte aber drei Restlücken; sie sind oben als eigene Zeilen geführt. Für die beiden
+HC2-1-Reste ist die Aussage wieder eine Zeitaussage, also messen die Tests die Wanduhr an
+genau den Repro-Mails: 24-MB-Teil 47,4 s → < 0,5 s, 34 HTML-Teile 29,6 s → < 2 s. Damit ein
+Zeittest nicht bloss die neuen Grenzen bestätigt, konstruiert
+`test_hc2_1_teuerste_mail_unter_den_neuen_grenzen` zusätzlich die **ungünstigste** Mail, die
+unter den neuen Grenzen überhaupt möglich ist (`MAX_HTML_PARTS` × `max_html_bytes` der
+dichtesten Elementform): gemessen rund 2 s. Für den HC2-2-Rest bleibt das Orakel die Adresse
+im Rohheader; die neuen Fälle tragen `@`, `,`, `<` und `>` **literal** in der Q-Kodierung —
+das reine Base64-Orakel der ersten Iteration konnte sie nicht erzeugen. Alle acht neuen
+HC2-2-Tests schlagen auf dem Stand vor dieser Iteration fehl, die Gegenprobe (gewöhnlicher
+kodierter Name) bleibt grün.
 
 **Offene Frage aus HC2-1 beantwortet.** „Greift der Runner eine solche Mail nach einem
 Neustart erneut auf (Dauer-DoS)?" — Nein. `poll_once` reserviert den Dedupe-Key mit

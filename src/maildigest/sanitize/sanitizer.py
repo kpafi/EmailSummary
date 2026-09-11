@@ -34,7 +34,11 @@ from maildigest.models import (
 )
 from maildigest.sanitize.attachments import detect_kind, sanitize_filename
 from maildigest.sanitize.extract_pdf import extract_pdf_text
-from maildigest.sanitize.html_to_text import HtmlTooComplexError, html_to_text
+from maildigest.sanitize.html_to_text import (
+    HtmlBudget,
+    HtmlTooComplexError,
+    html_to_text,
+)
 from maildigest.sanitize.links import LinkCollector
 from maildigest.sanitize.unicode_clean import clean_text, is_mixed_script_domain
 
@@ -127,6 +131,9 @@ class _WalkState:
     html_divergent: bool = False
     forged_markers: int = 0
     encrypted: bool = False
+    #: Restbudget der HTML-Konvertierung für **diese** Mail (ADR-084-Nachtrag, HC2-1).
+    #: Wird in `sanitize()` aus den Limits gesetzt; der Default hier ist nur Rückfall.
+    html_budget: HtmlBudget = field(default_factory=HtmlBudget)
 
 
 class MailSanitizer:
@@ -164,7 +171,12 @@ class MailSanitizer:
             raise SanitizeError("mime_unparsbar") from exc
 
         links = LinkCollector()
-        state = _WalkState()
+        state = _WalkState(
+            html_budget=HtmlBudget(
+                elements=self._limits.max_html_elements,
+                byte_budget=self._limits.max_html_bytes,
+            )
+        )
         self._walk(message, 0, state)
 
         # Body: text/plain bevorzugt; sonst text/html → Text (SECURITY §4).
@@ -177,17 +189,16 @@ class MailSanitizer:
         elif state.body_html:
             converted: list[str] = []
             for html in state.body_html:
-                cleaned_html, removed = clean_text(html)
-                state.control_chars_removed += removed
                 try:
-                    text, hidden = self._to_text(cleaned_html)
+                    text, hidden, removed = self._to_text(html, state)
                 except HtmlTooComplexError:
-                    # ADR-084/HC2-1: Der Teil ist zu gross/zu tief, um ihn in der
+                    # ADR-084/HC2-1: Der Teil ist zu gross/zu tief/zu viel, um ihn in der
                     # Poll-Periode sicher zu konvertieren. Er gilt als nicht verarbeitet —
                     # kein roher HTML-Text geht weiter (I1), die Mail läuft mit dem Rest
                     # (hier: ohne Body) fail-safe durch und der Nutzer sieht die Hinweiszeile.
                     state.html_rejected = True
                     continue
+                state.control_chars_removed += removed
                 state.hidden_removed += hidden
                 converted.append(text)
             body_raw = "\n\n".join(converted)
@@ -243,9 +254,24 @@ class MailSanitizer:
             sanitization_report=report,
         )
 
-    def _to_text(self, cleaned_html: str) -> tuple[str, int]:
-        """HTML→Text mit der konfigurierten Elementschranke (ADR-084, HC2-1)."""
-        return html_to_text(cleaned_html, max_elements=self._limits.max_html_elements)
+    def _to_text(self, html: str, state: _WalkState) -> tuple[str, int, int]:
+        """HTML→Text gegen das Restbudget **dieser Mail** (ADR-084-Nachtrag, HC2-1).
+
+        Reihenfolge ist hier der ganze Punkt: `admit()` prüft Teilezahl und Bytelänge am
+        **rohen** Teil, bevor irgendetwas ihn anfasst — weder `clean_text` noch der Parser
+        sehen einen Teil, der ohnehin abgelehnt wird. Element- und Tiefenschranke können
+        das nicht leisten, sie kennen den Baum erst nach dem Parsen.
+
+        Returns:
+            ``(text, hidden_removed, control_chars_removed)``.
+
+        Raises:
+            HtmlTooComplexError: Eine der Schranken ist erschöpft (ADR-084).
+        """
+        state.html_budget.admit(html)
+        cleaned_html, removed = clean_text(html)
+        text, hidden = html_to_text(cleaned_html, budget=state.html_budget)
+        return text, hidden, removed
 
     def _html_diverges(self, body_plain: str, state: _WalkState) -> bool:
         """Weicht der (ignorierte) HTML-Teil inhaltlich vom Klartext-Teil ab? (CT-15)
@@ -266,9 +292,8 @@ class MailSanitizer:
             return False
         converted: list[str] = []
         for html in state.body_html:
-            cleaned_html, _ = clean_text(html)
             try:
-                text, _ = self._to_text(cleaned_html)
+                text, _hidden, _removed = self._to_text(html, state)
             except HtmlTooComplexError:
                 # Dieselbe Schranke wie im Body-Pfad (ADR-084): Der Divergenzcheck ist der
                 # praktisch wichtigere Einstieg (er trifft auch Mails *mit* harmlosem

@@ -563,7 +563,8 @@ Alle Felder mit ihren Defaults:
 | `[limits] pdf_timeout_seconds` | ≥ 1 | `20` | Zeitlimit der PDF-Extraktion |
 | `[limits] max_mime_depth` | ≥ 1 | `10` | Maximale MIME-Verschachtelung |
 | `[limits] max_attachments_processed` | ≥ 0 | `20` | Inhaltlich verarbeitete Anhänge je Mail |
-| `[limits] max_html_elements` | ≥ 1 | `50000` | Elemente je HTML-Teil; darüber wird der Teil nicht konvertiert (ADR-084) |
+| `[limits] max_html_elements` | ≥ 1 | `50000` | Elemente der HTML-Konvertierung, als **Restbudget je Mail** über alle HTML-Teile; darüber wird der Teil nicht konvertiert (ADR-084). Höher stellen verlängert die Konvertierung linear — die Zusage „höchstens 10 s" gilt für die Vorgabe |
+| `[limits] max_html_bytes` | ≥ 1024 | `1048576` | Bytebudget der HTML-Konvertierung je Mail (1 MB), geprüft **vor** dem Parsen; zusammen mit höchstens vier konvertierten `text/html`-Teilen deckelt es die Konvertierungszeit einer Mail auf rund zwei Sekunden (ADR-084-Nachtrag). Echte Newsletter liegen weit darunter; ein grösserer Wert verlängert die Konvertierung überproportional |
 
 **Umgebungsvariablen**
 

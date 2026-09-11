@@ -460,6 +460,107 @@ class TestHc21SchrankenDerHtmlKonvertierung:
         assert report.html_rejected is False
         assert report.html_divergent is True
 
+    def test_hc2_1_riesiger_html_teil_wird_in_bruchteilen_abgelehnt(self) -> None:
+        """Zweite Iteration NF-1, Fall A: 24 MB HTML in unter 0,5 s abgelehnt.
+
+        Vor dem Byte-Deckel kostete genau diese Mail 47,4 s CPU (Messung des Skeptikers):
+        Element- und Tiefenschranke sahen den Baum erst nach dem vollständigen lxml-Parse.
+        Die Mail bleibt mit 24 MB unter `max_mail_bytes` (25 MB) — sie kommt also wirklich
+        bis in die Konvertierung.
+        """
+        mime = alternative_mail("Guten Tag, Ihre Rechnung.", "<p>" * 8_000_000)
+        raw = make_raw(mime)
+        assert raw.size_bytes < LimitsConfig().max_mail_bytes
+        start = time.perf_counter()
+        mail = MailSanitizer().sanitize(raw)
+        assert time.perf_counter() - start < 0.5
+        assert mail.sanitization_report.html_rejected is True
+        assert "Guten Tag, Ihre Rechnung." in mail.body_text
+        assert "<" not in mail.body_text  # I1
+
+    def test_hc2_1_viele_html_teile_werden_abgelehnt(self) -> None:
+        """Zweite Iteration NF-1, Fall B: 34 je einzeln unauffällige HTML-Teile.
+
+        Jeder Teil lag unter `max_html_elements` und unter `MAX_HTML_DEPTH`; zusammen
+        kosteten sie 29,6 s CPU, und `html_rejected` blieb False — der Nutzer sah nichts.
+        Teilezahl und Bytes sind jetzt ein Budget der ganzen Mail.
+        """
+        teile = ["<span>x</span>" * 49_000] * 34
+        mime = (
+            'Content-Type: multipart/alternative; boundary="B"\r\n\r\n'
+            "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nGuten Tag.\r\n"
+            + "".join(
+                f"--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{teil}\r\n"
+                for teil in teile
+            )
+            + "--B--\r\n"
+        ).encode()
+        raw = make_raw(mime)
+        assert raw.size_bytes < LimitsConfig().max_mail_bytes
+        start = time.perf_counter()
+        mail = MailSanitizer().sanitize(raw)
+        assert time.perf_counter() - start < 2.0
+        assert mail.sanitization_report.html_rejected is True
+        assert "Guten Tag." in mail.body_text
+
+    def test_hc2_1_teuerste_mail_unter_den_neuen_grenzen(self) -> None:
+        """Die ungünstigste Form, die die neuen Grenzen überhaupt zulassen.
+
+        Konstruiert wird `MAX_HTML_PARTS` × `max_html_bytes` der teuersten gemessenen
+        Form (`"<p>" * n`, die dichteste Elementfolge je Byte): Mehr Arbeit kann eine Mail
+        unter `max_mail_bytes` der Konvertierung nicht mehr machen. Gemessen ~2 s; die
+        Schranke ist auf einer belasteten Maschine grosszügiger gesetzt, die Aussage des
+        Befunds (zweistellige Sekunden) ist damit trotzdem erledigt.
+        """
+        deckel = LimitsConfig().max_html_bytes
+        teile = ["<p>" * (deckel // 3)] * 4
+        mime = (
+            'Content-Type: multipart/alternative; boundary="B"\r\n\r\n'
+            + "".join(
+                f"--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{teil}\r\n"
+                for teil in teile
+            )
+            + "--B--\r\n"
+        ).encode()
+        start = time.perf_counter()
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        dauer = time.perf_counter() - start
+        assert dauer < 4.0, f"HTML-Konvertierung dauerte {dauer:.1f} s"
+        assert mail.sanitization_report.html_rejected is True
+        assert "<" not in mail.body_text
+
+    def test_hc2_1_byte_budget_gilt_ueber_die_ganze_mail(self) -> None:
+        """Zwei Teile, je für sich unter dem Deckel, zusammen darüber: der zweite fällt weg.
+
+        Beweis, dass der Deckel ein Restbudget je Mail ist und nicht je Teil — sonst
+        multipliziert ein Angreifer ihn einfach mit der Teilezahl.
+        """
+        limits = LimitsConfig(max_html_bytes=4_000)
+        erster = "<p>Guten Tag, hier ist der erste Teil.</p>" * 60
+        zweiter = "<p>Und hier steht der zweite Teil der Mail.</p>" * 60
+        mime = (
+            'Content-Type: multipart/alternative; boundary="B"\r\n\r\n'
+            f"--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{erster}\r\n"
+            f"--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{zweiter}\r\n"
+            "--B--\r\n"
+        ).encode()
+        mail = MailSanitizer(limits).sanitize(make_raw(mime))
+        assert "erste Teil" in mail.body_text
+        assert "zweite Teil" not in mail.body_text
+        assert mail.sanitization_report.html_rejected is True
+
+    def test_hc2_1_gewoehnliche_html_mail_bleibt_unter_den_grenzen(self) -> None:
+        """Gegenprobe: ein echter Newsletter (rund 40 KB HTML) läuft unverändert durch."""
+        rows = "".join(
+            f"<tr><td>Position {n}</td><td>Lieferung am {n}. Oktober</td></tr>"
+            for n in range(500)
+        )
+        mime = alternative_mail(
+            "Guten Tag.", f"<html><body><table>{rows}</table></body></html>"
+        )
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        assert mail.sanitization_report.html_rejected is False
+
     def test_hc2_1_ende_zu_ende_unter_einer_sekunde(self) -> None:
         """Die 68-KB-Angriffsmail aus HC2-1 kostete 5,12 s CPU — jetzt Bruchteile davon."""
         mime = alternative_mail("Guten Tag, Ihre Rechnung.", nested_html(6_000))

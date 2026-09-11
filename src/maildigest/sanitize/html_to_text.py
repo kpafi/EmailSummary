@@ -11,16 +11,30 @@ Schranken (ADR-084, HC2-1): Ein HTML-Teil mit mehr als `max_elements` Elementen 
 als :data:`MAX_HTML_DEPTH` Schachtelungsebenen gilt als **nicht verarbeitbar** —
 :class:`HtmlTooComplexError`. Der Aufrufer behandelt den Teil dann wie einen geblockten
 Anhang (Metadatum statt Inhalt), nie als Fehler der ganzen Mail.
+
+Nachtrag (Nachfixrunde NF-1, zweite Iteration): Element- und Tiefenschranke greifen erst
+**nach** dem Parsen — der Parse selbst trägt die Kosten. Davor liegt deshalb ein reiner
+Byte-Deckel (`max_bytes`, `[limits] max_html_bytes`), und alle drei Schranken werden über
+:class:`HtmlBudget` als **Restbudget einer ganzen Mail** geführt (Teilezahl
+:data:`MAX_HTML_PARTS`), nicht je Teil — sonst multipliziert ein Angreifer die Schranke
+einfach mit der Zahl der `text/html`-Teile.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import NavigableString
 
-__all__ = ["MAX_HTML_DEPTH", "HtmlTooComplexError", "html_to_text"]
+__all__ = [
+    "MAX_HTML_DEPTH",
+    "MAX_HTML_PARTS",
+    "HtmlBudget",
+    "HtmlTooComplexError",
+    "html_to_text",
+]
 
 #: Harte Obergrenze der Schachtelungstiefe eines HTML-Teils (ADR-084, HC2-1).
 #:
@@ -32,9 +46,67 @@ MAX_HTML_DEPTH = 2_000
 #: Default für `max_elements`; der Betrieb setzt `[limits] max_html_elements` (ADR-084).
 DEFAULT_MAX_HTML_ELEMENTS = 50_000
 
+#: Default für `max_bytes`; der Betrieb setzt `[limits] max_html_bytes` (ADR-084-Nachtrag).
+#:
+#: 1 MiB, gemessen gewählt: Die teuerste beobachtete Form (`"<p>" * n`) kostet bei 1 MB
+#: rund 1,8 s Parse-Zeit, bei 2 MB schon 3,8 s. Echte Newsletter liegen mit 50 bis 300 KB
+#: HTML weit darunter, sind also nie betroffen.
+DEFAULT_MAX_HTML_BYTES = 1024 * 1024
+
+#: Höchstzahl der `text/html`-Teile, die eine Mail überhaupt umwandeln darf (HC2-1-Rest).
+#:
+#: Modulkonstante wie :data:`MAX_HTML_DEPTH`: keine Betriebsgrösse, sondern eine
+#: Struktur-Plausibilität. `multipart/alternative` trägt genau einen HTML-Teil; vier deckt
+#: auch verschachtelte Mischformen ab, alles darüber ist Multiplikation der Schranke.
+MAX_HTML_PARTS = 4
+
+
+@dataclass
+class HtmlBudget:
+    """Restbudget der HTML-Konvertierung **einer Mail** (ADR-084-Nachtrag, HC2-1).
+
+    Ein Objekt je Mail, durch alle `text/html`-Teile gereicht (Body-Pfad **und**
+    Divergenzcheck) — analog zu `limits.max_text_chars`, das `sanitize()` ebenfalls als
+    Restbudget führt. Verbraucht ist verbraucht: Was der erste Teil aufbraucht, fehlt dem
+    zweiten.
+    """
+
+    #: Verbleibende Elementzahl (`[limits] max_html_elements`).
+    elements: int = DEFAULT_MAX_HTML_ELEMENTS
+    #: Verbleibende Bytes (`[limits] max_html_bytes`).
+    byte_budget: int = DEFAULT_MAX_HTML_BYTES
+    #: Verbleibende Zahl umwandelbarer HTML-Teile (:data:`MAX_HTML_PARTS`).
+    parts: int = MAX_HTML_PARTS
+
+    def admit(self, html: str) -> None:
+        """Lässt einen HTML-Teil zu — **vor** jeder Arbeit am Inhalt.
+
+        Prüft Teilezahl und Bytelänge und schreibt beides sofort ab. Der Byte-Deckel ist
+        die einzige Schranke, die *vor* dem Parsen greift: Element- und Tiefenschranke
+        sehen den Baum erst, wenn der Parser ihn schon gebaut hat.
+
+        Raises:
+            HtmlTooComplexError: Zu viele HTML-Teile oder Teil zu gross.
+        """
+        if self.parts <= 0:
+            raise HtmlTooComplexError("zu_viele_html_teile")
+        # Ein Zeichen ist in UTF-8 nie weniger als ein Byte: Wer schon nach Zeichen zu
+        # gross ist, ist es auch nach Bytes — das exakte (und teurere) Kodieren läuft
+        # nur für alles, was diese billige Vorprüfung übersteht.
+        if len(html) > self.byte_budget:
+            raise HtmlTooComplexError("html_zu_gross")
+        size = len(html.encode("utf-8", "replace"))
+        if size > self.byte_budget:
+            raise HtmlTooComplexError("html_zu_gross")
+        self.parts -= 1
+        self.byte_budget -= size
+
 
 class HtmlTooComplexError(Exception):
-    """Der HTML-Teil überschreitet Element- oder Tiefenschranke (ADR-084, T10).
+    """Der HTML-Teil überschreitet eine Schranke der Konvertierung (ADR-084, T10).
+
+    Betroffen sind Bytelänge, Teilezahl, Elementzahl und Schachtelungstiefe — die ersten
+    beiden als Restbudget der ganzen Mail (:class:`HtmlBudget`).
 
     Kein Fail-closed für die ganze Mail: Der Aufrufer verwirft **nur diesen Teil** und
     läuft weiter (fail-safe). Der Meldungstext ist ein konstantes Label ohne Mail-Inhalt
@@ -134,7 +206,7 @@ def _is_tracking_pixel(img: Tag) -> bool:
     return width is not None and height is not None and width <= 2 and height <= 2
 
 
-def _check_complexity(soup: BeautifulSoup, max_elements: int) -> None:
+def _check_complexity(soup: BeautifulSoup, max_elements: int) -> int:
     """Zählt Elemente und Tiefe in **einem** iterativen Durchlauf und bricht früh ab.
 
     Läuft absichtlich vor jeder weiteren Arbeit (ADR-084): Parsen ist linear und billig,
@@ -157,16 +229,27 @@ def _check_complexity(soup: BeautifulSoup, max_elements: int) -> None:
             if elements > max_elements:
                 raise HtmlTooComplexError("html_zu_viele_elemente")
             stack.append((child, child_depth))
+    return elements
 
 
 def html_to_text(
-    html: str, *, max_elements: int = DEFAULT_MAX_HTML_ELEMENTS
+    html: str,
+    *,
+    max_elements: int = DEFAULT_MAX_HTML_ELEMENTS,
+    max_bytes: int = DEFAULT_MAX_HTML_BYTES,
+    budget: HtmlBudget | None = None,
 ) -> tuple[str, int]:
     """Konvertiert HTML in Klartext.
 
     Args:
         html: Der HTML-Teil (bereits durch `unicode_clean.clean_text` gelaufen).
         max_elements: Obergrenze der Elementzahl (`[limits] max_html_elements`).
+        max_bytes: Obergrenze der Bytelänge (`[limits] max_html_bytes`); wird **vor**
+            dem Parsen geprüft. Wirkt nur ohne `budget`.
+        budget: Restbudget der ganzen Mail. Wer es mitgibt, hat `budget.admit()` selbst
+            schon gerufen (der Sanitizer tut das vor `clean_text`, damit auch dieser
+            Schritt einen abgelehnten Teil nicht mehr anfasst); Elementschranke und
+            Verbrauch laufen dann über dieses Objekt statt über `max_elements`.
 
     Returns:
         ``(text, hidden_removed)`` — `hidden_removed` ist die Anzahl entfernter
@@ -176,8 +259,11 @@ def html_to_text(
     Raises:
         HtmlTooComplexError: Element- oder Tiefenschranke überschritten (ADR-084).
     """
+    if budget is None:
+        budget = HtmlBudget(elements=max_elements, byte_budget=max_bytes)
+        budget.admit(html)
     soup = BeautifulSoup(html, "lxml")
-    _check_complexity(soup, max_elements)
+    budget.elements -= _check_complexity(soup, budget.elements)
     hidden_removed = 0
 
     for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):

@@ -8,6 +8,8 @@ import pytest
 
 from maildigest.sanitize.html_to_text import (
     MAX_HTML_DEPTH,
+    MAX_HTML_PARTS,
+    HtmlBudget,
     HtmlTooComplexError,
     html_to_text,
 )
@@ -170,6 +172,59 @@ class TestHc21Schranken:
         html = "<div>" * (MAX_HTML_DEPTH + 5) + "x" + "</div>" * (MAX_HTML_DEPTH + 5)
         with pytest.raises(HtmlTooComplexError):
             html_to_text(html, max_elements=10**9)
+
+    def test_hc2_1_byte_deckel_lehnt_vor_dem_parsen_ab(self) -> None:
+        """Zweite Iteration NF-1: 24 MB werden in unter 0,5 s abgelehnt.
+
+        Vor diesem Fix kostete derselbe Teil 43,6 s: Element- und Tiefenschranke liefen
+        erst **nach** `BeautifulSoup(...)`, und der Parse trug die ganzen Kosten.
+        """
+        html = "<p>" * 8_000_000
+        assert len(html) >= 24_000_000
+        start = time.perf_counter()
+        with pytest.raises(HtmlTooComplexError):
+            html_to_text(html)
+        assert time.perf_counter() - start < 0.5
+
+    def test_hc2_1_byte_deckel_ist_einstellbar(self) -> None:
+        """`max_bytes` entscheidet, nicht die Elementzahl — Gegenprobe inklusive."""
+        html = "<p>x</p>" * 100
+        assert html_to_text(html, max_bytes=10_000)[0].startswith("x")
+        with pytest.raises(HtmlTooComplexError):
+            html_to_text(html, max_bytes=100)
+
+    def test_hc2_1_budget_gilt_ueber_mehrere_teile(self) -> None:
+        """Ein `HtmlBudget` je Mail: Was der erste Teil verbraucht, fehlt dem zweiten.
+
+        Aufrufreihenfolge wie im Sanitizer: erst `admit()` (Teilezahl und Bytes am rohen
+        Teil), dann die Konvertierung, die die Elemente abschreibt.
+        """
+        budget = HtmlBudget(elements=10, byte_budget=10_000)
+        html = "<p>x</p>" * 5
+        budget.admit(html)
+        html_to_text(html, budget=budget)
+        assert budget.byte_budget == 10_000 - len(html)
+        assert budget.parts == MAX_HTML_PARTS - 1
+        assert budget.elements < 10  # fünf <p> plus die html/body-Hülle von lxml
+        zweiter = "<p>x</p>" * 10
+        budget.admit(zweiter)
+        with pytest.raises(HtmlTooComplexError):  # Restbudget reicht nicht mehr
+            html_to_text(zweiter, budget=budget)
+
+    def test_hc2_1_budget_begrenzt_die_zahl_der_teile(self) -> None:
+        """Nach `MAX_HTML_PARTS` Teilen wird gar nicht mehr zugelassen."""
+        budget = HtmlBudget()
+        for _ in range(MAX_HTML_PARTS):
+            budget.admit("<p>x</p>")
+        with pytest.raises(HtmlTooComplexError):
+            budget.admit("<p>x</p>")
+
+    def test_hc2_1_budget_deckelt_die_bytes_der_ganzen_mail(self) -> None:
+        """Der Byte-Deckel ist ein Restbudget, kein Deckel je Teil."""
+        budget = HtmlBudget(byte_budget=1_000)
+        budget.admit("<p>" * 300)  # 900 Bytes: passt
+        with pytest.raises(HtmlTooComplexError):
+            budget.admit("<p>" * 300)  # dieselben 900 Bytes: passen nicht mehr
 
     def test_hc2_1_gewoehnliches_html_bleibt_unberuehrt(self) -> None:
         """Gegenprobe: echtes Mail-HTML liegt um Grössenordnungen unter den Schranken."""

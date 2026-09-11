@@ -451,6 +451,99 @@ def test_hc2_2_hc23_bleibt_behoben() -> None:
     assert raw.from_domain == "b.example"
 
 
+# --- HC2-2 (zweite Iteration): kodierte Wörter werden vor dem Adress-Parse maskiert ----
+#
+# Die Q-Kodierung darf `@`, `<`, `>` und `,` literal führen; `getaddresses` liest das auf
+# dem Rohwert als Adresssyntax. Das Base64-Alphabet kann diese Zeichen nicht enthalten —
+# die Tests oben sehen den Fall deshalb nicht.
+
+
+def test_hc2_2_q_wort_mit_at_und_komma_bestimmt_die_domain_nicht() -> None:
+    """`=?utf-8?Q?info@bank.example,?=` lieferte `from_domain='bank.example'`."""
+    mail = _attack_mail(
+        b"From: =?utf-8?Q?info@bank.example,?= <attacker@evil.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+
+    assert raw.from_domain == _address_in_raw_header(mail, "From").split("@")[1]
+    assert raw.from_domain == "evil.example"
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    assert report.return_path_mismatch is True
+
+
+def test_hc2_2_q_wort_ohne_komma_loescht_die_domain_nicht() -> None:
+    """Zweite Wirkung desselben Befunds: ohne Komma verschwand die Domain ganz."""
+    mail = _attack_mail(b"From: =?utf-8?Q?info@bank.example?= <attacker@evil.example>")
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_domain == _address_in_raw_header(mail, "From").split("@")[1]
+    assert raw.from_domain == "evil.example"
+
+
+def test_hc2_2_q_wort_mit_winkelklammern() -> None:
+    """Auch `<` und `>` darf ein Q-Wort literal tragen."""
+    mail = _attack_mail(
+        b"From: =?utf-8?Q?<info@bank.example>?= <attacker@evil.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_domain == _address_in_raw_header(mail, "From").split("@")[1]
+    assert raw.from_domain == "evil.example"
+
+
+def test_hc2_2_b_wort_mit_adresse_als_klartext() -> None:
+    """Gegenprobe im neuen Weg: Das Base64-Wort bleibt genauso wirkungslos."""
+    mail = _attack_mail(
+        b"From: " + _encoded("Bank <info@bank.example>,") + b" <attacker@evil.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_domain == _address_in_raw_header(mail, "From").split("@")[1]
+    assert raw.from_domain == "evil.example"
+    assert "Bank" in raw.from_addr  # der Name bleibt lesbar
+
+
+def test_hc2_2_kodiertes_wort_direkt_vor_der_adresse() -> None:
+    """Ohne Leerzeichen vor `<` — der Platzhalter darf die Adressgrenze nicht verschieben."""
+    mail = _attack_mail(
+        b"From: =?utf-8?Q?info@bank.example,?=<attacker@evil.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_domain == _address_in_raw_header(mail, "From").split("@")[1]
+    assert raw.from_domain == "evil.example"
+
+
+def test_hc2_2_zwei_kodierte_woerter() -> None:
+    """Zwei Wörter, das zweite trägt die eingeschleuste Adresse (`=3C`/`=3E`)."""
+    mail = _attack_mail(
+        b"From: =?utf-8?Q?Bank=20Support?= =?utf-8?Q?_=3Cinfo@bank.example=3E,?= "
+        b"<attacker@evil.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_domain == _address_in_raw_header(mail, "From").split("@")[1]
+    assert raw.from_domain == "evil.example"
+    # Vor dem Fix stand hier die syntaktisch unmögliche Domain `bank.example=3e`.
+    assert "=3e" not in raw.from_domain
+    assert "Bank Support" in raw.from_addr
+
+
+def test_hc2_2_q_wort_im_reply_to() -> None:
+    """Derselbe Weg über `Reply-To`: der Indikator muss weiter feuern."""
+    mail = _attack_mail(
+        b"From: " + _encoded("Bank") + b" <attacker@evil.example>",
+        reply_to=b"Reply-To: =?utf-8?Q?info@bank.example,?= <collect@evil2.example>\r\n",
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert _address_in_raw_header(mail, "Reply-To") == "collect@evil2.example"
+    assert "collect@evil2.example" in (raw.reply_to or "")
+    assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch is True
+
+
+def test_hc2_2_gewoehnlicher_kodierter_name_bleibt_lesbar() -> None:
+    """Gegenprobe: Der Platzhalterschritt darf den normalen Fall nicht verändern."""
+    mail = _attack_mail(b"From: " + _encoded("Jörg Müller") + b" <j@b.example>")
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_addr == "Jörg Müller <j@b.example>"
+    assert raw.from_domain == "b.example"
+
+
 # --- Backoff ---------------------------------------------------------------------------------
 
 

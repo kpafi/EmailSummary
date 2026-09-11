@@ -413,6 +413,7 @@ _KEY_ORDER: dict[str, tuple[str, ...]] = {
         "max_mime_depth",
         "max_attachments_processed",
         "max_html_elements",
+        "max_html_bytes",
     ),
 }
 
@@ -448,6 +449,7 @@ _KEY_COMMENTS: dict[str, str] = {
     "messenger.active": "telegram | discord | signal",
     "messenger.telegram.accept_commands": "accept /digest and /status from your chat",
     "limits.max_html_elements": "HTML parts above this are not converted",
+    "limits.max_html_bytes": "per mail, across all HTML parts (at most 4)",
 }
 
 #: Auskommentierte Platzhalter für Felder ohne Default (Pflichtfelder) und für Secrets.
@@ -784,6 +786,7 @@ def cmd_init(ctx: Context) -> int:
             "max_mime_depth": 10,
             "max_attachments_processed": 20,
             "max_html_elements": 50000,
+            "max_html_bytes": 1048576,
         },
     }
     # Die Werte aus den Abfragen müssen das Schema erfüllen, bevor die Datei entsteht.

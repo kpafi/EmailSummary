@@ -96,6 +96,20 @@ docs/TESTRUNDE-2.md):
   beiden Warnungen zu abweichender Antwortadresse und abweichendem Rückweg verstummten dabei.
   Absenderadresse und Domain werden jetzt aus dem unveränderten Kopfzeilenwert gelesen;
   dekodiert wird nur noch der Name (HC2-2). Der seit HC-23 lesbare Klarname bleibt erhalten.
+- **Nachgezogen (zweite Iteration):** Die Grenze für HTML-Teile griff erst, nachdem der
+  Parser die ganze Eingabe gelesen hatte — ein 24-MB-HTML-Teil hielt den Dienst 47 Sekunden
+  an, obwohl er anschliessend verworfen wurde; und sie galt je Teil, sodass 34 unauffällige
+  HTML-Teile zusammen 29 Sekunden kosteten, ohne dass irgendetwas angezeigt wurde. Neu ist
+  ein Byte-Deckel **vor** dem Umwandeln (`[limits] max_html_bytes`, Standard 1 MB), der
+  zusammen mit der Elementgrenze als Budget für die **ganze Mail** gilt; höchstens vier
+  HTML-Teile je Mail werden überhaupt umgewandelt. Dieselben Angriffsmails kosten jetzt 0,1 s
+  bzw. 0,7 s, und keine Mail kann die Umwandlung länger als rund zwei Sekunden beschäftigen.
+  Echte Newsletter sind nicht betroffen (HC2-1, ADR-084).
+- **Nachgezogen (zweite Iteration):** Ein kodierter Anzeigename konnte die Absender-Domain
+  weiterhin fälschen, wenn er `@` und `,` unkodiert trug (`=?utf-8?Q?info@bank.example,?=`).
+  Kodierte Wörter werden jetzt vor dem Lesen der Adresse durch einen neutralen Platzhalter
+  ersetzt und erst danach als Name wieder eingesetzt — ein Name kann die Absender-Domain
+  damit weder ersetzen noch löschen (HC2-2, ADR-020).
 
 ### Geändert
 - Alle nutzersichtbaren Texte sind englisch; Docstrings und `docs/` bleiben deutsch.

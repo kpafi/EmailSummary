@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import ssl
 import threading
 from collections.abc import Callable, Iterator
@@ -275,16 +276,71 @@ def _clean_display_name(name: str) -> str:
     return " ".join(name.translate(_DISPLAY_NAME_SPECIALS).split())
 
 
-def _first_address(text: str) -> tuple[str, str]:
-    """Erste Angabe eines Adress-Headers als ``(name, adresse)`` (Rohwert-Parse)."""
+#: RFC-2047-Wort (`=?charset?B?…?=` / `=?charset?Q?…?=`) im rohen Headerwert.
+_ENCODED_WORD_RE = re.compile(r"=\?[^?]+\?[BbQq]\?[^?]*\?=")
+
+#: Stamm der Platzhalter, die kodierte Wörter beim Adress-Parsen vertreten (HC2-2-Rest).
+#: Nur `[A-Za-z0-9]` — damit ist ein Platzhalter für `getaddresses` reiner Text und kann
+#: keine Adressgrenze (`@`, `<`, `>`, `,`, `;`, `:`) erzeugen.
+_PLACEHOLDER_STEM = "MDENCWORD"
+
+
+def _mask_encoded_words(raw_text: str) -> tuple[str, dict[str, str], str]:
+    """Ersetzt jedes RFC-2047-Wort durch einen adressneutralen Platzhalter (HC2-2-Rest).
+
+    Der Rohwert-Parse allein genügt nicht: Die Q-Kodierung darf `@`, `<`, `>` und `,`
+    **literal** führen, und `getaddresses` liest die Kodierungssyntax dann als
+    Adresssyntax — `=?utf-8?Q?info@bank.example,?= <attacker@evil.example>` zerfällt in
+    zwei Angaben, von denen die erste (der Anzeigename!) die Absender-Domain bestimmt.
+    Maskiert ist ein kodiertes Wort ein einzelnes Wort ohne Sonderzeichen; die
+    Adressgrenzen sind danach genau die, die der Header wirklich setzt.
+
+    Returns:
+        ``(maskierter Text, {platzhalter: kodiertes Wort}, Platzhalter-Stamm)``.
+    """
+    stem = _PLACEHOLDER_STEM
+    while stem in raw_text:  # der Header führt den Stamm selbst: eindeutig machen
+        stem += "X"
+    words: dict[str, str] = {}
+
+    def _replace(match: re.Match[str]) -> str:
+        token = f"{stem}{len(words)}"
+        words[token] = match.group(0)
+        return token
+
+    return _ENCODED_WORD_RE.sub(_replace, raw_text), words, stem
+
+
+def _unmask_encoded_words(text: str, words: dict[str, str]) -> str:
+    """Setzt die kodierten Wörter in einem **Namensteil** wieder ein (HC2-2-Rest)."""
+    for token, word in words.items():
+        text = text.replace(token, word)
+    return text
+
+
+def _first_address(text: str, *, placeholder_stem: str = "") -> tuple[str, str]:
+    """Erste Angabe eines Adress-Headers als ``(name, adresse)`` (Rohwert-Parse).
+
+    Ein Platzhalter im Adressteil bedeutet, dass dort ein kodiertes Wort stand — also ein
+    Name, keine Adresse (HC2-2-Rest). Solche Angaben werden übersprungen; sie dürfen die
+    Absender-Domain weder liefern noch löschen.
+    """
     pairs = getaddresses([text])
     if not pairs:
         return "", ""
-    for name, address in pairs:
+    candidates = [
+        (name, address)
+        for name, address in pairs
+        if not (placeholder_stem and placeholder_stem in address)
+    ]
+    for name, address in candidates:
         local, at_sign, domain = address.rpartition("@")
         if at_sign and local and domain.strip().strip("<>[]").rstrip("."):
             return name, address
-    return pairs[0]
+    if candidates:
+        return candidates[0]
+    # Nur Platzhalter: Der Header trägt gar keine Adresse, alles davon ist Name.
+    return " ".join(part for pair in pairs for part in pair if part), ""
 
 
 def _compose_display_address(name: str, address: str) -> str:
@@ -325,10 +381,14 @@ def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
     raw_text = _collapse(_predecode_eight_bit(values[0]))
     if not raw_text:
         return "", ""
-    display, address = _first_address(raw_text)
-    decoded = _decode_mime_words(display) if display else ""
-    if decoded == display:
+    masked, encoded_words, stem = _mask_encoded_words(raw_text)
+    display, address = _first_address(masked, placeholder_stem=stem)
+    if not encoded_words:
+        # Kein kodiertes Wort: Es gibt nichts zu reparieren, und jede Normalisierung des
+        # Rohwerts wäre nur eine weitere Fehlerquelle.
         return raw_text, address
+    display = _unmask_encoded_words(display, encoded_words)
+    decoded = _decode_mime_words(display) if display else ""
     return _compose_display_address(_clean_display_name(decoded), address), address
 
 

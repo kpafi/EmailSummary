@@ -402,6 +402,24 @@
   Wörter trägt: Bytes ≥ 0x80 können keine Adressgrenze erzeugen, RFC-2047-Wörter schon.
   Trägt der Name keine Kodierung, bleibt der Rohwert unverändert — es gibt dann nichts zu
   reparieren. Punkt (e) bleibt bindend: geworfen wird nie.
+- **Nachtrag (Nachfixrunde NF-1, zweite Iteration, 2026-09-12, HC2-2-Rest):** „Roh parsen"
+  allein genügt nicht — der Rohwert trägt die RFC-2047-Kodierung noch, und die Q-Form darf
+  `@`, `<`, `>` und `,` **literal** führen. `getaddresses` liest die Kodierungssyntax dann
+  als Adresssyntax: `From: =?utf-8?Q?info@bank.example,?= <attacker@evil.example>` zerfällt
+  in `[('', '=?utf-8?Q?info@bank.example'), ('?=', 'attacker@evil.example')]`, und die
+  erste Angabe — der Anzeigename — gewinnt wieder (`from_domain='bank.example'`; ohne Komma
+  verschwand die Domain ganz). Das Base64-Alphabet kann diese Zeichen nicht enthalten,
+  deshalb sah der erste Fix den Fall nicht. Verbindlich ist ab jetzt zusätzlich:
+  **maskieren, parsen, einsetzen.** Vor `getaddresses` ersetzt `_mask_encoded_words` jedes
+  kodierte Wort (`=\?[^?]+\?[BbQq]\?[^?]*\?=`) im Rohwert durch einen adressneutralen
+  Platzhalter aus `[A-Za-z0-9]` (`MDENCWORD0`, `MDENCWORD1`, …; der Stamm wird verlängert,
+  falls der Header ihn selbst führt). Maskiert kann ein kodiertes Wort keine Adressgrenze
+  mehr erzeugen — die Grenzen sind genau die, die der Header wirklich setzt. Ein Platzhalter
+  im **Adressteil** bedeutet, dass dort ein kodiertes Wort stand: Er gilt als Name, nie als
+  Adresse, und wird beim Suchen der Adresse übersprungen. Erst im Namensteil werden die
+  Wörter wieder eingesetzt und dekodiert; der Rest des Weges (Struktursymbole entfernen,
+  `parseaddr`-Selbstprüfung) bleibt wie oben. Trägt der Header gar kein kodiertes Wort,
+  bleibt der Rohwert unverändert — der Normalfall ändert sich nicht.
 
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
@@ -2458,3 +2476,36 @@ ihre *Erkennung* zu eng.
   50 000 Elemente) verliert ihren HTML-Teil — sichtbar, nicht still. Kein Dauer-DoS: `claim`
   reserviert den Dedupe-Key vor der Verarbeitung (ADR-019) und committet sofort, ein
   Prozessabbruch mitten in der Sanitize-Stufe kostet höchstens diesen einen Zyklus.
+
+- **Nachtrag (Nachfixrunde NF-1, zweite Iteration, 2026-09-12, HC2-1-Rest):** Die Schranke
+  stand an der falschen Stelle und galt für das falsche Ganze. (a) Element- und
+  Tiefenschranke werden erst **nach** `BeautifulSoup(html, "lxml")` ausgewertet — der Parse
+  selbst trägt die Kosten, der frühe Abbruch der Zählschleife spart nichts. Ein einzelner
+  24-MB-HTML-Teil (unter `max_mail_bytes`) kostete so 47,4 s CPU, obwohl er anschliessend
+  abgelehnt wurde; ab ~1,2 MB Mail war die 2-Sekunden-Marke gerissen. (b) Die Schranke galt
+  **je Teil**: 34 `text/html`-Teile à 49 000 Elemente — jeder für sich unter beiden Grenzen
+  — kosteten 29,6 s, und `html_rejected` blieb False; der Nutzer sah nicht einmal die
+  Hinweiszeile. Ein Angreifer multipliziert eine Schranke je Teil einfach mit der Teilezahl.
+  Entscheidung, drei Teile:
+  1. **Byte-Deckel vor dem Parsen:** neues Feld `[limits] max_html_bytes` (Default 1 MiB).
+     Geprüft wird die Bytelänge des rohen Teils, bevor `clean_text` oder der Parser ihn
+     anfassen — die einzige Schranke, die *vor* dem Parse greifen kann, weil sie den Baum
+     nicht kennen muss (Vorbild: `pdf_max_input_bytes` spielt genau diese Rolle für die
+     PDF-Stufe). Der Default ist gemessen, nicht geraten: Die teuerste beobachtete Form
+     (`"<p>" * n`, dichteste Elementfolge je Byte) kostet bei 1 MB rund 1,8 s Parse-Zeit,
+     bei 2 MB schon 3,8 s. Echte Newsletter liegen mit 50–300 KB HTML weit darunter.
+  2. **Budget je Mail statt je Teil:** `HtmlBudget` (ein Objekt je `sanitize()`-Lauf, geteilt
+     von Body-Pfad und Divergenzcheck) führt Bytes **und** Elemente als Restbudget über alle
+     HTML-Teile — wie `max_text_chars` schon als Budget durch `sanitize()` gereicht wird.
+     Was der erste Teil verbraucht, fehlt dem zweiten.
+  3. **Teilezahl:** höchstens `MAX_HTML_PARTS` (4, Modulkonstante wie `MAX_HTML_DEPTH`)
+     `text/html`-Teile werden überhaupt konvertiert. `multipart/alternative` trägt genau
+     einen; alles darüber ist Multiplikation der Schranke.
+  Wirkung (gemessen, dieselben Repro-Mails): Fall A 47,4 s → 0,1 s, Fall B 29,6 s → 0,7 s,
+  Fall C 2,3 s → 0,0 s. Die teuerste Mail, die die neuen Grenzen überhaupt zulassen
+  (4 Teile × Byte-Deckel der dichtesten Form), kostet rund 2 s — die 10-Sekunden-Zusage aus
+  SPEC-CLI §5/ADR-080 hält jetzt für **jede** Mail unter `max_mail_bytes`. Verhalten bei
+  Überschreitung unverändert: `HtmlTooComplexError`, nur dieser Teil fällt weg,
+  `html_rejected` im Report, Hinweiszeile, Mail läuft fail-safe weiter (I1/I6). Wer
+  `max_html_elements` oder `max_html_bytes` hochsetzt, verlängert die Konvertierung — das
+  sagt SPEC-CLI §5 jetzt ausdrücklich.

@@ -142,6 +142,13 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `text/plain`-Teil wird normal zugestellt, rohes HTML verlässt die Stufe nie (I1).
   Derselbe Deckel gilt im Divergenzcheck `_html_diverges` (ADR-067) — er ist der
   praktisch wichtigere Einstieg, weil er auch bei vorhandenem Klartext-Teil läuft.
+  Davor liegt (ADR-084-Nachtrag, NF-1 zweite Iteration) ein reiner **Byte-Deckel**
+  `[limits] max_html_bytes` (Default 1 MB): Element- und Tiefenschranke sehen den Baum
+  erst, wenn der Parser ihn gebaut hat — die Bytelänge wird geprüft, bevor `clean_text`
+  oder BeautifulSoup den Teil überhaupt anfassen. Byte- und Elementschranke laufen als
+  **Restbudget einer ganzen Mail** (`HtmlBudget`, ein Objekt je `sanitize()`-Lauf, geteilt
+  von Body-Pfad und Divergenzcheck), und höchstens `MAX_HTML_PARTS` (4) `text/html`-Teile
+  werden überhaupt konvertiert; weitere gelten als nicht konvertiert (`html_rejected`).
 - **Nicht Aufgabe des Sanitizers:** `RawMail.date`/`from_domain` werden unverändert
   übernommen (Vertrauensmodell aus ADR-020); die Nachrichten-Formatierung der
   Anhang-Hinweise („⚠ 2 nicht verarbeitete Anhänge …") ist WP7 (`output/`), auf Basis
@@ -689,7 +696,8 @@ pdf_max_output_chars = 50000
 pdf_timeout_seconds = 20
 max_mime_depth = 10
 max_attachments_processed = 20
-max_html_elements = 50000          # Elemente je HTML-Teil (ADR-084)
+max_html_elements = 50000          # Elementbudget der HTML-Konvertierung je Mail (ADR-084)
+max_html_bytes = 1048576           # Bytebudget je Mail, vor dem Parsen geprüft (ADR-084)
 ```
 
 **Umsetzungshinweise (WP1, `config.py` — Begründung in ADR-015):**

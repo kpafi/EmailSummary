@@ -207,6 +207,10 @@ class LimitsConfig(_Section):
     #: Elementzahl eines HTML-Teils, ab der er als nicht verarbeitbar gilt (ADR-084, HC2-1).
     #: Die Tiefengrenze dazu ist eine Modulkonstante (`html_to_text.MAX_HTML_DEPTH`).
     max_html_elements: int = Field(default=50_000, ge=1)
+    #: Bytelänge eines HTML-Teils, ab der er ungeparst verworfen wird (ADR-084-Nachtrag).
+    #: Einziger Deckel, der VOR dem Parsen greift; zugleich Restbudget über alle
+    #: HTML-Teile einer Mail (Teilezahl: `html_to_text.MAX_HTML_PARTS`).
+    max_html_bytes: int = Field(default=1024 * 1024, ge=1024)
     max_attachments_processed: int = Field(default=20, ge=0)
 
 
