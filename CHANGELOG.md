@@ -110,6 +110,21 @@ docs/TESTRUNDE-2.md):
   Kodierte Wörter werden jetzt vor dem Lesen der Adresse durch einen neutralen Platzhalter
   ersetzt und erst danach als Name wieder eingesetzt — ein Name kann die Absender-Domain
   damit weder ersetzen noch löschen (HC2-2, ADR-020).
+- **Nachgezogen (dritte Iteration):** Eine einzige Mail konnte den Abruf weiterhin minutenlang
+  blockieren — nicht über das HTML, sondern über die Zahl der Links: Das Entfernen von Links
+  wurde mit jeder weiteren Adresse überproportional teurer (eine Mail mit 41 000 Links kostete
+  29 Sekunden, obwohl sie alle Grenzen einhielt), und für Klartext gab es überhaupt keine
+  Grenze (21 MB Text = 4,5 Sekunden). Das Entfernen läuft jetzt in einem Durchgang, je Mail
+  werden höchstens 2000 Links einzeln aufgeführt (weitere werden trotzdem entfernt und als
+  `[Link removed]` angezeigt; die Nachricht sagt das mit „too many links, further links
+  removed unlisted"), und roher Mail- und Anhangstext wird vor der Prüfung auf ein
+  Vielfaches des Textbudgets vorgeschnitten. Dieselben Mails kosten jetzt 1,1 s bzw. 0,4 s;
+  die teuerste überhaupt mögliche Mail liegt bei etwa zwei bis drei Sekunden (HC2-1,
+  ADR-028/ADR-084).
+- **Nachgezogen (dritte Iteration):** Die Absender-Fälschung über einen kodierten
+  Anzeigenamen war mit einem einzigen fehlenden Zeichen wieder möglich (`=??Q?…?=` ohne
+  Zeichensatz). Die Erkennung kodierter Wörter folgt jetzt genau der Form, die auch der
+  Dekodierer der Standardbibliothek verwendet (HC2-2, ADR-020).
 
 ### Geändert
 - Alle nutzersichtbaren Texte sind englisch; Docstrings und `docs/` bleiben deutsch.

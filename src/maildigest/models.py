@@ -109,6 +109,10 @@ class SanitizationReport(BaseModel):
     #: gilt als **nicht verarbeitet** (ADR-084, HC2-1). Kein Fail-closed für die Mail: Der
     #: Klartext-Teil (falls vorhanden) wird normal zugestellt, der HTML-Teil nicht.
     html_rejected: bool = False
+    #: Die Mail trug mehr Links, als eine einzelne Mail einzeln ausgewertet bekommt
+    #: (`links.MAX_LINKS_PER_MAIL`, ADR-028-Nachtrag/R-5). Entfernt wurden sie alle (I3);
+    #: die überzähligen tragen nur keinen Host und keine Fußnoten-Nummer mehr.
+    links_capped: bool = False
     blocked_attachments: int = Field(default=0, ge=0)
     reply_to_mismatch: bool = False
     return_path_mismatch: bool = False

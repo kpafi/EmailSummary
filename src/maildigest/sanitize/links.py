@@ -30,10 +30,31 @@ from urllib.parse import unquote
 
 from maildigest.sanitize.unicode_clean import clean_text, is_mixed_script_domain
 
-__all__ = ["FOOTNOTE_TITLE", "LinkCollector", "build_footnote"]
+__all__ = [
+    "CAPPED_MARKER",
+    "FOOTNOTE_TITLE",
+    "MAX_LINKS_PER_MAIL",
+    "LinkCollector",
+    "build_footnote",
+]
 
 #: Obergrenze der in `links_found` gesammelten Einträge (Schutz vor Link-Bomben, T10).
 _MAX_LINKS_LISTED = 100
+
+#: Obergrenze der Funde, die **eine Mail** überhaupt einzeln auswerten darf (T10, R-5).
+#:
+#: Ohne dieses Budget wächst die Arbeit je Mail mit der Zahl der Links: Rück-Ersetzung,
+#: Punycode-Prüfung und Marker-Bau kosten je Fund. Eine Mail mit 41 000 Links lag damit
+#: deutlich über der 10-s-Zusage (SPEC-CLI §5). Jenseits des Budgets überlebt **keine**
+#: URL (I3): Der Fund wird durch :data:`CAPPED_MARKER` ersetzt und in `links_removed`
+#: weitergezählt, bekommt aber weder eine Nummer in der Fußnote noch eine Domain-Analyse.
+#: Modulkonstante wie `MAX_HTML_PARTS`: keine Betriebsgrösse, sondern eine
+#: Struktur-Plausibilität — echte Mail bleibt um Grössenordnungen darunter.
+MAX_LINKS_PER_MAIL = 2000
+
+#: Ersatz für einen Fund jenseits von :data:`MAX_LINKS_PER_MAIL` (R-5). Trägt bewusst
+#: weder Host noch Nummer — er ist nur der Nachweis, dass hier etwas entfernt wurde.
+CAPPED_MARKER = "[Link removed]"
 
 #: Zeichenbudget der optionalen Link-Fußnote — eine Link-Bombe sprengt sie nicht (T10).
 _MAX_FOOTNOTE_CHARS = 5000
@@ -242,6 +263,9 @@ class LinkCollector:
     links_found: list[str] = field(default_factory=list)
     punycode_domains: list[str] = field(default_factory=list)
     mixed_script_domains: list[str] = field(default_factory=list)
+    #: Mindestens ein Fund lag jenseits von :data:`MAX_LINKS_PER_MAIL` und wurde ohne
+    #: Nummer und ohne Domain-Analyse entfernt (R-5). Der Composer sagt das dem Nutzer.
+    links_capped: bool = False
 
     def scrub(self, text: str) -> str:
         """Ersetzt alle erkannten URLs/Adressen in `text` durch Marker und protokolliert sie."""
@@ -272,6 +296,9 @@ class LinkCollector:
             number = _condense(match.group(0)).split(":", 1)[-1]
             self.links_removed += 1
             index = self.links_removed
+            if index > MAX_LINKS_PER_MAIL:
+                self.links_capped = True
+                return stash(CAPPED_MARKER)
             if len(self.links_found) < _MAX_LINKS_LISTED:
                 self.links_found.append(f"#{index}: tel[:]{number}")
             return stash(f"[Tel #{index}]")
@@ -302,8 +329,12 @@ class LinkCollector:
         text = _sub_outside_placeholders(_RE_OBF_DOMAIN, replace_domain, text)
         text = _sub_outside_placeholders(_RE_BARE_DOMAIN, replace_bare, text)
 
-        for token, marker in placeholders.items():
-            text = text.replace(token, marker)
+        # Ein einziger Durchlauf statt eines Voll-Scans je Platzhalter (R-5): die alte
+        # Schleife war O(Funde mal Textlänge) und kostete bei 32 000 Links 17 s.
+        if placeholders:
+            text = _RE_PLACEHOLDER.sub(
+                lambda match: placeholders.get(match.group(0), ""), text
+            )
         # Zusicherung statt Vertrauen (HC-8): Kein Platzhalter-Byte verlässt das Modul,
         # auch wenn ein künftiger Pass die atomare Regel verletzt. Ein übrig gebliebenes
         # U+0000 wäre ein Steuerzeichen in der Zustellung — fail-safe entfernen.
@@ -313,6 +344,10 @@ class LinkCollector:
         """Zählt einen Fund, prüft Punycode/Mixed-Script und liefert den Text-Marker."""
         self.links_removed += 1
         index = self.links_removed
+        if index > MAX_LINKS_PER_MAIL:
+            # Jenseits des Budgets: entfernt wird trotzdem (I3), nur nicht mehr benannt.
+            self.links_capped = True
+            return CAPPED_MARKER
         if len(self.links_found) < _MAX_LINKS_LISTED:
             self.links_found.append(f"#{index}: {defanged}")
 

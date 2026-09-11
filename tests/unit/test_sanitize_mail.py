@@ -506,14 +506,19 @@ class TestHc21SchrankenDerHtmlKonvertierung:
     def test_hc2_1_teuerste_mail_unter_den_neuen_grenzen(self) -> None:
         """Die ungünstigste Form, die die neuen Grenzen überhaupt zulassen.
 
-        Konstruiert wird `MAX_HTML_PARTS` × `max_html_bytes` der teuersten gemessenen
-        Form (`"<p>" * n`, die dichteste Elementfolge je Byte): Mehr Arbeit kann eine Mail
-        unter `max_mail_bytes` der Konvertierung nicht mehr machen. Gemessen ~2 s; die
-        Schranke ist auf einer belasteten Maschine grosszügiger gesetzt, die Aussage des
-        Befunds (zweistellige Sekunden) ist damit trotzdem erledigt.
+        Konstruiert wird das volle Byte-Budget, aufgeteilt auf `MAX_HTML_PARTS` Teile
+        (R-7): Jeder Teil trägt ein Viertel des Deckels in der teuersten gemessenen Form
+        (`"<p>" * n`, die dichteste Elementfolge je Byte), sodass **alle vier** Teile
+        wirklich geparst werden. Die frühere Fassung gab jedem Teil den ganzen Deckel —
+        dann verwarf das Byte-Budget die Teile 2 bis 4 ungeparst, und die Messung war zu
+        günstig (1,84 s statt 2,3 bis 2,6 s). Mehr Arbeit kann eine Mail unter
+        `max_mail_bytes` der Konvertierung nicht mehr machen.
+
+        Gemessen 2,3 bis 2,6 s je nach Maschinenlast — deutlich unter der 10-s-Zusage aus
+        SPEC-CLI §5/ADR-080; die Assertion lässt Reserve für eine belastete Maschine.
         """
         deckel = LimitsConfig().max_html_bytes
-        teile = ["<p>" * (deckel // 3)] * 4
+        teile = ["<p>" * (deckel // 4 // 3)] * 4
         mime = (
             'Content-Type: multipart/alternative; boundary="B"\r\n\r\n'
             + "".join(
@@ -525,8 +530,100 @@ class TestHc21SchrankenDerHtmlKonvertierung:
         start = time.perf_counter()
         mail = MailSanitizer().sanitize(make_raw(mime))
         dauer = time.perf_counter() - start
-        assert dauer < 4.0, f"HTML-Konvertierung dauerte {dauer:.1f} s"
+        assert dauer < 6.0, f"HTML-Konvertierung dauerte {dauer:.1f} s"
         assert mail.sanitization_report.html_rejected is True
+        assert "<" not in mail.body_text
+
+    def test_r6_riesiger_klartext_wird_vor_den_teuren_paessen_geschnitten(self) -> None:
+        """R-6: 21 MB Klartext kosteten 4,2 s, obwohl davon 30 000 Zeichen überleben.
+
+        `max_mail_bytes` lässt 25 MB zu; der Byte-Deckel aus ADR-084 gilt nur für
+        `text/html`. Der Klartext lief deshalb ungekürzt durch `clean_text`,
+        `neutralize_forged_markers` und den Link-Scrub, bevor `max_text_chars` griff.
+        """
+        koerper = "wort " * (21 * 1024 * 1024 // 5)
+        mime = (
+            b"Content-Type: text/plain; charset=utf-8\r\n\r\n" + koerper.encode()
+        )
+        start = time.perf_counter()
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        dauer = time.perf_counter() - start
+
+        assert dauer < 2.0, f"Klartext-Pfad dauerte {dauer:.1f} s"
+        assert mail.sanitization_report.truncated is True
+        assert len(mail.body_text) <= LimitsConfig().max_text_chars + 20
+
+    def test_r6_riesiger_textanhang_wird_vor_den_teuren_paessen_geschnitten(self) -> None:
+        """Derselbe Gedanke für `text/plain`-Anhänge — sie haben keine eigene Schranke."""
+        anhang = "http://x.example/aaaa " * (5 * 1024 * 1024 // 22)
+        mime = (
+            'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+            "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nGuten Tag.\r\n"
+            "--B\r\nContent-Type: text/plain; charset=utf-8\r\n"
+            'Content-Disposition: attachment; filename="gross.txt"\r\n\r\n'
+            f"{anhang}\r\n--B--\r\n"
+        ).encode()
+        start = time.perf_counter()
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        dauer = time.perf_counter() - start
+
+        assert dauer < 2.0, f"Anhangs-Pfad dauerte {dauer:.1f} s"
+        assert mail.sanitization_report.truncated is True
+
+    def test_r6_gewoehnliche_mail_wird_byteidentisch_verarbeitet(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Gegenprobe: Der Vorschnitt darf unterhalb seiner Grenze nichts ändern.
+
+        Orakel ist derselbe Sanitizer mit praktisch abgeschaltetem Vorschnitt (Faktor
+        10 000). Eine 100-KB-Klartextmail muss beide Male dasselbe Ergebnis liefern —
+        Text, Kürzungsmarke und Linkbuchführung.
+        """
+        from maildigest.sanitize import sanitizer as sanitizer_modul
+
+        koerper = "Guten Tag, hier ist http://ziel.example/x. " * 2500  # rund 105 KB
+        mime = (
+            b"Content-Type: text/plain; charset=utf-8\r\n\r\n" + koerper.encode()
+        )
+        mit_vorschnitt = MailSanitizer().sanitize(make_raw(mime))
+        monkeypatch.setattr(sanitizer_modul, "_RAW_TEXT_FACTOR", 10_000)
+        ohne_vorschnitt = MailSanitizer().sanitize(make_raw(mime))
+
+        assert mit_vorschnitt.body_text == ohne_vorschnitt.body_text
+        assert mit_vorschnitt.links_found == ohne_vorschnitt.links_found
+        assert (
+            mit_vorschnitt.sanitization_report.links_removed
+            == ohne_vorschnitt.sanitization_report.links_removed
+        )
+
+    def test_r7_gesamt_worst_case_bleibt_weit_unter_der_zusage(self) -> None:
+        """Alle Budgets zugleich voll: HTML-Budget, Klartext-Vorschnitt, Link-Budget.
+
+        Klartext-Teil mit weit mehr URLs als `MAX_LINKS_PER_MAIL` (und weit mehr Zeichen
+        als der Vorschnitt zulässt) plus vier HTML-Teile über das ganze Byte-Budget. Vor
+        R-5/R-6 lag genau diese Kombination im Minutenbereich; gemessen jetzt rund 1 s.
+        """
+        deckel = LimitsConfig().max_html_bytes
+        klartext = "http://x.example/aaaa " * 120_000  # 2,6 MB, rund 120 000 Funde
+        html = "<p>" * (deckel // 4 // 3)
+        mime = (
+            'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+            f"--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{klartext}\r\n"
+            + "".join(
+                f"--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{html}\r\n"
+                for _ in range(4)
+            )
+            + "--B--\r\n"
+        ).encode()
+        start = time.perf_counter()
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        dauer = time.perf_counter() - start
+
+        assert dauer < 6.0, f"Gesamt-Worst-Case dauerte {dauer:.1f} s"
+        report = mail.sanitization_report
+        assert report.links_capped is True
+        assert report.truncated is True
+        assert len(mail.body_text) <= LimitsConfig().max_text_chars + 20
         assert "<" not in mail.body_text
 
     def test_hc2_1_byte_budget_gilt_ueber_die_ganze_mail(self) -> None:

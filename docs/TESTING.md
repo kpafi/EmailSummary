@@ -580,6 +580,10 @@ nachgezogen. Die übrigen Pakete NF-2 … NF-7 aus jener Restliste sind offen.
 |--------|----------|--------|-------|-----|
 | HC2-1 `html_to_text` skaliert quadratisch mit der Schachtelungstiefe; keine Schranke | high | **gefixt** | `test_sanitize_html.py::TestHc21Schranken` (5), `test_sanitize_mail.py::TestHc21SchrankenDerHtmlKonvertierung` (6), `test_output_composer.py::test_hc2_1_*` (2), `test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos` | **ADR-084**, ADR-067/029/019 (N-frei: nur zitiert) |
 | HC2-2 RFC-2047-Dekodierung vor dem Adress-Parsen (Regression aus HC-23) | medium (blockierend) | **gefixt** | `test_ingest_rawmail.py::test_hc2_2_*` (7) | ADR-020 (N) |
+| R-4 (dritte Iteration) Maske für kodierte Wörter war enger als der Dekoder (leerer Charset `=??Q?…?=`) | hoch | **gefixt** | `test_ingest_rawmail.py::test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder` (8 Formen), `::test_hc2_2_leerer_charset_bestimmt_die_domain_nicht` (3), `::test_hc2_2_leerer_charset_im_reply_to` | ADR-020 (N, dritte Iteration) |
+| R-5 (dritte Iteration) `LinkCollector.scrub` quadratisch in der Zahl der Funde; kein Link-Budget | hoch (DoS) | **gefixt** | `test_sanitize_links.py::TestR5LinkBudget` (5), `test_output_composer.py::test_r5_*` (2) | ADR-028 (N), ADR-084 (N) |
+| R-6 (dritte Iteration) Klartext-Pfad ohne Budget (bis 25 MB durch alle Pässe) | mittel | **gefixt** | `test_sanitize_mail.py::test_r6_*` (3) | ADR-084 (N) |
+| R-7 (dritte Iteration) Messkorrektur der teuersten Mail; Zusage „rund 2 s" zu knapp | mittel | **gefixt** (Zusage korrigiert) | `test_sanitize_mail.py::test_hc2_1_teuerste_mail_unter_den_neuen_grenzen` (neu vermessen), `::test_r7_gesamt_worst_case_bleibt_weit_unter_der_zusage` | ADR-084 (N) |
 
 „(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11**. Fett gesetzte ADRs sind neu.
 
@@ -607,6 +611,28 @@ das reine Base64-Orakel der ersten Iteration konnte sie nicht erzeugen. Alle ach
 HC2-2-Tests schlagen auf dem Stand vor dieser Iteration fehl, die Gegenprobe (gewöhnlicher
 kodierter Name) bleibt grün.
 
+**Dritte Iteration (2026-09-12).** Der Skeptiker der zweiten Iteration bestätigte alle
+bisherigen Repros als tot und belegte vier neue Punkte (oben als R-4 bis R-7 geführt).
+Zwei davon sind Zeitaussagen und werden wieder an der Wanduhr gemessen, jeweils vor dem Fix
+auf denselben Skripten gesehen: `LinkCollector.scrub` mit 32 000 Funden 17,0 s → 0,3 s, die
+1-MB-HTML-Mail mit 41 000 Links (innerhalb **aller** ADR-084-Schranken, `html_rejected` war
+False) 28,9 s → 1,1 s, 21 MB Klartext 4,5 s → 0,4 s. Damit die Zeittests nicht bloss die
+neuen Budgets bestätigen, prüfen zwei Tests die Wirkung inhaltlich: `test_r5_*` zeigt, dass
+jenseits des Link-Budgets **keine** URL überlebt (der Fund wird `[Link removed]`, gezählt
+bleibt er), und `test_r6_gewoehnliche_mail_wird_byteidentisch_verarbeitet` vergleicht eine
+100-KB-Mail gegen denselben Sanitizer mit praktisch abgeschaltetem Vorschnitt — byteidentisch.
+Für R-4 bleibt das Orakel die Adresse im Rohheader; zusätzlich ist jetzt der **Dekoder
+selbst** das Orakel der Maskierung: Für acht kodierte Formen (leerer Charset, Sprach-Tag,
+B/Q gross und klein, gefalteter Header, kaputte Form ohne `?=`) darf kein Segment, das
+`email.header.decode_header` als kodiert liefert, im maskierten Rohwert noch `@`, `,`, `<`,
+`>`, `;` oder `:` zeigen. Fünf der neuen R-4-Tests schlagen auf dem Stand vor dieser
+Iteration fehl. R-7 ist eine Messkorrektur: Der bisherige Test gab jedem der vier HTML-Teile
+den ganzen Byte-Deckel, worauf die Teile 2 bis 4 ungeparst verworfen wurden (1,84 s). Neu
+trägt jeder Teil ein Viertel des Deckels, alle vier werden geparst — gemessen 1,9 bis 2,6 s;
+die Zusage lautet jetzt „etwa 2–3 s je nach Maschinenlast" statt „rund 2 s". Die
+Gesamt-Worst-Case-Mail (HTML-Budget, Klartext-Vorschnitt und Link-Budget gleichzeitig voll)
+kostet 1,0 s.
+
 **Offene Frage aus HC2-1 beantwortet.** „Greift der Runner eine solche Mail nach einem
 Neustart erneut auf (Dauer-DoS)?" — Nein. `poll_once` reserviert den Dedupe-Key mit
 `StateDB.claim` **vor** der Verarbeitung (ADR-019), und `claim` committet sofort
@@ -617,4 +643,6 @@ höchstens **einen** Zyklus. Belegt durch
 `test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos`. Ein
 `failed`-Status vor der Sanitize-Stufe ist damit nicht nötig.
 
-**Testzahl nach NF-1:** 1586 (von 1565), Laufzeit unverändert rund 110 s.
+**Testzahl nach NF-1:** 1627 (von 1565; 1586 nach der ersten, 1604 nach der zweiten
+Iteration), Laufzeit rund 180 s auf belasteter Maschine — der Zuwachs kommt aus den
+Zeitmessungen der zweiten und dritten Iteration.

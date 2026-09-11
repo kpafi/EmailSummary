@@ -463,6 +463,10 @@ class DigestComposer:
             hints.append("return-path domain differs")
         if report.truncated:
             hints.append("text truncated")
+        if report.links_capped:
+            # R-5: Jenseits des Link-Budgets steht im Text nur noch `[Link removed]` —
+            # ohne Hinweis hielte der Nutzer die Fußnote für die vollständige Liste.
+            hints.append("too many links, further links removed unlisted")
         if verdict.phishing_risk == "low" and verdict.risk_reasons:
             reasons = [
                 _one_line(

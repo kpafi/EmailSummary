@@ -421,6 +421,21 @@
   `parseaddr`-Selbstprüfung) bleibt wie oben. Trägt der Header gar kein kodiertes Wort,
   bleibt der Rohwert unverändert — der Normalfall ändert sich nicht.
 
+- **Nachtrag (Nachfixrunde NF-1, dritte Iteration, 2026-09-12, R-4):** Die Maske war enger
+  als der Dekoder, der im selben Pfad danach läuft. `_ENCODED_WORD_RE` verlangte einen
+  nicht-leeren Charset (`[^?]+`); `email.header.decode_header` — der Dekoder, den das
+  Projekt selbst benutzt — kennt diese Einschränkung nicht. Ein einziges fehlendes Zeichen
+  genügte: `From: =??Q?info@bank.example,?= <attacker@evil.example>` lief an der Maske
+  vorbei und lieferte wieder `from_domain='bank.example'` mit stummen Reply-To- und
+  Return-Path-Warnungen (ohne Komma verschwand die Domain ganz). Verbindlich ist ab jetzt:
+  **Die Maskierung darf nie enger sein als der Dekoder.** Das Muster ist deshalb formgleich
+  mit `email.header.ecre` — `=\?[^?]*\?[BbQq]\?.*?\?=` (leerer Charset, Sprach-Tag
+  `=?utf-8*de?Q?…?=`, `?` innerhalb des kodierten Teils). Gesichert wird das nicht nur an
+  Beispielen, sondern gegen den Dekoder als Orakel: Für eine Liste kodierter Formen (leerer
+  Charset, Sprach-Tag, B/Q in Gross- und Kleinschreibung, gefalteter Header, kaputte Form
+  ohne schliessendes `?=`) gilt, dass kein Segment, das `decode_header` als kodiert liefert,
+  im maskierten Rohwert noch `@`, `,`, `<`, `>`, `;` oder `:` zeigt.
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28
@@ -621,6 +636,28 @@
   erkannt; ohne Schema nicht klickbar, I3 bleibt gewahrt). Nach „URL. kleinwort" kann
   der Spaced-Dot-Pass ein Folgewort verschlucken (Über-Entfernung, fail-safe).
   Die Marker-Nummerierung folgt der Pass-Reihenfolge, nicht zwingend der Textreihenfolge.
+
+- **Nachtrag (Nachfixrunde NF-1, dritte Iteration, 2026-09-12, R-5):** Zwei Ergänzungen zum
+  Platzhalter-Verfahren, beide aus der Laufzeit begründet.
+  (a) **Die Rück-Ersetzung ist linear.** Sie war eine Schleife über die Platzhalter mit je
+  einem `str.replace` über den **ganzen** Text — also O(Funde mal Textlänge). Gemessen:
+  8 000 Links 1,2 s, 16 000 Links 4,4 s, 32 000 Links 17,6 s (cProfile: 80 % der Zeit in
+  `str.replace`); eine 1-MB-HTML-Mail innerhalb aller Schranken aus ADR-084 kostete 26,8 s
+  und brach damit die 10-s-Zusage aus SPEC-CLI §5/ADR-080. Neu: ein einziges `re.sub` über
+  `_RE_PLACEHOLDER` mit dict-Lookup in der Ersetzungsfunktion — ein Durchlauf, unabhängig
+  von der Zahl der Funde (32 000 Links jetzt 0,3 s). Die Erkennungs-Pässe waren bereits
+  linear: `_sub_outside_placeholders` zerlegt den Text je Pass genau einmal an den
+  gesetzten Token.
+  (b) **Budget für die Zahl der Funde je Mail:** `MAX_LINKS_PER_MAIL = 2000`
+  (Modulkonstante wie `MAX_HTML_PARTS`, keine Betriebsgrösse). Jenseits des Budgets
+  überlebt **keine** URL — I3 bleibt ausnahmslos gültig, die Property-Tests in
+  `test_hot_properties.py` sind das Orakel. Der Fund wird durch den generischen Marker
+  `[Link removed]` ersetzt (kein Host, keine Nummer, kein Fußnoteneintrag, keine
+  Punycode-/Mixed-Script-Prüfung) und in `links_removed` weitergezählt; `links_capped` im
+  `SanitizationReport` trägt die Tatsache zur Hinweiszeile
+  `too many links, further links removed unlisted` (SPEC-CLI §6). Warum eine Zahl und kein
+  Zeichenbudget: Die Kosten hängen an der Zahl der Funde, nicht an der Textlänge, und 2000
+  Links liegen zwei Grössenordnungen über jedem realen Newsletter.
 
 ## ADR-029: PDF-Subprozess über `python -m`, stdin/stdout, RLIMIT_AS als Code-Konstante
 - Status: accepted
@@ -2509,3 +2546,47 @@ ihre *Erkennung* zu eng.
   `html_rejected` im Report, Hinweiszeile, Mail läuft fail-safe weiter (I1/I6). Wer
   `max_html_elements` oder `max_html_bytes` hochsetzt, verlängert die Konvertierung — das
   sagt SPEC-CLI §5 jetzt ausdrücklich.
+
+- **Nachtrag (Nachfixrunde NF-1, dritte Iteration, 2026-09-12, R-5 bis R-7):** Die Schranken
+  aus dem ersten Nachtrag begrenzen den **Parser**, nicht den Gesamtpfad. Der Skeptiker der
+  zweiten Iteration hat das belegt: Eine Mail mit 1,01 MB HTML, 41 000 Elementen und einem
+  einzigen Teil — jede Schranke eingehalten, `html_rejected=False` — kostete 26,8 s CPU,
+  weil `LinkCollector.scrub` quadratisch in der Zahl der Funde war (Rück-Ersetzung als ein
+  Voll-Scan je Platzhalter; 8k Links 1,2 s, 16k 4,4 s, 32k 17,6 s). Und der `text/plain`-Pfad
+  hatte überhaupt kein Budget: `state.body_plain` wurde bis `max_mail_bytes` (25 MB)
+  gesammelt und erst **nach** `clean_text`, `neutralize_forged_markers` und dem Link-Scrub
+  auf `max_text_chars` beschnitten (21 MB = 4,2 s, mit vielen Links Minuten). Drei
+  Entscheidungen:
+  1. **Rück-Ersetzung linear** (Details in ADR-028-Nachtrag) — ein einziges `re.sub` über
+     das Platzhalter-Muster mit dict-Lookup statt N Voll-Scans. Die Erkennungs-Pässe selbst
+     sind bereits linear (`_sub_outside_placeholders` schneidet den Text einmal je Pass).
+  2. **Link-Budget je Mail** `MAX_LINKS_PER_MAIL = 2000` (Details ebenfalls im
+     ADR-028-Nachtrag): jenseits davon überlebt keine URL, der Fund wird zu
+     `[Link removed]`, in `links_removed` weitergezählt und über die neue Hinweiszeile
+     kenntlich gemacht.
+  3. **Roh-Budget für Klartext vor den teuren Pässen:** Mail- und Anhangstext werden auf
+     `_RAW_TEXT_FACTOR` (16) mal `max_text_chars` Zeichen vorgeschnitten, **bevor**
+     `clean_text`, die Marker-Neutralisierung und der Link-Scrub laufen; der Vorschnitt setzt
+     `truncated`. Bewusst **kein** neues Config-Feld: Das Endergebnis ist ohnehin auf
+     `max_text_chars` gedeckelt, semantisch ändert sich nichts Sichtbares — 480 000 Zeichen
+     sind rund das Fünfzigfache dessen, was eine reale Mail trägt, und der Faktor ist
+     grosszügig, weil der Scrub Text auch verkürzen kann. Der Vorschnitt liegt vor dem
+     Divergenzcheck (CT-15): Verglichen wird genau der Klartext, der auch zusammengefasst
+     wird; fehlt dem Vergleich ein abgeschnittener Teil, meldet er eher Divergenz — die
+     fail-safe Richtung.
+  **R-7, Messkorrektur und Zusage.** Die im ersten Nachtrag genannten „rund 2 s" waren zu
+  günstig gemessen: Der Test gab jedem der vier Teile den *ganzen* Byte-Deckel, worauf das
+  Byte-Budget die Teile 2 bis 4 ungeparst verwarf. Richtig aufgeteilt (vier Teile zu je
+  einem Viertel des Deckels, `"<p>"`-Form) kostet die teuerste mögliche Mail 1,9 bis 2,6 s
+  je nach Maschinenlast; die Aufteilung auf vier Teile kostet gegenüber einem Teil rund
+  35 % extra. Entschieden wurde **gegen** ein Senken von `max_html_bytes` auf 768 KiB und
+  **für** die ehrliche Zusage: „etwa 2–3 s je nach Maschinenlast, deutlich unter der
+  10-s-Zusage aus SPEC-CLI §5". Grund: Der Deckel ist die einzige Schranke, die auch
+  legitime grosse Newsletter trifft; ihn wegen einer selbst gesetzten 2-s-Marke zu senken,
+  kostet Funktion, während der Vertrag (10 s) mit grossem Abstand gehalten wird.
+  Wirkung nach R-5/R-6 (dieselben Repro-Skripte, dieselbe Maschine): 32 000 Links im Scrub
+  17,0 s → 0,3 s; die 1-MB-Mail mit 41 000 Links 28,9 s → 1,1 s; 21 MB Klartext 4,5 s →
+  0,4 s; 24 MB Klartext voller URLs → 0,4 s. Die Gesamt-Worst-Case-Mail (HTML-Budget voll,
+  Klartext-Vorschnitt voll, Link-Budget voll: 20 MB URL-Klartext + vier HTML-Teile über das
+  ganze Byte-Budget) kostet **1,0 s**; teuerster Einzelfall bleibt die reine HTML-Mail mit
+  2,3 bis 2,6 s. Beides liegt unter dem Zielwert von 3 s und weit unter der 10-s-Zusage.

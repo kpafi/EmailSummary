@@ -544,6 +544,85 @@ def test_hc2_2_gewoehnlicher_kodierter_name_bleibt_lesbar() -> None:
     assert raw.from_domain == "b.example"
 
 
+# --- HC2-2 (dritte Iteration, R-4): die Maske darf nicht enger sein als der Dekoder -----
+#
+# `_ENCODED_WORD_RE` verlangte einen nicht-leeren Charset (`[^?]+`). `decode_header` — der
+# Dekoder, der im selben Pfad danach läuft — kennt diese Einschränkung nicht: Ein einziges
+# fehlendes Zeichen (`=??Q?…?=`) genügte, um an der Maske vorbei wieder Adresssyntax in den
+# Anzeigenamen zu bringen. Die Maske folgt jetzt der Form von `email.header.ecre`.
+
+#: Kodierte Formen, die `decode_header` als kodiert liest — die Maske muss sie alle sehen.
+_KODIERTE_FORMEN = [
+    b"=??Q?info@bank.example,?=",  # leerer Charset (der Befund)
+    b"=??B?aW5mb0BiYW5rLmV4YW1wbGUsIDxhdD4=?=",  # leerer Charset, Base64
+    b"=?utf-8*de?Q?info@bank.example,?=",  # Sprach-Tag am Charset
+    b"=?UTF-8?q?info@bank.example,?=",  # Kleinschreibung der Kodierung
+    b"=?utf-8?B?aW5mb0BiYW5rLmV4YW1wbGU=?=",  # grosses B
+    b"=?us-ascii?Q?=3Cinfo@bank.example=3E,?=",  # Winkelklammern quoted-printable
+    b"=?utf-8?Q?Bank?=\r\n =?utf-8?Q?_info@bank.example,?=",  # gefaltet, zwei Wörter
+    b"=?utf-8?Q?info@bank.example,",  # kaputt: kein schliessendes ?=
+]
+
+
+@pytest.mark.parametrize("form", _KODIERTE_FORMEN)
+def test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder(form: bytes) -> None:
+    """Jedes Segment, das `decode_header` als kodiert liefert, ist maskiert unschädlich.
+
+    Orakel ist der Dekoder selbst (strikt grosszügiger als die Implementierung, Regel 5):
+    Was er als kodiertes Wort ausgibt, darf im maskierten Rohwert keine Adressgrenze mehr
+    setzen — kein `@`, `,`, `<`, `>`, `;`, `:` aus einem solchen Segment bleibt stehen.
+    """
+    from email.header import decode_header
+
+    from maildigest.ingest.imap_client import _mask_encoded_words
+
+    rohwert = form.decode("latin-1") + " <attacker@evil.example>"
+    kodiert = [
+        text.decode("latin-1") if isinstance(text, bytes) else text
+        for text, charset in decode_header(rohwert)
+        if charset is not None
+    ]
+    maskiert, woerter, _stem = _mask_encoded_words(" ".join(rohwert.split()))
+
+    if not kodiert:  # kaputte Form: der Dekoder sieht nichts Kodiertes, die Maske darf ruhen
+        return
+    assert woerter, f"kein kodiertes Wort maskiert, obwohl decode_header {kodiert} meldet"
+    kopf = maskiert.split("<attacker@evil.example>")[0]
+    assert not any(zeichen in kopf for zeichen in "@,<>;:"), kopf
+
+
+@pytest.mark.parametrize(
+    "from_header",
+    [
+        b"From: =??Q?info@bank.example,?= <attacker@evil.example>",
+        b"From: =??Q?info@bank.example?= <attacker@evil.example>",
+        b"From: =?utf-8*de?Q?info@bank.example,?= <attacker@evil.example>",
+    ],
+)
+def test_hc2_2_leerer_charset_bestimmt_die_domain_nicht(from_header: bytes) -> None:
+    """R-4: `=??Q?…?=` (und das Sprach-Tag) lieferten wieder `bank.example` bzw. `''`."""
+    mail = _attack_mail(from_header)
+    raw = build_raw_mail(make_message(mail))
+
+    assert raw.from_domain == _address_in_raw_header(mail, "From").split("@")[1]
+    assert raw.from_domain == "evil.example"
+    assert MailSanitizer().sanitize(raw).sanitization_report.return_path_mismatch is True
+
+
+def test_hc2_2_leerer_charset_im_reply_to() -> None:
+    """R-4 über `Reply-To`: der Indikator verstummte mit."""
+    mail = _attack_mail(
+        b"From: =??Q?info@bank.example,?= <attacker@evil.example>",
+        reply_to=b"Reply-To: =??Q?info@bank.example,?= <collect@evil2.example>\r\n",
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert _address_in_raw_header(mail, "Reply-To") == "collect@evil2.example"
+    assert "collect@evil2.example" in (raw.reply_to or "")
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    assert report.reply_to_mismatch is True
+    assert report.return_path_mismatch is True
+
+
 # --- Backoff ---------------------------------------------------------------------------------
 
 

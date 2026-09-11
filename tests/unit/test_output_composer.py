@@ -630,3 +630,24 @@ def test_hc2_1_ohne_ablehnung_keine_hinweiszeile() -> None:
     """Gegenprobe: Der Normalfall trägt den Hinweis nicht."""
     text = compose_text(DigestComposer(), make_mail(), make_summary(), make_verdict())
     assert "too complex" not in text
+
+
+# --- R-5: gekapptes Link-Budget ------------------------------------------------------
+
+
+def test_r5_hint_line_nennt_die_kappung_des_link_budgets() -> None:
+    """Jenseits von `MAX_LINKS_PER_MAIL` steht im Text nur noch `[Link removed]`.
+
+    Ohne diese Zeile hielte der Nutzer die Link-Fußnote für die vollständige Liste der
+    entfernten Ziele.
+    """
+    mail = make_mail(sanitization_report=SanitizationReport(links_capped=True))
+    text = compose_text(DigestComposer(), mail, make_summary(), make_verdict())
+    hints = next(line for line in text.split("\n") if line.startswith("🔍 Notes:"))
+    assert "too many links, further links removed unlisted" in hints
+
+
+def test_r5_ohne_kappung_keine_hinweiszeile() -> None:
+    """Gegenprobe: Der Normalfall trägt den Hinweis nicht."""
+    text = compose_text(DigestComposer(), make_mail(), make_summary(), make_verdict())
+    assert "too many links" not in text

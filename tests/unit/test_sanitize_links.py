@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import re
+import time
 
-from maildigest.sanitize.links import LinkCollector
+from maildigest.sanitize.links import (
+    CAPPED_MARKER,
+    MAX_LINKS_PER_MAIL,
+    LinkCollector,
+)
 
 #: Muster, die nach dem Scrub in keinem Text mehr vorkommen dürfen.
 _FORBIDDEN = (
@@ -176,3 +181,64 @@ class TestKennzeichnung:
         entry = collector.links_found[0]
         assert not set("`*|~\\") & set(entry), entry
         assert entry.startswith("#1: hxxps[:]//ok[.]example")
+
+
+# --- R-5: Link-Budget je Mail und lineare Rück-Ersetzung (HC2-1-Rest) --------------------
+#
+# `scrub` war quadratisch in der Zahl der Funde (ein Voll-Scan je Platzhalter): 8 000 Links
+# 1,2 s, 16 000 Links 4,4 s, 32 000 Links 17,6 s. Eine 1-MB-Mail innerhalb aller Schranken
+# aus ADR-084 kostete damit 26,8 s — die 10-s-Zusage aus SPEC-CLI §5 war gebrochen.
+
+
+class TestR5LinkBudget:
+    """Budget je Mail (`MAX_LINKS_PER_MAIL`) und Laufzeit der Rück-Ersetzung."""
+
+    def test_r5_jenseits_des_budgets_ueberlebt_keine_url(self) -> None:
+        """Gekappt heisst entfernt, nicht durchgelassen (I3)."""
+        anzahl = MAX_LINKS_PER_MAIL + 500
+        text = " ".join(f"http://x{i}.example/a" for i in range(anzahl))
+        result, collector = scrubbed(text)
+
+        assert collector.links_removed == anzahl
+        assert collector.links_capped is True
+        assert result.count(CAPPED_MARKER) == 500
+        assert len(collector.links_found) == 100  # Fußnote bleibt bei ihrer Obergrenze
+        assert_no_url(result)
+        assert "x2400.example" not in result  # kein Host jenseits des Budgets
+
+    def test_r5_bis_zum_budget_bleibt_alles_wie_bisher(self) -> None:
+        """Gegenprobe: Unterhalb des Budgets ändert sich kein Zeichen."""
+        text = " ".join(f"http://x{i}.example/a" for i in range(50))
+        result, collector = scrubbed(text)
+        assert CAPPED_MARKER not in result
+        assert collector.links_capped is False
+        assert result.startswith("[Link #1: x0.example]")
+
+    def test_r5_budget_zaehlt_ueber_alle_teile_einer_mail(self) -> None:
+        """Ein Collector je Mail: Der zweite Text erbt das verbrauchte Budget."""
+        collector = LinkCollector()
+        collector.scrub(" ".join(f"http://x{i}.example" for i in range(MAX_LINKS_PER_MAIL)))
+        zweiter = collector.scrub("http://spaet.example/a")
+        assert zweiter == CAPPED_MARKER
+        assert collector.links_capped is True
+
+    def test_r5_rueck_ersetzung_ist_linear(self) -> None:
+        """32 000 Funde in Bruchteilen einer Sekunde (vorher 17,6 s).
+
+        Die Schranke ist bewusst grosszügig gegen Maschinenlast gesetzt; die Aussage des
+        Befunds (quadratisch, zweistellige Sekunden) ist mit jedem Wert unter einer
+        Sekunde erledigt.
+        """
+        text = " ".join(f"http://x{i}.example/a" for i in range(32_000))
+        start = time.perf_counter()
+        result, collector = scrubbed(text)
+        dauer = time.perf_counter() - start
+        assert collector.links_removed == 32_000
+        assert dauer < 2.0, f"Scrub von 32 000 Links dauerte {dauer:.1f} s"
+        assert_no_url(result)
+
+    def test_r5_kein_platzhalter_ueberlebt_die_kappung(self) -> None:
+        """Auch gekappte Funde durchlaufen die Rück-Ersetzung sauber (HC-8 bleibt gültig)."""
+        text = " ".join(f"http://x{i}.example/a" for i in range(MAX_LINKS_PER_MAIL + 10))
+        result, _collector = scrubbed(text)
+        assert "\x00" not in result

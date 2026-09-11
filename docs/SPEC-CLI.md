@@ -557,14 +557,14 @@ Alle Felder mit ihren Defaults:
 | `[messenger.signal] enabled` | `true`/`false` | `false` | Signal-Adapter freischalten |
 | `[messenger.signal] signal_cli_socket` | Pfad | `""` | Socket von `signal-cli --daemon` |
 | `[limits] max_mail_bytes` | ≥ 1 | `26214400` | Größte verarbeitete Mail (25 MB); darüber nur Metadaten-Notiz |
-| `[limits] max_text_chars` | ≥ 1 | `30000` | Klartext-Budget über Body und Anhänge |
+| `[limits] max_text_chars` | ≥ 1 | `30000` | Klartext-Budget über Body und Anhänge. Roher Mail- und Anhangstext wird schon **vor** der Sanitisierung auf das Sechzehnfache dieses Werts vorgeschnitten (ADR-084-Nachtrag); sichtbar ist nur dieses Budget |
 | `[limits] pdf_max_input_bytes` | ≥ 1 | `10485760` | Größtes verarbeitetes PDF (10 MB) |
 | `[limits] pdf_max_output_chars` | ≥ 1 | `50000` | Textausbeute je PDF |
 | `[limits] pdf_timeout_seconds` | ≥ 1 | `20` | Zeitlimit der PDF-Extraktion |
 | `[limits] max_mime_depth` | ≥ 1 | `10` | Maximale MIME-Verschachtelung |
 | `[limits] max_attachments_processed` | ≥ 0 | `20` | Inhaltlich verarbeitete Anhänge je Mail |
 | `[limits] max_html_elements` | ≥ 1 | `50000` | Elemente der HTML-Konvertierung, als **Restbudget je Mail** über alle HTML-Teile; darüber wird der Teil nicht konvertiert (ADR-084). Höher stellen verlängert die Konvertierung linear — die Zusage „höchstens 10 s" gilt für die Vorgabe |
-| `[limits] max_html_bytes` | ≥ 1024 | `1048576` | Bytebudget der HTML-Konvertierung je Mail (1 MB), geprüft **vor** dem Parsen; zusammen mit höchstens vier konvertierten `text/html`-Teilen deckelt es die Konvertierungszeit einer Mail auf rund zwei Sekunden (ADR-084-Nachtrag). Echte Newsletter liegen weit darunter; ein grösserer Wert verlängert die Konvertierung überproportional |
+| `[limits] max_html_bytes` | ≥ 1024 | `1048576` | Bytebudget der HTML-Konvertierung je Mail (1 MB), geprüft **vor** dem Parsen; zusammen mit höchstens vier konvertierten `text/html`-Teilen deckelt es die Konvertierungszeit einer Mail auf etwa zwei bis drei Sekunden je nach Maschinenlast — deutlich unter der Zusage „höchstens 10 s" (ADR-084-Nachtrag). Echte Newsletter liegen weit darunter; ein grösserer Wert verlängert die Konvertierung überproportional |
 
 **Umgebungsvariablen**
 
@@ -608,7 +608,7 @@ From: <Anzeigename> (<domain>) · <TT.MM. HH:MM>           ← ohne Date-Header:
            Punycode; gemischte Schriftsysteme; versteckter Text im HTML entfernt;
            HTML-Teil weicht vom Textteil ab; HTML-Teil zu komplex (nicht konvertiert);
            Reply-To-/Return-Path-Abweichung;
-           Text gekürzt; Kritiker-Gründe bei Risiko low>
+           Text gekürzt; Link-Budget gekappt; Kritiker-Gründe bei Risiko low>
 <Link-Fußnote (defanged), eine Adresse je Zeile>          ← nur bei [links] footnote = true
 ```
 
@@ -620,7 +620,13 @@ Reihenfolge: `the mail contained instructions aimed at the AI (ignored)`,
 `HTML part differs from the text part`, `HTML part too complex, not converted`,
 `hidden text removed from the HTML`,
 `reply address differs from the sender`, `return-path domain differs`, `text truncated`,
-`critic: <Gründe>`. Fehlt jeder Hinweis, entfällt die Zeile.
+`too many links, further links removed unlisted`, `critic: <Gründe>`. Fehlt jeder Hinweis,
+entfällt die Zeile.
+
+`too many links, further links removed unlisted` — die Mail trug mehr Links, als eine
+einzelne Mail einzeln ausgewertet bekommt (2000, `sanitize.links.MAX_LINKS_PER_MAIL`).
+Entfernt sind sie alle; die überzähligen erscheinen im Text als `[Link removed]` ohne
+Nummer und ohne Domain und stehen deshalb auch nicht in der Fußnote (ADR-028-Nachtrag).
 
 Ersatztexte, wenn ein Feld leer ist: `📧 (no summary)` für die Kopfzeile, `(no summary)`
 bzw. `(file)` in der Anhangszeile, `unknown` für einen fehlenden Absender, `(unnamed)` für

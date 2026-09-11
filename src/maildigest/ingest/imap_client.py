@@ -277,7 +277,15 @@ def _clean_display_name(name: str) -> str:
 
 
 #: RFC-2047-Wort (`=?charset?B?…?=` / `=?charset?Q?…?=`) im rohen Headerwert.
-_ENCODED_WORD_RE = re.compile(r"=\?[^?]+\?[BbQq]\?[^?]*\?=")
+#:
+#: Formgleich mit `email.header.ecre` — dem Muster des Dekoders, der **nach** der
+#: Maskierung läuft (NF-1, dritte Iteration, R-4). Die Maske darf nie enger sein als der
+#: Dekoder: Ein leerer Charset (`=??Q?info@bank.example,?=`) oder ein Sprach-Tag
+#: (`=?utf-8*de?Q?…?=`) genügte sonst, um an der Maske vorbei wieder Adresssyntax in den
+#: Anzeigenamen zu schmuggeln. Deshalb `[^?]*` für den Charset und `.*?` (non-greedy, wie
+#: `ecre`) für den kodierten Teil — ein `?` im Inneren gehört dann zum kodierten Wort,
+#: genau wie `decode_header` es liest.
+_ENCODED_WORD_RE = re.compile(r"=\?[^?]*\?[BbQq]\?.*?\?=")
 
 #: Stamm der Platzhalter, die kodierte Wörter beim Adress-Parsen vertreten (HC2-2-Rest).
 #: Nur `[A-Za-z0-9]` — damit ist ein Platzhalter für `getaddresses` reiner Text und kann

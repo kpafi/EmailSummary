@@ -149,6 +149,16 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   **Restbudget einer ganzen Mail** (`HtmlBudget`, ein Objekt je `sanitize()`-Lauf, geteilt
   von Body-Pfad und Divergenzcheck), und höchstens `MAX_HTML_PARTS` (4) `text/html`-Teile
   werden überhaupt konvertiert; weitere gelten als nicht konvertiert (`html_rejected`).
+- **Schranken des Klartext- und Link-Pfads (ADR-084-/ADR-028-Nachtrag, NF-1 dritte
+  Iteration):** Roher Body- und Anhangstext wird auf `_RAW_TEXT_FACTOR` (16) mal
+  `[limits] max_text_chars` Zeichen vorgeschnitten, **bevor** `clean_text`, die
+  Marker-Neutralisierung und der Link-Scrub laufen (und vor dem Divergenzcheck); der
+  Vorschnitt setzt `truncated`, sichtbar bleibt ohnehin nur `max_text_chars`. Der Link-Scrub
+  ist linear in der Zahl der Funde (eine einzige Rück-Ersetzung über das Platzhalter-Muster)
+  und hat mit `links.MAX_LINKS_PER_MAIL` (2000) ein eigenes Budget je Mail: Weitere Funde
+  werden entfernt (I3 gilt ausnahmslos), erscheinen aber nur noch als `[Link removed]` und
+  setzen `links_capped` im Report (Hinweiszeile
+  `too many links, further links removed unlisted`).
 - **Nicht Aufgabe des Sanitizers:** `RawMail.date`/`from_domain` werden unverändert
   übernommen (Vertrauensmodell aus ADR-020); die Nachrichten-Formatierung der
   Anhang-Hinweise („⚠ 2 nicht verarbeitete Anhänge …") ist WP7 (`output/`), auf Basis

@@ -78,6 +78,18 @@ _FORGED_MARKER_WORDS = ("MAILDIGEST", "UNTRUSTED")
 #: Marker, der ans Ende gekürzter Texte gesetzt wird (SECURITY §4).
 _TRUNCATION_MARKER = "[truncated]"
 
+#: Vielfaches von `limits.max_text_chars`, auf das ROHER Klartext **vor** den teuren
+#: Pässen (clean_text, Marker-Neutralisierung, Link-Scrub) vorgeschnitten wird (R-5/R-6).
+#:
+#: Kein eigenes Config-Feld: Das Endergebnis ist ohnehin auf `max_text_chars` gedeckelt,
+#: der Vorschnitt ändert also nichts Sichtbares — er verhindert nur, dass eine 20-MB-Mail
+#: (`max_mail_bytes` erlaubt 25 MB) Megabytes durch Pässe schickt, deren Ergebnis danach
+#: auf 30 000 Zeichen fällt. Der Faktor ist mit Absicht grosszügig: Der Scrub kann Text
+#: **verkürzen** (eine lange URL wird zu einem kurzen Marker), deshalb darf der Vorschnitt
+#: nicht knapp am Endbudget liegen. 16 mal 30 000 = 480 000 Zeichen sind rund das Fünfzigfache
+#: dessen, was eine reale Mail trägt (gemessen: 21-MB-Klartext 4,2 s → unter 0,2 s).
+_RAW_TEXT_FACTOR = 16
+
 #: HTML-Tag-artige Sequenzen, die auch in *Klartext*-Teilen neutralisiert werden.
 #: Akzeptanzkriterium WP3: kein Output-Feld enthält ein HTML-Tag — auch nicht, wenn ein
 #: Angreifer `<script>` wörtlich in einen text/plain-Body schreibt. Über-Entfernung
@@ -182,6 +194,13 @@ class MailSanitizer:
         # Body: text/plain bevorzugt; sonst text/html → Text (SECURITY §4).
         if state.body_plain:
             body_raw = "\n\n".join(state.body_plain)
+            # R-6: Der Vorschnitt liegt VOR dem Divergenzcheck — dessen Wortmengen-Vergleich
+            # liefe sonst über die vollen 20 MB, die `max_mail_bytes` zulässt. Verglichen
+            # wird damit genau der Klartext, der auch zusammengefasst wird; fehlt dem
+            # Vergleich ein abgeschnittener Teil, meldet der Check eher Divergenz als
+            # weniger — die fail-safe Richtung (ADR-036).
+            body_raw, precut = _precut_raw_text(body_raw, self._limits.max_text_chars)
+            state.truncated = state.truncated or precut
             # CT-15: Der Nutzer sieht in seinem Mailprogramm den HTML-Teil. Weicht der
             # inhaltlich ab, wird das vermerkt — sonst beschreibt die Zusammenfassung
             # unbemerkt einen anderen Text als den angezeigten.
@@ -205,6 +224,12 @@ class MailSanitizer:
         else:
             body_raw = ""
 
+        # R-6: Vorschnitt VOR clean_text/Neutralisierung/Scrub — sonst trägt der teure Teil
+        # der Kette bis zu `max_mail_bytes` an Zeichen, obwohl davon nur `max_text_chars`
+        # überleben. Der Vorschnitt kann `truncated` setzen; sichtbar gekürzt wird ohnehin.
+        body_raw, precut = _precut_raw_text(body_raw, self._limits.max_text_chars)
+        state.truncated = state.truncated or precut
+
         body_clean, removed = clean_text(body_raw)
         state.control_chars_removed += removed
         body_unforged, forged = neutralize_forged_markers(body_clean)
@@ -220,6 +245,11 @@ class MailSanitizer:
         for info in state.attachments:
             raw_text = state.attachment_texts.get(info.filename_sanitized)
             if info.processed and raw_text is not None:
+                # Derselbe Vorschnitt wie beim Body (R-6): Ein text/plain-Anhang unterliegt
+                # keiner eigenen Grössenschranke; PDF-Text ist über `pdf_max_output_chars`
+                # bereits gedeckelt, der Vorschnitt greift dort also nie.
+                raw_text, precut = _precut_raw_text(raw_text, self._limits.max_text_chars)
+                state.truncated = state.truncated or precut
                 cleaned, removed = clean_text(raw_text)
                 state.control_chars_removed += removed
                 unforged, forged = neutralize_forged_markers(cleaned)
@@ -498,6 +528,7 @@ class MailSanitizer:
             truncated=state.truncated,
             html_divergent=state.html_divergent,
             html_rejected=state.html_rejected,
+            links_capped=links.links_capped,
             blocked_attachments=sum(1 for info in attachments if not info.processed),
             reply_to_mismatch=_reply_to_mismatch(raw),
             return_path_mismatch=_return_path_mismatch(raw),
@@ -545,6 +576,22 @@ def _content_words(text: str) -> set[str]:
     """Wortmenge eines Textes für den Divergenz-Vergleich (CT-15)."""
     without_markers = _RE_DIVERGENCE_NOISE.sub(" ", text)
     return set(_RE_CONTENT_WORD.findall(without_markers.casefold()))
+
+
+def _precut_raw_text(text: str, max_text_chars: int) -> tuple[str, bool]:
+    """Schneidet rohen Text auf ein grosszügiges Vielfaches des Endbudgets zu (R-6).
+
+    Läuft **vor** `clean_text`, `neutralize_forged_markers` und `LinkCollector.scrub`.
+    Alles, was hier wegfällt, hätte `_take_budget` danach ohnehin verworfen — nur eben
+    erst, nachdem jeder Pass es angefasst hat.
+
+    Returns:
+        ``(text, wurde_geschnitten)``.
+    """
+    limit = max_text_chars * _RAW_TEXT_FACTOR
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
 
 
 def _take_budget(text: str, budget: int) -> tuple[str, int, bool]:
