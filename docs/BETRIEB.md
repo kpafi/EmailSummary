@@ -117,6 +117,14 @@ Hinweise zum Cron-Betrieb:
 - Ein Postfach-Ausfall bricht den Lauf mit Exit-Code 1 ab, aber erst, nachdem die
   Zustell-Warteschlange und der fällige Sammel-Digest abgearbeitet sind: Beide brauchen
   kein IMAP (ADR-049 Nachtrag).
+- **`run --once` läuft nicht unter den Signal-Handlern.** Den sauberen Shutdown aus ADR-051
+  installiert nur der Dauerbetrieb. Wird ein Einmal-Lauf hart abgebrochen — Ctrl+C, ein
+  Cron-Timeout, ein `systemd`-Kill —, kann eine gerade verarbeitete Mail im Zustand
+  `sanitized` liegen bleiben. Sie ist nicht verloren und in der Datenbank abfragbar
+  (`SELECT status, COUNT(*) FROM seen_mails GROUP BY status;`), wird beim nächsten Lauf aber
+  als Duplikat erkannt und **nicht** erneut verarbeitet (ADR-019 hält diese Folge als
+  akzeptiert fest). Wer das nicht will, gibt dem Cron-Eintrag ein großzügiges Timeout oder
+  nimmt den Dauerbetrieb.
 
 ## 4. Wartung
 
@@ -126,8 +134,26 @@ Hinweise zum Cron-Betrieb:
 | Zustand ansehen | `sqlite3 state.db "SELECT status, COUNT(*) FROM seen_mails GROUP BY status;"` |
 | Wartende Zustellungen | `sqlite3 state.db "SELECT kind, attempts, next_attempt_at FROM outbox;"` |
 | Sammel-Digest-Rückstand | `sqlite3 state.db "SELECT COUNT(*) FROM low_digest_queue;"` |
+| Schema-Migration | passiert von allein, siehe unten |
 | Backup | `config.toml` sichern; `state.db` ist reproduzierbarer Betriebszustand — geht sie verloren, werden ungelesene Mails im Mirror-Postfach erneut verarbeitet (nie doppelt zugestellt, solange sie als gelesen markiert sind) |
 | Fehlersuche | vorübergehend `[general] log_level = "DEBUG"` |
+
+**Schema-Version der Zustandsdatenbank.** Seit ADR-079 ist sie **3**. Eine Datei der Version 1
+oder 2 wird beim ersten Öffnen still gehoben: fehlende Tabellen über `CREATE TABLE IF NOT
+EXISTS`, die neue Spalte `seen_mails.content_hash` über `ALTER TABLE … ADD COLUMN`. Es gibt
+kein Migrationswerkzeug und keinen Eingriff; Daten gehen nicht verloren. Erkennen lässt sich
+der Stand mit
+
+```bash
+sqlite3 state.db "PRAGMA user_version;"          # 3 nach der Migration
+sqlite3 state.db "PRAGMA table_info(seen_mails);" | grep content_hash
+```
+
+Bestehende Zeilen haben `content_hash = NULL`; sie gelten als „Inhalt unbekannt" und lösen nie
+eine Kollision aus — das zweite Dedupe-Merkmal wirkt erst für Mails, die nach der Migration
+abgerufen werden. **Es gibt keinen Rückweg:** Eine gehobene Datei lehnt eine ältere
+MailDigest-Version mit einem `StateError` ab. Wer zurück muss, legt die Datei beiseite und
+lässt eine neue anlegen — ungelesene Mails im Mirror-Postfach werden dann erneut verarbeitet.
 
 **Achtung bei DEBUG:** Auf diesem Level werden Tracebacks mitgeschrieben, die
 Mail-Inhalte enthalten können (ADR-047). DEBUG-Logs sind so vertraulich wie das Postfach —
@@ -142,7 +168,9 @@ nach der Fehlersuche wieder auf `INFO` stellen und die Journal-Einträge ggf. l�
 | `imap_postprocess_failed` | Ein Nachbehandlungs-Kommando wurde abgelehnt (fast immer: `move_processed_to` zeigt auf einen Ordner, den es nicht gibt, oder der Server kann kein `MOVE`). Die Mail ist verarbeitet, sie bleibt nur im Ausgangsordner liegen; der Zyklus läuft weiter (ADR-065) |
 | `mail_failed_notice` | Fail-closed: Metadaten-Notiz statt Inhalt (Felder `stage`, `reason`) |
 | `mail_delivery_queued` | Zustellung liegt in der Warteschlange, Mail bleibt auf `checked` |
-| `delivery_deferred` / `delivery_abandoned` | Zustellversuch verschoben bzw. nach 5 Versuchen/1 h aufgegeben |
+| `delivery_deferred` / `delivery_abandoned` | Zustellversuch verschoben bzw. nach 5 Versuchen/1 h aufgegeben. `delivery_deferred` trägt zusätzlich `clock_skew`: `true` heißt, das gemessene Alter der Nachricht war unbrauchbar und die Stundenfrist wurde für diesen Versuch ignoriert (HC-25). Die Zusage lautet damit genau: **fünf Versuche immer, „über höchstens eine Stunde" nur, solange die Systemuhr nicht springt** |
+| `mail_id_collision` | **WARNING.** Zwei inhaltlich verschiedene Mails trugen dieselbe `Message-ID`; die zweite wurde trotzdem verarbeitet und zugestellt, unter einem abgeleiteten Schlüssel (ADR-079). Felder `mail` und `collision_mail` sind 12-stellige Hashes. Harmlose Ursache: ein Mailprogramm, das IDs wiederverwendet. Unharmlose Ursache: jemand kopiert die `Message-ID` einer erwarteten Mail, um sie zu unterdrücken — die zugestellte Nachricht trägt dann den Hinweis „Message-ID collides with an earlier mail" |
+| `outbox_clock_skew_corrected` | **WARNING** (Feld `rows`). So viele Zeilen der Zustell-Warteschlange hatten eine unplausibel ferne Fälligkeit (> 2 h in der Zukunft) und wurden auf „jetzt" gesetzt. Typische Ursache: NTP-Erstsynchronisation auf einem Gerät ohne Echtzeituhr oder ein VM-Resume. Ohne diese Korrektur bliebe die Nachricht dauerhaft liegen (HC-25) |
 | `low_digest_sent` | Sammel-Digest erzeugt (Feld `mails`) |
 | `low_digest_failed` | Der Sammel-Digest ist in der ausnahmefesten Zone gescheitert (Feld `error` = Exception-Klasse). Der Lauf geht weiter; die Einträge bleiben liegen und gehen beim nächsten Versuch desselben Tages raus |
 | `command_ignored_once` | Bei `run --once` wurde ein `/digest` gelesen und verworfen — im Cron-Betrieb ist es wirkungslos, der Abruf lief gerade (ADR-080) |

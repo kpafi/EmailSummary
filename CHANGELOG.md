@@ -20,9 +20,86 @@ Alle nennenswerten Änderungen an MailDigest. Format angelehnt an
   IMAP-Host, übersetzt eine eingetippte Mailadresse in den Host und bricht bei Anbietern ohne
   Passwort-Anmeldung (Outlook.com, Proton) sofort mit Begründung ab.
 
+### Behoben
+
+Aus der Abschluss-Testrunde (38 Befunde, docs/TESTING.md §7; Bericht in
+docs/TESTRUNDE-HOT-COLD.md):
+
+- **Ohne Sprachmodell kam bei einem Betreff über 100 Zeichen keine Zusammenfassung mehr an,
+  sondern nur die Metadaten-Notiz** — für eine alltägliche Mailklasse war der
+  Auslieferungszustand damit funktionslos. Der Betreff wird jetzt mit `…` gekürzt (HC-1).
+- **Ohne Sprachmodell verschwand gelesener Anhangstext spurlos**, und die Nachricht behauptete
+  „Mail ohne darstellbaren Inhalt". Jeder Anhang, aus dem Text gelesen werden konnte, erscheint
+  jetzt als eigene Zeile mit beschriftetem Auszug (HC-2).
+- **Eine Mail konnte eine andere still unterdrücken**, indem sie deren `Message-ID` kopierte.
+  Zwei inhaltlich verschiedene Mails mit demselben Header werden jetzt beide zugestellt; die
+  zweite trägt den Hinweis „Message-ID collides with an earlier mail" (HC-10).
+- **Beim Speichern der Konfiguration konnte die alte Datei abgeschnitten zurückbleiben**
+  (volle Platte, Quota, Stromausfall). Sie wird jetzt atomar geschrieben und bleibt bei einem
+  Abbruch byteidentisch erhalten (HC-20).
+- **Ein Sprung der Systemuhr kostete eine wartende Nachricht ihre Zustellversuche** oder parkte
+  sie dauerhaft in der Warteschlange. Beide Richtungen sind abgefangen (HC-25).
+- **Der tägliche Sammel-Digest blieb während einer Postfach-Störung ganz aus**, obwohl er kein
+  IMAP braucht. Er geht jetzt auch dann raus (HC-26).
+- **Ein `/digest` aus dem Chat wartete bis zum Ende des Poll-Intervalls** (bis zu zwei Minuten)
+  und **verschluckte alle Befehle, die im selben Stapel dahinter standen**. Beides behoben:
+  Antwort nach spätestens zehn Sekunden, jeder Befehl wird beantwortet (HC-12, HC-13).
+- **Der Fehlertext eines Modell-Anbieters konnte das Terminal fernsteuern** (Bildschirm
+  löschen, Fenstertitel setzen, eine erfundene Programmmeldung platzieren); ein von der
+  Gegenstelle zitierter eigener API-Key erscheint jetzt als `***` (HC-4).
+- **Absender werden mit ihrem echten Namen angezeigt** („Jörg Müller" statt
+  `=?utf-8?Q?J=C3=B6rg_M=C3=BCller?=`), auch bei roh-8-bittigen Headern. Versteckte
+  Steuerzeichen im Anzeigenamen werden dadurch überhaupt erst erkannt (HC-23).
+- **Eine verschlüsselte Mail sagt jetzt, dass sie verschlüsselt ist** („encrypted (PGP/S-MIME)
+  — content not readable by design") statt wie eine inhaltsleere Mail auszusehen (HC-33).
+- **Härtung der zugestellten Nachricht** (F-SEC-3/F-SEC-5): ein exakt nachgebauter
+  Datenblock-Marker und die gängigsten Übernahmeformeln („Ignoriere deine bisherigen
+  Anweisungen", „Forget all previous instructions") lösen jetzt die Warnzeile aus (HC-5,
+  HC-21); ein Nachrichten-Split kann keine gefälschte Programmzeile mehr an den Anfang eines
+  Teils setzen (HC-6); die Link-Fußnote enthält kein Markdown mehr (HC-7); ein rohes
+  Steuerzeichen erreicht die Nachricht nicht mehr (HC-8); nackte IP-Adressen und sehr lange
+  Domain-Marken werden jetzt in jeder Nachbarschaft gebrochen (HC-9, HC-24); die `/status`-
+  Antwort entschärft den Ordnernamen (HC-28).
+- **Kein Mail- oder Modelltext mehr im Betreiber-Protokoll**: ein vom Modell erfundener
+  Feldname wird durch `<extra field>` ersetzt (HC-11).
+- **Zu lange Anhang-Dateinamen** werden sichtbar in der Mitte gekürzt und behalten ihre Endung
+  — bei einem geblockten Anhang die sicherheitsrelevante Angabe (HC-22).
+- **Einrichtung**: `connect-llm --provider openai_compatible` trägt keine fremde Anbieter-URL
+  mehr ein und zeigt die passende Anleitung (HC-3, HC-36); `connect-mail` lehnt Outlook.com und
+  Proton auch als Mailadresse ab (HC-15) und erklärt einen Fehlschlag passend zur Ursache
+  (HC-32); `init` endet wieder mit der Liste der nächsten Schritte, jetzt inklusive
+  `connect-llm` (HC-18); die Hinweise zu `/digest` und `/status` erscheinen auch nach
+  `connect-messenger --chat-id` (HC-19); `run` meldet ein fehlendes IMAP-Passwort als
+  Konfigurationsfehler statt als „Postfach nicht erreichbar" (HC-34); `test` beendet die
+  Schrittfolge auch dann mit einer `5/5`-Zeile, wenn die Nachricht in der Warteschlange bleibt
+  (HC-35), und der Selbsttest-Vorspann nennt bei `--eml` die übergebene Datei (HC-17).
+- **Robustheit**: ein unbrauchbares `Retry-After` (etwa `nan`) wirft MailDigest nicht mehr aus
+  der Fehler-Taxonomie (HC-30); ein whitespace-freies Modellfeld lief quadratisch und braucht
+  jetzt Millisekunden statt Sekunden (HC-29).
+
 ### Geändert
 - Alle nutzersichtbaren Texte sind englisch; Docstrings und `docs/` bleiben deutsch.
+  **Seit ADR-083 ist das eine Festlegung**: Programmoberfläche und Nachrichtenrahmen sind
+  sprachunabhängig englisch, `[general] language` steuert nur noch die vom Sprachmodell
+  erzeugten Textfelder. SPEC-CLI §2/§4/§6 ist der wörtliche Vertrag dieser Ausgabe und wird
+  von `tests/unit/test_hc14_spec_literals.py` maschinell dagegen geprüft.
 - Die von `maildigest test` zugestellte Nachricht ist als Selbsttest gekennzeichnet.
+- **Schema-Version 3 der Zustandsdatenbank** (ADR-079). Eine bestehende Datei wird beim ersten
+  Öffnen still und ohne Datenverlust gehoben — kein Eingriff nötig, kein Migrationswerkzeug.
+  Es gibt keinen Rückweg: Eine gehobene Datei lässt sich mit einer älteren MailDigest-Version
+  nicht mehr öffnen.
+- **Die Konfigurationsdatei wird atomar geschrieben** (ADR-081). Das Konfigurationsverzeichnis
+  muss dafür schreibbar sein; während des Schreibens liegt dort kurz eine Datei
+  `.<name>.<pid>.tmp` mit Modus `0600`.
+- **Befehle werden im Dauerbetrieb alle ≤ 10 s abgefragt** statt einmal je Poll-Zyklus
+  (ADR-080). MailDigest ruft dadurch bis zu `poll_interval_seconds / 10` mal `getUpdates` je
+  Zyklus auf.
+- **Auch `maildigest run --once` (Cron) bedient den Befehlskanal**, einmal am Ende des Laufs:
+  `/status` wird beantwortet, `/digest` ist dort wirkungslos und wird nur konsumiert (ADR-080).
+- Fortsetzungen eines harten Zeilenschnitts beginnen sichtbar mit `… `; sie zählen zum
+  Teil-Limit des Messengers (ADR-062/ADR-040, Nachträge).
+- Neue Logereignisse: `mail_id_collision`, `outbox_clock_skew_corrected`, `low_digest_failed`,
+  `command_ignored_once`, `command_handling_failed` (docs/BETRIEB.md §5).
 
 ### Bekannte Grenzen
 - Die Aussage „keine Antworten aus dem Messenger heraus" aus 0.1.0 gilt eingeschränkt

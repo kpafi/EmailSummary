@@ -93,7 +93,7 @@ Sicherheitsbereich: zweite Cold-Runde mit frischem Agenten.
       fährt den Angriffs-Korpus des Cold-Tests über `maildigest.cli.main()` (73 Tests).
 - [x] Invarianten-Review (SECURITY.md §7) dokumentiert (WP12): Befund je I1–I8, Methode und
       Datum; die mechanisch prüfbaren Aussagen sind als `tests/unit/test_invarianten.py`
-      festgehalten (24 Tests, AST-basiert statt `grep` — die ausführlichsten Fundstellen für
+      festgehalten (24 Tests, seit der Fixrunde 27 — §7, HC-38; AST-basiert statt `grep` — die ausführlichsten Fundstellen für
       `expunge`/`parse_mode` sind die Begründungen, warum es sie nicht gibt). Darin auch der
       in SECURITY §6 angekündigte Lint-Check „kein `verify=False` irgendwo".
 - [ ] **Zweite Cold-Runde mit frischem Agenten** (§3 Nachlauf verlangt sie bei
@@ -408,3 +408,159 @@ wörtlich so im Repo, wie der Cold-Tester sie laufen ließ; von pytest ausgenomm
 
 Für eine zweite Cold-Runde (§3 Nachlauf) sind die Skripte damit weiterhin lauffähig; sie
 brauchen die Arbeitsumgebung aus dem Report-Kopf und absolute Pfade darin.
+
+## 7. Findings-Log (Abschluss-Testrunde, HC-1 … HC-38)
+
+Durchlauf 2026-09-09 bis 2026-09-11 auf Stand `13cb859`; der vollständige Bericht mit Repro,
+Ursache und Skeptikerprüfung steht in **`docs/TESTRUNDE-HOT-COLD.md`** und wird nicht
+nachträglich geändert. Diese Tabelle führt den Nachlauf: Zuständigkeit, Status, Regressionstest.
+Der Fixplan mit Paketschnitt, Entscheidungen und Akzeptanzkriterien ist
+[docs/PLAN-FIXRUNDE.md](PLAN-FIXRUNDE.md).
+
+Severity-Maßstab wie in §5 und §6 (Wirkung beim Nutzer). Die Fixes liefen in neun Paketen über
+vier Wellen (`4697231`, `4b6f709`, `a9a4d87`, `64c0ae4`); die Testzahl stieg dabei von 1354 auf
+1565.
+
+| HC | Sev. | Titel (Kurzform) | Status | Tests | ADR |
+|----|------|------------------|--------|-------|-----|
+| HC-1 | high | Betreff > 100 Zeichen bricht den Betrieb ohne Modell fail-closed ab | **gefixt** | `test_offline.py::test_hc1_langer_betreff_wird_gekuerzt_statt_fail_closed`, `::test_hc1_betreff_von_genau_101_zeichen_geht_durch` | ADR-076 (N) |
+| HC-2 | medium | Verarbeiteter Anhang verschwindet ohne Modell stumm | **gefixt** | `test_offline.py::test_hc2_*` (5), `test_cli.py::test_hc38_selbsttest_im_werkszustand_zeigt_den_anhang` | ADR-076 (N), ADR-034 (N) |
+| HC-3 | medium | `connect-llm` setzt fremde `base_url`, zeigt falsche Anleitung | **gefixt** | `test_cli_connect.py::test_hc3_*` (4), `test_providers.py::test_hc3_*` (2) | ADR-075 (N), ADR-076 (N) |
+| HC-4 | medium | Anbieter-Fehlertext erreicht das Terminal ungefiltert (ANSI) | **gefixt** | `test_llm_providers.py::test_hc4_*` (2), `test_cli_connect.py::test_hc4_*` (2), `test_hot_cli_robustness.py::test_hc4_*` (6) | ADR-055 (N) |
+| HC-5 | medium | Gefälschte Datenblock-Marker werden still entfernt statt geflaggt | **gefixt** | `test_summarizer.py::test_hc5_*`, `test_sanitize_mail.py::TestHc5GefaelschteDatenblockMarker`, `test_cold_suite.py::test_hc5_hc21_*` | ADR-061 (N) |
+| HC-6 | medium | Split kann eine gefälschte Programmzeile am Teilanfang erzeugen | **gefixt** | `test_output_sanitizer.py::test_hc6_*`, `test_hot_properties.py::test_hc6_*`, `test_cold_suite.py::test_hc6_*` | ADR-062 (N), ADR-040 (N) |
+| HC-7 | medium | Markdown in der Link-Fußnote wird nicht neutralisiert | **gefixt** | `test_output_composer.py::test_hc7_*`, `test_sanitize_links.py::…::test_hc7_*` | ADR-062 (N) |
+| HC-8 | medium | Steuerzeichen U+0000 erreicht den zugestellten Nachrichtenteil | **gefixt** | `test_hot_properties.py::test_hc8_*`, `test_sanitize_links.py::…::test_hc8_*` (2), `test_output_sanitizer.py::test_hc8_*` | — |
+| HC-9 | medium | Nackte IPv4 bleibt mit Nachbarzeichen ungebrochen | **gefixt** | `test_output_sanitizer.py::test_hc9_*` (2), `test_hot_properties.py::test_scrub_field_output_is_never_clickable` | ADR-036 (N) |
+| HC-10 | medium | Dedupe-Key ist der vom Angreifer gesetzte `Message-ID`-Header | **gefixt** | `test_ingest_poll.py::test_hc10_*` (5), `test_state_db.py::test_hc10_*` (6), `test_ingest_rawmail.py::test_hc10_*` (3), `test_output_composer.py::test_hc10_*` (2) | **ADR-079**, ADR-018/019/048 (N) |
+| HC-11 | medium | Mailstämmiger Text landet über `extra_forbidden` im Log | **gefixt** | `test_llm_schema.py::test_hc11_*` (2), `test_hot_fault_injection.py::test_hc11_*` | ADR-024 (N) |
+| HC-12 | medium | `/digest` verkürzt die Wartezeit nicht | **gefixt** | `test_runner.py::test_hc12_*` (2) | **ADR-080**, ADR-077 (N) |
+| HC-13 | medium | Nach `/digest` werden alle weiteren Befehle verworfen | **gefixt** | `test_runner.py::test_hc13_*` (2) | ADR-077 (N) |
+| HC-14 | low | Oberfläche englisch, Vertrag deutsch | **gefixt** | `test_hc14_spec_literals.py` (19 Fälle) | **ADR-083** |
+| HC-15 | medium | `connect-mail` lässt gesperrte Anbieter als Mailadresse durch | **gefixt** | `test_cli_connect.py::test_hc15_*` (4), `test_providers.py::test_hc15_*` | ADR-075 (N) |
+| HC-16 | low | Testnachricht nennt ungültige Config-Sektion, geht an alle Messenger | **erledigt in `14ad9ed`** (ADR-078) | `test_cli.py::test_testnachricht_nennt_keine_ungueltige_config_sektion` | ADR-078 |
+| HC-17 | low | Selbsttest-Vorspann behauptet bei `--eml` die Beispielmail | **gefixt** | `test_cli_e2e.py::test_hc17_*` (2) | — |
+| HC-18 | low | `init` schreibt nicht den vollständigen Feldsatz aus §5 | **gefixt** (Rest; Feldsatz war in `14ad9ed` vorweggenommen) | `test_cli.py::test_hc18_*`, `test_spec_cli.py::test_hc18_*`, `test_cli_connect.py::test_hc18_*` | ADR-076 (N) |
+| HC-19 | low | Befehls-Hinweis entfällt bei `connect-messenger --chat-id` | **gefixt** | `test_cli_connect.py::test_hc19_*` (2) | — |
+| HC-20 | medium | Konfiguration wird nicht atomar geschrieben | **gefixt** | `test_hot_cli_robustness.py::test_hc20_*` (3) | **ADR-081** |
+| HC-21 | medium | Phrasenliste verpasst die gängigsten Formulierungen | **gefixt** | `test_summarizer.py::test_hc21_*` (3, 13 Fälle), `test_cold_suite.py::test_hc5_hc21_*` | ADR-061 (N), ADR-076 (N) |
+| HC-22 | low | Zu langer Dateiname wird ohne das zugesagte `…` gekürzt | **gefixt** | `test_sanitize_attachments.py::…::test_hc22_*` (4), `test_output_composer.py::test_hc22_*` | ADR-040 (N) |
+| HC-23 | low | Absender-Anzeigename wird nie RFC-2047-dekodiert | **gefixt** | `test_ingest_rawmail.py::test_hc23_*` (5) | ADR-020 (N) |
+| HC-24 | low | Marken > 63 Zeichen hebeln `_RE_DOMAINISH` aus; Orakel spiegelt die Schranke | **gefixt** | `test_output_sanitizer.py::test_hc24_*` (2), `test_hot_properties.py::test_scrub_*_output_is_never_clickable` | ADR-036 (N) |
+| HC-25 | low | Outbox-Fristen hängen an der Wanduhr | **gefixt** | `test_delivery.py::test_hc25_*` (5) | ADR-048 (N) |
+| HC-26 | low | Sammel-Digest wird von einem IMAP-Ausfall mitblockiert | **gefixt** | `test_runner.py::test_hc26_*` (3) | ADR-049 (N) |
+| HC-27 | low | `run --once` fragt nie Befehle ab | **gefixt** | `test_runner.py::test_hc27_*` (3) | **ADR-080** |
+| HC-28 | low | `/status`-Antwort umgeht `scrub_field` | **gefixt** | `test_runner.py::test_hc28_status_antwort_scrubbt_den_ordnernamen` | ADR-077 (N) |
+| HC-29 | low | Quadratische Laufzeit in `_redact_tokens` | **gefixt** | `test_summarizer.py::test_hc29_*` (2, 3 Fälle) | — |
+| HC-30 | low | `Retry-After: nan` verlässt die Fehler-Taxonomie | **gefixt** | `test_llm_providers.py::test_hc30_*` (2), `test_messenger_adapters.py::test_hc30_*` (2) | — |
+| HC-31 | low | README-„Grenzen" und CHANGELOG kannten die Fernauslösung nicht | **erledigt in `14ad9ed`** (der Commit-Text nennt es fälschlich „HC-19") | — | ADR-078 |
+| HC-32 | low | `connect-mail`: unpassender Anbieter-Hinweis, keine Serverantwort | **gefixt** (vorher selbst nachgestellt) | `test_ingest_client.py::test_hc32_*` (2), `test_cli_connect.py::test_hc32_*` (3) | — |
+| HC-33 | low | PGP/S-MIME-Mail sieht aus wie eine inhaltsleere Mail | **gefixt** (vorher selbst nachgestellt) | `test_sanitize_mail.py::TestHc33VerschluesselteMail` (4), `test_output_composer.py::test_hc33_*` (2), `test_critic_signals.py::test_hc33_*` (3) | **ADR-082** |
+| HC-34 | low | Fehlendes IMAP-Passwort als „Postfach nicht erreichbar" | **gefixt** (vorher selbst nachgestellt) | `test_cli.py::test_hc34_run_meldet_fehlendes_passwort_als_konfigurationsfehler` | — |
+| HC-35 | low | Bei nicht bestätigter Zustellung fehlt die Zeile `5/5 …` | **gefixt** (vorher selbst nachgestellt) | `test_cli_e2e.py::test_hc35_nicht_bestaetigte_zustellung_hat_eine_fuenfte_zeile` | — |
+| HC-36 | low | `connect-llm --provider` zeigt immer die Groq-Anleitung | **in HC-3 aufgegangen** (gleiche Ursache, dort gefixt) | `test_cli_connect.py::test_hc3_provider_anthropic_zeigt_die_anthropic_anleitung` | ADR-075 (N) |
+| HC-37 | info | Zwei Schichtgrenzen der Befehlserkennung | **gefixt (Doku)** — (a) README/SPEC beschreiben die tolerante Erkennung jetzt korrekt, das Verhalten war richtig; (b) als Schichtgrenze unten festgehalten | `test_commands.py::test_bekannte_befehle_werden_erkannt`, `::test_botname_anhang_wird_abgetrennt`, `::test_argumente_werden_ignoriert_nicht_gelesen`, `::test_freier_text_wird_verworfen` | — |
+| HC-38 | low | Testabdeckung Standardmodus, `/digest`-Zweig, mechanische Zusagen | **gefixt** (drei Teile in FP-1/FP-6/FP-9) | `test_runner.py::test_hc38_*` (2), `test_cli_connect.py::test_hc38_*`, `test_cli.py::test_hc38_*` (2), `test_invarianten.py::test_hc38_*` (3) | — |
+
+„(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11**. Fett gesetzte ADRs sind neu.
+
+**Bilanz:** 35 offene Befunde, davon 33 mit Code-Fix und Regressionstest, einer rein
+dokumentarisch (HC-37 a), einer in einem anderen aufgegangen (HC-36); dazu zwei bereits in
+`14ad9ed` erledigte (HC-16, HC-31). **Kein Befund bleibt bewusst offen, keiner war nicht
+reproduzierbar.** Die sechs von keinem Skeptiker geprüften Befunde (HC-32 … HC-35, HC-37,
+Teile von HC-36) wurden vom jeweiligen Fix-Agenten vor dem Fix selbst nachgestellt und haben
+sich alle bestätigt.
+
+### Korrekturen an §5: drei Begründungen trugen nicht mehr
+
+Diese Runde hat drei Einträge des Hot-Logs widerlegt. Sie bleiben oben unverändert stehen —
+§5 ist Historie —, sind aber ab hier überholt:
+
+- **HT-14 (neu): Erkennungsregex und Test-Orakel teilten dieselbe Schranke.**
+  `tests/unit/test_hot_properties.py:_RE_LIVE_DOMAIN` hatte mit `[a-z0-9\-]{0,62}`/`{1,63}`
+  die DNS-Längenschranke und mit `(?![\w\-.])` die Unterstrich-Wortgrenze der Implementierung
+  übernommen — es konnte die Lücke, die es prüfen soll, prinzipiell nicht finden (HC-24). Das
+  ist dieselbe Fehlerart wie HT-1/2/4/6, nur eine Ebene höher. Behoben durch: Deckel in Orakel
+  **und** Implementierung ersatzlos entfernt, IPv4-Verbotsmuster (`_RE_LIVE_IPV4`) ergänzt, das
+  dort ganz fehlte, Struktur-Zeilen des Orakels um die englischen Beschriftungen erweitert
+  (es prüfte nur die deutschen, obwohl die Ausgabe englisch ist), und der Kommentar
+  „das Orakel muss strikt großzügiger sein als die Implementierung" aufgenommen. Als Regel für
+  künftige Runden: **Ein Orakel, das eine Konstante der Implementierung wiederholt, prüft nichts.**
+  Zur selben Klasse gehört ein zweiter Fund aus HC-23: `tests/integration/test_sanitize_corpus.py`
+  baute die `RawMail` von Hand nach, statt `build_raw_mail` zu rufen, und umging damit genau die
+  Stufe, in der der Fehler saß; der Helfer ist entfallen. Ebenso HC-5: der CT-6-Regressionstest
+  baute seine `SanitizedMail` mit `make_mail()` und ließ den Sanitizer aus.
+- **HT-7-Korrektur: „200 000-Zeichen-Felder abgedeckt" trug nicht.** Der Testwert der
+  Fehlerinjektion ist `"S" * 200_000` und enthält **keinen einzigen** Treffer von
+  `_URL_TOKEN_RE`; `_redact_tokens` steigt nach `finditer` sofort aus und misst nichts. Die
+  Klasse, um die es geht — ein whitespace-freies Feld **mit** vielen Treffern —, war bis HC-29
+  ungetestet und lief dort quadratisch (32 000 Zeichen: 9,26 s; nach dem Fix 0,006 s). Sie ist
+  jetzt über `test_summarizer.py::test_hc29_redact_tokens_bleibt_im_zeitbudget` abgedeckt.
+  Der Null-Befund von HT-7 im Übrigen bleibt gültig.
+- **HT-12-Korrektur: `compose_plain` hat nicht einen, sondern drei Aufrufer.** Die alte
+  Begründung („der einzige Aufrufer ist die CLI-Testnachricht, deren Text im Code steht")
+  trägt seit ADR-054 nicht mehr: Aufrufer sind `cli.py:_send_test_message`,
+  `cli.py:_announce_selftest` und `runner.py:handle_command` — und der dritte interpoliert
+  `[imap] folder`, also einen variablen Anteil (HC-28). Die Schichtgrenze lautet ab jetzt:
+  **`_finalize` ist Nachbrenner und Split, kein Feld-Scrub; variable Anteile scrubbt der
+  Aufrufer.** Festgehalten im Docstring von `compose_plain`, in ADR-077 (Nachtrag b) und
+  mechanisch in `test_invarianten.py::test_hc38_compose_plain_hat_nur_die_gelisteten_aufrufer`.
+
+### Schichtgrenzen, die diese Runde bestätigt hat
+
+- **HC-37 (b): Kein Rate-Limit für `/status`.** Sechs Befehle in einem Stapel ergeben sechs
+  Antworten; nur `/digest`-Fluten werden zu genau **einem** zusätzlichen Zyklus zusammengefasst
+  (ADR-077, seit HC-13 unverändert). Eine Befehlsflut treibt also die Modellkosten nicht linear
+  hoch — sie kann aber den Messenger mit Statusantworten fluten. Wer in den Chat schreiben
+  kann, ist laut SECURITY §1 der Betreiber selbst; für Gruppen-Chats ist `accept_commands =
+  false` vorgesehen (README).
+- **`run --once` läuft nicht unter den Signal-Handlern.** Der im Bericht unter „Geprüft und
+  verworfen" Nr. 6 widerlegte Befund („Absturz zwischen `claim` und `checked` verliert die Mail")
+  hinterlässt eine Klarstellung: Die Signal-Handler installiert nur `run_forever`. Ein Ctrl+C
+  oder ein Cron-Timeout während `run --once` erzeugt den Zustand `sanitized` real — die Mail
+  bleibt als Zeile abfragbar, wird beim Wiederanlauf aber als Duplikat erkannt und nicht erneut
+  verarbeitet (ADR-019 hält das als akzeptiert fest). Steht auch in BETRIEB §3.
+- **Über-Neutralisierung ist bei HC-5 der fail-safe Ausgang** (ADR-036): `<… MAILDIGEST …
+  UNTRUSTED …>` innerhalb einer Zeile wird auch dann ersetzt, wenn ein harmloser Absender beide
+  Wörter zufällig in spitzen Klammern schreibt. Über den gesamten Korpus tritt der Fall nicht auf.
+- **Die Fehlalarmrate ist durch HC-5 und HC-21 nicht gestiegen.** Über die 49 sanitisierbaren
+  Mails aus `tests/corpus/` und `tests/cold/mails/` setzten vorher vier den Injection-Verdacht,
+  nachher ebenfalls vier — alle vier sind Angriffsmails. Neu ist nur, dass
+  `10_injection_direkt.eml` zusätzlich das Indiz `forged_block_marker` trägt. Auch das neue
+  `encrypted`-Flag (HC-33) setzt über den gesamten Korpus keine einzige Mail.
+
+### Neue Testdateien und Korpusmails aus dieser Runde
+
+| Datei | Inhalt |
+|-------|--------|
+| `tests/unit/test_hot_cli_robustness.py` | Terminal-Allowlist und Key-Maskierung (HC-4), atomares Schreiben der Konfiguration (HC-20) |
+| `tests/unit/test_hc14_spec_literals.py` | Vertragstest: liest die Literale aus SPEC-CLI §2/§4/§6 und vergleicht sie mit einer echt komponierten Nachricht bzw. mit `inspect.getsource(cli)` (19 Fälle) |
+| `tests/cold/mails/30_marker_nachbau.eml` | Exakt nachgebauter Datenblock-Marker (HC-5) |
+| `tests/cold/mails/31_injection_variante.eml` | Naheliegende Variante der Übernahmeformel (HC-21) |
+
+`tests/unit/test_invarianten.py` ist von 24 auf 27 Tests gewachsen: Die Menge der
+`.send(`-Aufrufstellen (sieben), die Herkunft jedes Sende-Arguments und die Aufrufer von
+`compose_plain` (drei) sind jetzt per AST gesperrt (HC-38). Beide Zusagen waren bis dahin nur
+Prosa in SECURITY §7.1 — und beide hätten HC-28 beim Einbauen der `/status`-Antwort sofort
+sichtbar gemacht.
+
+### Abdeckung nach dieser Runde
+
+| Modul | Stand |
+|-------|-------|
+| `agents/offline.py` | 100 % |
+| `output/sanitizer.py` | 99 % (2 Zeilen: Fixpunkt-Rückgabe in `_unescape`, Schnellpfad von `_strip_control`) |
+| `sanitize/links.py` | 99 % (1 Zeile: `build_footnote` ohne Einträge) |
+| `sanitize/attachments.py` | 100 % |
+| `runner.py` | 99 % (4 Zeilen: `AssertionError`-Wächter in `_with_llm_retry`, `_stop.wait`-Zweig von `_wait`, `total.low_digests += 1`, Platzhalter `_unwired`) |
+| `cli.py` | 96 %, `providers.py` 89 % (Rückfallzweige von `find_preset`) |
+
+In `runner.build_runner` sind die Offline-Zweige jetzt gedeckt; ungedeckt bleiben dort nur die
+Zweige mit echtem LLM-Provider. Die Gesamtziele aus NF-6 sind unverändert erfüllt.
+
+### §4 nach dieser Runde
+
+Der Haken **„Zweite Cold-Runde mit frischem Agenten"** bleibt offen — er läuft als §6 der
+Fixrunde ([docs/PLAN-FIXRUNDE.md](PLAN-FIXRUNDE.md)). Seine Voraussetzung ist seit HC-14
+erfüllt: Die Spec beschreibt wieder wörtlich, was das Programm ausgibt, und ein Vertragstest
+hält das fest. Bis die Runde stattgefunden hat, bleibt NF-8 `in-progress`.

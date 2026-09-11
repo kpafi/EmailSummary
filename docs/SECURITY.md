@@ -360,17 +360,27 @@ prüft.
 
 ## 7. Invarianten-Review
 
-**Datum:** 2026-09-08 · **Stand:** WP12, Release 0.1.0 · **Umfang:** `src/maildigest/`,
-41 Module.
+**Datum:** 2026-09-11 · **Stand:** nach der Fixrunde zur Abschluss-Testrunde (HC-1 … HC-38,
+docs/TESTING.md §7) · **Umfang:** `src/maildigest/`, 44 Module.
+Die Momentaufnahme vom 2026-09-08 (WP12, Release 0.1.0, 41 Module, 5 `.send()`-Stellen) ist
+damit überholt; die Befunde je Invariante haben sich nicht umgekehrt, sie sind an fünf Stellen
+enger geworden.
 
 **Methode.** Drei Ebenen, jede für sich unzureichend:
 
-1. **Mechanisch.** `tests/unit/test_invarianten.py` (24 Tests) parst jedes Produktionsmodul
+1. **Mechanisch.** `tests/unit/test_invarianten.py` (27 Tests) parst jedes Produktionsmodul
    mit `ast`, entfernt Docstrings und Kommentare und sucht erst dann. Das ist der
    entscheidende Unterschied zu `grep`: Die ausführlichsten Fundstellen für „expunge",
    „delete" und „parse_mode" sind die Begründungen, warum es sie **nicht** gibt — eine reine
    Textsuche bleibt daran hängen und liefert ein Ergebnis, das man nur noch glauben kann.
    Der in §6 angekündigte Lint-Check („kein `verify=False` irgendwo") ist Teil dieser Datei.
+   **Neu seit der Fixrunde (HC-38):** Drei der bisher nur in Prosa geführten Zusagen dieses
+   Abschnitts sind jetzt selbst mechanisch gesperrt — die Menge der `.send(`-Aufrufstellen, die
+   Herkunft jedes Sende-Arguments und die Aufrufer von `compose_plain`. Beide Positivlisten
+   stehen als `SEND_SITES` und `COMPOSE_PLAIN_CALLERS` in der Testdatei; eine neue Stelle fällt
+   auf, statt unbemerkt zu entstehen. Die Wirksamkeit ist durch Negativproben belegt (ein
+   zusätzliches `messenger.send(text)` bzw. ein Aufruf unter Umgehung des Composers lässt die
+   Tests fehlschlagen).
 2. **Strukturell.** Wo eine Invariante an einer Typgrenze hängt, wird die Grenze geprüft und
    nicht das Vorkommen eines Wortes (I1: welche Module dürfen `mime_bytes` überhaupt nennen;
    I2: welche Schlüssel darf ein LLM-Request-Körper enthalten).
@@ -389,24 +399,47 @@ gegen einen Angreifer. Der Blackbox-Nachweis ist die Cold-Runde (docs/TESTING.md
 |---|---|---|---|
 | **I1** | Kein LLM sieht rohe Anhänge, rohes HTML, rohe MIME-Struktur | **erfüllt** | `mime_bytes` kommt in genau drei Modulen vor: `models.py` (Felddefinition), `ingest/imap_client.py` (erzeugt `RawMail`), `sanitize/sanitizer.py` (einzige lesende Stelle). `pipeline.process_mail` gibt die `RawMail` unmittelbar nach der Sanitize-Stufe im `finally` mit `del raw` frei; alle folgenden Stufen nehmen strukturell nur `SanitizedMail` entgegen. Der HTML-Teil wird für den Divergenz-Vergleich (ADR-067) nur intern konvertiert und verlässt den Sanitizer nicht. |
 | **I2** | Text-in/Text-out, keine Tools, kein Function-Calling | **erfüllt** | Die Request-Körper beider Provider sind AST-geprüft auf den geschlossenen Feldsatz `{model, max_tokens, system, messages, temperature}`. `tools`, `tool_choice`, `functions`, `function_call`, `mcp_servers`: kein einziges Vorkommen im ausführbaren Code. `LLMProvider.complete` gibt einen String zurück; es gibt keinen Rückkanal vom Modell in das Programm außer diesem String. |
-| **I3** | Nachricht ohne klickbare Links, Anhänge, ausführbare Inhalte | **erfüllt** | `parse_mode` und `embeds`: kein Vorkommen. Jede zugestellte Nachricht entsteht ausschließlich über `DigestComposer._finalize()` — Feld-Scrub, `final_guard`, Split, danach `final_guard` je Teil (bis zu vier Runden, HT-4). Alle fünf `send()`-Aufrufstellen (`pipeline.py` ×2, `delivery.py`, `runner.py`, `cli.py`) speisen Objekte, die diesen Pfad gelaufen sind; `delivery.py` reicht nur bereits fertige Teile erneut ein. Property-Tests über zufällige Modellausgaben, dazu der Angriffskorpus aus WP11 (CT-7/7a/8). |
+| **I3** | Nachricht ohne klickbare Links, Anhänge, ausführbare Inhalte | **erfüllt** | `parse_mode` und `embeds`: kein Vorkommen. Jede zugestellte Nachricht entsteht ausschließlich über `DigestComposer._finalize()` — Feld-Scrub, `final_guard`, Split, danach `final_guard` je Teil (bis zu vier Runden, HT-4). Alle **sieben** `send()`-Aufrufstellen (`pipeline.py:_fail_closed`/`_process_sanitized`, `delivery.py:_attempt`, `runner.py:maybe_send_low_digest`/`handle_command`, `cli.py:_send_test_message`/`_announce_selftest`) speisen Objekte, die diesen Pfad gelaufen sind; `delivery.py` reicht nur bereits fertige Teile erneut ein. Liste und Argumentherkunft sind seit der Fixrunde AST-gesperrt (HC-38). Property-Tests über zufällige Modellausgaben, dazu der Angriffskorpus aus WP11 (CT-7/7a/8). **Vier Nähte sind in der Fixrunde geschlossen worden** (§5, Fixrunden-Block): Fortsetzungsstücke eines harten Zeilenschnitts tragen das neutrale Präfix `… ` und können keinen Strukturanfang mehr fälschen (HC-6); nackte IPv4 wird auch mit direkt anliegenden Nachbarzeichen gebrochen, und weder Domain- noch IPv4-Erkennung hat noch einen Längendeckel, an dem eine lange Marke vorbeikäme (HC-9, HC-24); die Link-Fußnote trägt kein Messenger-Markup mehr (HC-7); und die Zusage „kein Steuerzeichen verlässt das Modul" hängt nicht mehr an der Korrektheit der Link-Regexe, sondern an einem zweiten `C*`-Pass nach der Link-Erkennung (HC-8). Der bis dahin einzige ungescrubbte variable Anteil einer zugestellten Nachricht — der Ordnername in der `/status`-Antwort — läuft jetzt durch `scrub_plain` (HC-28); `_finalize` bleibt dabei Nachbrenner und Split, **kein** Feld-Scrub: variable Anteile scrubbt der Aufrufer. |
 | **I4** | Modellausgabe ist untrusted: Schema → Kritiker → Output-Sanitizer | **erfüllt** | `Summary`/`CriticVerdict` sind pydantic-erzwungen; eine Schema-Verletzung ist `schema_invalid` und damit fail-closed. `pipeline._process_sanitized` ruft die drei Stufen in fester Reihenfolge; es gibt keinen Pfad von `summarize` direkt zum Messenger. Der Composer scrubbt jedes Modellfeld noch einmal, auch die vom Kritiker gelieferten Gründe. |
-| **I5** | Secrets nie in Prompts, Logs, DB | **erfüllt, mit einer benannten Bandbreite** | Alle vier Secrets sind `pydantic.SecretStr`; `TelegramMessenger`, `DiscordMessenger` und beide LLM-Provider definieren `__repr__`/`__str__` ohne Secret. `ImapClient` hält das Passwort als einfaches Attribut, ist aber eine gewöhnliche Klasse ohne `__repr__` und ohne Dataclass-Dekorator — der Default-`repr` zeigt nur die Adresse. Sämtliche 21 `extra={…}`-Stellen wurden einzeln gelesen: gekürzte Hashes, Absender-Domain, Ordnername, Statuswerte, Zähler, Exception-**Klassennamen**. Der `JsonLogFormatter` verdichtet nicht-JSON-fähige Werte auf ihren Typnamen, statt `repr()` zu rufen. **Bandbreite:** `imap_postprocess_failed` loggt `str(exc)` statt nur den Klassennamen — dieser Text ist programm-formuliert und enthält höchstens den konfigurierten Ordnernamen und das IMAP-Statuswort (`NO`/`BAD`), keinen Mail-Inhalt und kein Secret. Bewusst so belassen: Ohne den Ordnernamen ist der häufigste Fehlerfall (falsch geschriebenes `move_processed_to`) nicht diagnostizierbar. |
-| **I6** | Fail-closed | **erfüllt** | Jede Stufe in `pipeline.py` liegt in einem eigenen `try`, dessen `except Exception` in `_fail_closed` mündet; die Fehlerklassen-Abbildung ist eine geschlossene Tabelle mit `<stufe>_error` als Auffangwert. Der Ingest-Loop fängt zusätzlich pro Mail ab (`mail_processing_crashed` ⇒ `failed`), damit eine kaputte Mail den Zyklus nicht stoppt. Im Rauchtest mit unerreichbarem Modell kam die fünfzeilige Metadaten-Notiz und sonst nichts. |
+| **I5** | Secrets nie in Prompts, Logs, DB | **erfüllt, mit einer benannten Bandbreite** | Alle vier Secrets sind `pydantic.SecretStr`; `TelegramMessenger`, `DiscordMessenger` und beide LLM-Provider definieren `__repr__`/`__str__` ohne Secret. `ImapClient` hält das Passwort als einfaches Attribut, ist aber eine gewöhnliche Klasse ohne `__repr__` und ohne Dataclass-Dekorator — der Default-`repr` zeigt nur die Adresse. Sämtliche 21 `extra={…}`-Stellen wurden einzeln gelesen: gekürzte Hashes, Absender-Domain, Ordnername, Statuswerte, Zähler, Exception-**Klassennamen**. Der `JsonLogFormatter` verdichtet nicht-JSON-fähige Werte auf ihren Typnamen, statt `repr()` zu rufen. **Bandbreite:** `imap_postprocess_failed` loggt `str(exc)` statt nur den Klassennamen — dieser Text ist programm-formuliert und enthält höchstens den konfigurierten Ordnernamen und das IMAP-Statuswort (`NO`/`BAD`), keinen Mail-Inhalt und kein Secret. Bewusst so belassen: Ohne den Ordnernamen ist der häufigste Fehlerfall (falsch geschriebenes `move_processed_to`) nicht diagnostizierbar. **Vier Ergänzungen aus der Fixrunde:** (1) Das in dieser Aufzählung bisher fehlende Feld `detail` von `mail_processed`/`process_failed` stammt aus `pipeline.failure_detail(exc)` und ist bei `LLMInvalidResponse` die Fehlerliste aus `llm/schema._error_summary`. Genau ein Fehlertyp trug dort einen nicht vom Code erzeugten Namen — `extra_forbidden`, der vom Modell erfundene Schlüssel; er ist jetzt der feste Platzhalter `<extra field>`, in Logzeile **und** Reparatur-Prompt (HC-11). (2) Der Fehlertext eines Modell-Anbieters läuft vor jeder Terminalausgabe durch die Zeichen-Allowlist in `maildigest.foreign_text`, und ein darin zitierter eigener API-Key wird maskiert — die Zusage „Fehlermeldungen enthalten niemals API-Keys" hängt nicht mehr am Wohlverhalten der Gegenstelle (HC-4). (3) `connect-mail` verzichtet ausdrücklich auf die IMAP-Serverantwort und entscheidet über die Fehlerklasse (`ImapAuthError` vs. Transportfehler); der Servertext zitiert regelmäßig den gesendeten Benutzernamen (HC-32, §6). (4) Das atomare Schreiben der Konfiguration legt **keine** zweite Kopie der Secrets an: die Temp-Datei hat `0600` und verschwindet in jedem Ausgang (ADR-081). Die beiden neuen Logereignisse `mail_id_collision` und `outbox_clock_skew_corrected` tragen nur 12-stellige Hashes bzw. eine Zeilenzahl. |
+| **I6** | Fail-closed | **erfüllt** | Jede Stufe in `pipeline.py` liegt in einem eigenen `try`, dessen `except Exception` in `_fail_closed` mündet; die Fehlerklassen-Abbildung ist eine geschlossene Tabelle mit `<stufe>_error` als Auffangwert. Der Ingest-Loop fängt zusätzlich pro Mail ab (`mail_processing_crashed` ⇒ `failed`), damit eine kaputte Mail den Zyklus nicht stoppt. Im Rauchtest mit unerreichbarem Modell kam die fünfzeilige Metadaten-Notiz und sonst nichts. **Zwei Präzisierungen aus der Fixrunde:** Der fail-closed-Ausgang wird nicht mehr durch einen harmlosen langen Betreff ausgelöst (HC-1) — er bleibt echten Fehlern vorbehalten. Und er ist **nicht** der Weg für zwei Lagen, in denen nichts Unsicheres passiert ist: Eine Message-ID-Kollision wird regulär unter einem abgeleiteten Schlüssel verarbeitet und nur benannt (ADR-079, HC-10); eine verschlüsselte PGP/S-MIME-Mail ebenso (ADR-082, HC-33). Eine Notiz „could not be processed safely" wäre dort sachlich falsch und nähme dem Nutzer zugleich Absender, Betreff und Anhangsliste. |
 | **I7** | Anhangs-Extraktion im ressourcenbegrenzten Subprozess | **erfüllt** | `pdfminer` wird ausschließlich in `sanitize/extract_pdf.py` genannt, und dort erst **im Kindprozess** importiert — der Elternprozess lädt die Bibliothek nie. Das Kind setzt `RLIMIT_AS` vor dem Import, der Elternprozess überwacht per `subprocess.run(timeout=…)` und killt danach. Input- und Output-Grenze zusätzlich im Aufrufer. |
 | **I8** | Custom-Instructions als gelabelter System-Teil, Mail strikt getrennt | **erfüllt** | `summarizer_system_prompt` baut `Rolle → Nutzer-Vorgaben → UNÜBERSCHREIBBARE SICHERHEITSREGELN`; die Reihenfolge ist als Test festgehalten. Die Mail steht in der **User**-Message zwischen Markern mit einem je Aufruf frisch gezogenen Token, dessen Nachbau im Mail-Text neutralisiert wird. `critic_system_prompt` nimmt bewusst gar keine Custom-Instructions entgegen (ADR-042) — auch das ist getestet. |
 
 ### 7.2 Was dieses Review offen lässt
 
 1. **Zweite Cold-Runde.** docs/TESTING.md §3 verlangt sie nach Sicherheits-Findings ≥ high
-   (CT-6, CT-9). Sie hat nicht stattgefunden. Der Autor dieses Reviews hat den Code gelesen
-   und kann sie nicht ersetzen.
+   (CT-6, CT-9). Sie **steht weiterhin aus** und läuft als §6 der Fixrunde
+   (docs/PLAN-FIXRUNDE.md). Die Abschluss-Testrunde vom September 2026 (docs/TESTING.md §7)
+   erfüllt den Haken ausdrücklich **nicht**: Ihre Skeptikerprüfung hatte durchweg vollen
+   Code-Zugriff, und die Prüfgrundlage selbst war defekt — SPEC-CLI legte den Wortlaut der
+   Ausgabe deutsch fest, während die Implementierung englisch war (HC-14). Diese Voraussetzung
+   ist inzwischen erfüllt: Der Vertrag beschreibt wieder, was das Programm ausgibt, und
+   `tests/unit/test_hc14_spec_literals.py` hält das maschinell fest. Bis zur Runde bleibt NF-8
+   `in-progress`.
 2. **Kein Lauf gegen echte Gegenstellen.** Kein echtes IMAP-Postfach, keine echte LLM-API,
    kein echter Messenger — alle Nachweise stammen aus Mocks bzw. aus dem Fehlerpfad. `UID
    MOVE` ist gegen einen selbstgebauten Mock belegt, nicht gegen einen Server.
 3. **Heuristik-Kalibrierung.** Phrasenliste in `detect_injection_evidence`,
    CT-15-Schwellen (≥ 5 Wörter / > 50 %) und `_HIGH_SIGNAL_COUNT = 3` sind ohne Felddaten
    gesetzt. Sie können falsch alarmieren; das ist eine Nutzbarkeits-, keine Sicherheitsfrage.
+
+   **Miss-Richtung der Phrasenliste (HC-21).** Die Liste erkennt keine Injection, sondern
+   **wörtliche** Übernahmeformeln. Paraphrasen und andere Sprachen bleiben unerkannt — das ist
+   die bewusste Fehlalarm-Abwägung aus ADR-061. Neu benannt ist der Geltungsgrund: Im
+   Werkszustand (`[llm] provider = "none"`) gibt es überhaupt keine Modellantwort, die
+   `injection_suspected` setzen könnte; die deterministischen Indizien sind dort die **einzige**
+   Quelle. Eine Lücke in ihnen ist dann kein Restrisiko, sondern ein Totalausfall der
+   F-SEC-5-Anzeige. Die Liste ist in der Fixrunde um Possessiv, bestimmten Artikel, die Verben
+   `forget`/`vergiss`/`missachte` und den Singular erweitert worden, die Objektbindung blieb;
+   die Fehlalarmrate über den Korpus ist unverändert (4 von 49, alle vier Angriffsmails).
+   Ungeeicht bleibt sie trotzdem.
+
+   **Über-Defang und Über-Neutralisierung sind der gewählte Ausgang** (ADR-036). Das gilt seit
+   der Fixrunde an zwei weiteren Stellen: `<… MAILDIGEST … UNTRUSTED …>` wird auch dann ersetzt,
+   wenn ein harmloser Absender beide Wörter zufällig in spitzen Klammern schreibt (HC-5), und
+   die Domain-Erkennung hat keinen Längendeckel mehr, hinter dem sich etwas verstecken ließe
+   (HC-24). Preis ist jeweils ein möglicher Fehlalarm im Text, nie ein übersehener Link.
 4. **`connect-mail` warnt nicht vorab**, wenn der Server kein MOVE kann oder
    `move_processed_to` nicht existiert — der Fehler fällt erst im Betrieb auf (als
    `imap_postprocess_failed`, ohne Datenverlust). In ADR-065 als sinnvolle Ergänzung

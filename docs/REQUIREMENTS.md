@@ -53,18 +53,20 @@
 | NF-3 | Konfiguration vollständig über eine `config.toml` + Env-Vars; keine Datenbank-Migrationstools. | done (WP1 + WP8 + WP9) — jedes Feld ist in docs/SPEC-CLI.md §5 mit Default dokumentiert und wird von einem Test gegen das Schema abgeglichen; Schema-Upgrade der DB additiv im Code (ADR-048) |
 | NF-4 | Verarbeitungslatenz pro Mail < 60 s unter Normalbedingungen (exkl. LLM-Ausreißer). | **open** — nie gemessen. Ohne echte LLM-API gibt es keine belastbare Zahl; die eigenen Stufen (Sanitizer, Composer) liegen im Millisekundenbereich, die Latenz ist damit praktisch die Summe zweier Modell-Aufrufe. Bleibt offen bis zum ersten Produktivlauf |
 | NF-5 | Logs strukturiert, ohne Mail-Inhalte und ohne PII über Absender-Domain + gehashte Message-ID hinaus. | done (WP2 + WP8) — JSON-Zeilen auf stdout, Level aus `[general] log_level`, nicht serialisierbare `extra`-Werte werden auf ihren Typnamen reduziert; Tracebacks nur bei DEBUG (ADR-046/047) |
-| NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | done (WP10, Stand WP12) — `sanitize/` 98 %, `output/` 99 %, gesamt 97 % bei 1278 Tests; Messwerte und Restlücken in docs/TESTING.md §5. Ergänzt um Property-Based-Tests (hypothesis, Dev-only, ADR-058), Fehlerinjektion an jeder Stufe und den Findings-Log HT-1…HT-12 |
+| NF-6 | Testabdeckung: ≥ 90 % `sanitize/` und `output/`, ≥ 80 % gesamt (Stand WP10). | done (WP10, Stand WP12) — `sanitize/` 98 %, `output/` 99 %, gesamt 97 % bei 1278 Tests; Messwerte und Restlücken in docs/TESTING.md §5, Stand nach der Fixrunde (1565 Tests) in §7. Ergänzt um Property-Based-Tests (hypothesis, Dev-only, ADR-058), Fehlerinjektion an jeder Stufe und den Findings-Log HT-1…HT-12 |
 | NF-7 | Doku-Pflicht: REQUIREMENTS/ARCHITECTURE/SECURITY/DECISIONS werden in jedem WP mitgepflegt; SPEC-CLI.md ist vollständiger CLI-Vertrag. | done (WP12) — SPEC-CLI.md wird von `tests/unit/test_spec_cli.py` maschinell gegen argparse und das Config-Schema abgeglichen; in WP12 wurde die gesamte Doku gegen den Ist-Stand geprüft und SECURITY §7 ausgefüllt |
-| NF-8 | Zwei unabhängige Testdurchläufe: Hot (Whitebox) und Cold (Blackbox durch Agent ohne Code-Zugriff) gemäß TESTING.md. | **in-progress** — Hot abgeschlossen (WP10, §5), erster Cold-Durchlauf abgeschlossen (WP11, §6: 16 Befunde, alle ≥ medium gefixt und mit Regressionstest belegt). Die von TESTING §3 nach den `high`-Befunden CT-6/CT-9 verlangte **zweite** Cold-Runde steht aus — der einzige offene Punkt dieser Anforderung, benannt in README „Grenzen dieser Version" und SECURITY §7.2 |
+| NF-8 | Zwei unabhängige Testdurchläufe: Hot (Whitebox) und Cold (Blackbox durch Agent ohne Code-Zugriff) gemäß TESTING.md. | **in-progress** — Hot abgeschlossen (WP10, §5), erster Cold-Durchlauf abgeschlossen (WP11, §6: 16 Befunde, alle ≥ medium gefixt und mit Regressionstest belegt). Die von TESTING §3 nach den `high`-Befunden CT-6/CT-9 verlangte **zweite** Cold-Runde steht aus — der einzige offene Punkt dieser Anforderung, benannt in README „Grenzen dieser Version", CHANGELOG und SECURITY §7.2. Die Abschluss-Testrunde vom September 2026 (TESTING §7, 38 Befunde, alle ohne bewusst offenen Rest behoben) erfüllt den Haken **nicht** — ihre Skeptikerprüfung hatte Code-Zugriff —, hat aber seine Voraussetzung geschaffen: Der CLI-Vertrag beschreibt seit ADR-083 wieder wörtlich die tatsächliche Ausgabe |
 
 ## 4. Explizit außerhalb des Scopes (v0.1)
 
 - Kein Zugriff auf das echte Postfach (nur Mirror).
 - Kein Dialog mit dem Bot und keine Aktionen aus dem Messenger heraus. **Ausnahme seit
-  2026-09-09 (ADR-077):** ein opt-in Befehlskanal mit der festen Wortliste `/digest`
+  2026-09-09 (ADR-077):** ein Befehlskanal mit der festen Wortliste `/digest`
   und `/status`, nur aus dem konfigurierten Chat. Freier Text wird verworfen und
   erreicht nie ein Sprachmodell. Seit ADR-078 ist der Kanal ab Werk **an**; für Gruppen-Chats lässt er sich abschalten.
 - Kein OCR / keine Bildinhalts-Analyse (Known Limitation: Bild-Phishing wird nur als
   unverarbeiteter Anhang gemeldet).
-- Keine Entschlüsselung von PGP/S-MIME.
+- Keine Entschlüsselung von PGP/S-MIME. Eine solche Mail wird seit ADR-082 aber als
+  verschlüsselt **erkannt und benannt** (Hinweiszeile „encrypted (PGP/S-MIME) — content not
+  readable by design"), statt wie eine inhaltsleere Mail auszusehen.
 - Kein Multi-User-/Multi-Postfach-Betrieb.

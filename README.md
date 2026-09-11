@@ -363,7 +363,8 @@ denen du dich auf MailDigest **nicht** verlassen solltest.
 
 **Noch nie gegen echte Gegenstellen gelaufen.** Version 0.1.0 ist vollständig gegen
 Attrappen getestet: kein echtes IMAP-Postfach, keine echte LLM-API, kein echter Messenger.
-Die Tests sind gründlich (1250+ Tests, ein Angriffskorpus, ein Blackbox-Durchlauf), aber
+Die Tests sind gründlich (1500+ Tests, ein Angriffskorpus, zwei dokumentierte
+Prüfdurchläufe), aber
 sie prüfen das Programm gegen ein nachgebautes Gegenüber. Ob ein realer IMAP-Server sich
 so verhält wie unser Mock, ob ein reales Modell das JSON-Format hält, ob Telegram die
 Nachricht so annimmt — das ist unbelegt. Rechne beim ersten Lauf mit Überraschungen und
@@ -372,6 +373,8 @@ fang mit `maildigest test --dry-run` an.
 **Der zweite Blackbox-Durchlauf fehlt.** Der erste (docs/TESTING.md §6) fand zwei
 schwerwiegende Fehler; beide sind behoben und mit Regressionstests belegt. Unser eigenes
 Testprotokoll verlangt danach eine zweite, unabhängige Runde. Sie hat nicht stattgefunden.
+Eine weitere Prüfrunde im September 2026 (docs/TESTING.md §7) hat 38 Befunde geliefert — alle
+behoben —, ersetzt sie aber nicht: Die Nachprüfung lief dort mit Code-Zugriff.
 
 **Bild-Phishing bleibt offen.** Kein OCR, keine Bildanalyse. Wer seinen Text als Screenshot
 verschickt, bekommt eine Zusammenfassung wie „Mail ohne Text mit einem Bildanhang" — das
