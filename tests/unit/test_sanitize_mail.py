@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from maildigest.config import LimitsConfig
 from maildigest.models import RawMail
 from maildigest.pipeline import Sanitizer, classify_failure
 from maildigest.sanitize import MailSanitizer, SanitizeError
+from maildigest.sanitize.html_to_text import MAX_HTML_DEPTH
 from maildigest.sanitize.links import FOOTNOTE_TITLE, build_footnote
 from maildigest.sanitize.sanitizer import FORGED_MARKER_TOKEN
 
@@ -393,3 +396,75 @@ class TestHc33VerschluesselteMail:
         mail = MailSanitizer().sanitize(make_raw(mime))
         assert mail.sanitization_report.encrypted is False
         assert "Guten Tag." in mail.body_text
+
+
+# --- HC2-1: Schranken der HTML-Konvertierung (ADR-084) --------------------------------
+
+
+def nested_html(levels: int) -> str:
+    return "<div>" * levels + "Kaufen Sie jetzt Gutscheine." + "</div>" * levels
+
+
+class TestHc21SchrankenDerHtmlKonvertierung:
+    """Ein zu komplexer HTML-Teil gilt als nicht verarbeitet — die Mail läuft weiter."""
+
+    def test_hc2_1_element_limit_rejects_part(self) -> None:
+        """Nur der HTML-Teil fällt weg; der Klartext-Teil wird normal zugestellt."""
+        mime = alternative_mail("Guten Tag, Ihre Rechnung.", "<p>x</p>" * 400)
+        mail = MailSanitizer(LimitsConfig(max_html_elements=50)).sanitize(make_raw(mime))
+        assert mail.sanitization_report.html_rejected is True
+        assert "Guten Tag, Ihre Rechnung." in mail.body_text
+        assert "<" not in mail.body_text  # I1: kein rohes HTML im Prompt-Text
+
+    def test_hc2_1_html_only_mail_bleibt_fail_safe(self) -> None:
+        """Ohne Klartext-Teil bleibt der Body leer — kein Absturz, kein rohes HTML (I1/I6)."""
+        mime = (
+            "Content-Type: text/html; charset=utf-8\r\n\r\n" + "<p>x</p>" * 400
+        ).encode("utf-8")
+        mail = MailSanitizer(LimitsConfig(max_html_elements=50)).sanitize(make_raw(mime))
+        assert mail.sanitization_report.html_rejected is True
+        assert mail.body_text == ""
+
+    def test_hc2_1_depth_limit_rejects_part(self) -> None:
+        """Die Tiefengrenze ist eine Modulkonstante und greift ohne Config-Zutun."""
+        mime = alternative_mail("Guten Tag.", nested_html(MAX_HTML_DEPTH + 5))
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        assert mail.sanitization_report.html_rejected is True
+        assert "Guten Tag." in mail.body_text
+
+    def test_hc2_1_divergence_check_respects_limit(self) -> None:
+        """Der Divergenzcheck (ADR-067) benutzt dieselbe Schranke — er ist der Einstieg.
+
+        Er läuft genau dann, wenn ein Klartext-Teil da ist; ohne diese Schranke wäre die
+        Zeitbombe über eine Mail *mit* harmlosem `text/plain` erreichbar.
+        """
+        mime = alternative_mail("Guten Tag.", "<p>Ganz anderer Text hier drin.</p>" * 400)
+        report = (
+            MailSanitizer(LimitsConfig(max_html_elements=50))
+            .sanitize(make_raw(mime))
+            .sanitization_report
+        )
+        assert report.html_rejected is True
+        # Ungeprüft heisst nicht „abweichend": Gemeldet wird die Ablehnung, nicht eine
+        # Divergenz, die niemand festgestellt hat.
+        assert report.html_divergent is False
+
+    def test_hc2_1_divergenz_ohne_ueberschreitung_meldet_weiter(self) -> None:
+        """Gegenprobe: unter der Schranke arbeitet der Divergenzcheck unverändert."""
+        mime = alternative_mail(
+            "Guten Tag.",
+            "<p>Ihr Konto wurde gesperrt, bitte bestaetigen Sie Ihre Zugangsdaten "
+            "sofort ueber das Formular.</p>",
+        )
+        report = MailSanitizer().sanitize(make_raw(mime)).sanitization_report
+        assert report.html_rejected is False
+        assert report.html_divergent is True
+
+    def test_hc2_1_ende_zu_ende_unter_einer_sekunde(self) -> None:
+        """Die 68-KB-Angriffsmail aus HC2-1 kostete 5,12 s CPU — jetzt Bruchteile davon."""
+        mime = alternative_mail("Guten Tag, Ihre Rechnung.", nested_html(6_000))
+        start = time.perf_counter()
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        assert time.perf_counter() - start < 1.0
+        assert mail.sanitization_report.html_rejected is True
+        assert "Guten Tag, Ihre Rechnung." in mail.body_text

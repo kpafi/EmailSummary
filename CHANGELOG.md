@@ -77,6 +77,26 @@ docs/TESTRUNDE-HOT-COLD.md):
   der Fehler-Taxonomie (HC-30); ein whitespace-freies Modellfeld lief quadratisch und braucht
   jetzt Millisekunden statt Sekunden (HC-29).
 
+Aus der zweiten Testrunde (docs/TESTING.md §7 „Nachfixrunde NF-1"; Bericht in
+docs/TESTRUNDE-2.md):
+
+- **Eine einzige Mail konnte MailDigest minutenlang anhalten.** Ein HTML-Teil mit sehr tief
+  verschachtelten Elementen liess die Umwandlung in Text quadratisch wachsen — 68 KB
+  Angriffs-HTML kosteten fünf Sekunden, ein Megabyte rechnerisch Minuten, und in dieser Zeit
+  wurden weder Mails abgeholt noch `/digest` oder `/status` beantwortet. Die Umwandlung ist
+  jetzt linear (16 000 Ebenen: 28,6 s → unter 0,1 s) und hat zusätzlich eine harte Grenze:
+  Ein HTML-Teil mit mehr als `[limits] max_html_elements` Elementen (Standard 50 000) oder
+  mehr als 2000 Verschachtelungsebenen wird **nicht** umgewandelt. Die Mail geht trotzdem
+  raus — mit dem Klartext-Teil, falls vorhanden, und dem Hinweis `HTML part too complex, not
+  converted`, damit niemand eine unvollständige Zusammenfassung für eine vollständige hält
+  (HC2-1, ADR-084).
+- **Ein gefälschter Absender-Anzeigename konnte die angezeigte Absender-Domain bestimmen.**
+  Wer seinen Namen kodiert als `Bank <info@bank.example>,` schickte, erschien in der
+  Zustellzeile als `bank.example`, obwohl die Mail von `attacker@evil.example` kam — und die
+  beiden Warnungen zu abweichender Antwortadresse und abweichendem Rückweg verstummten dabei.
+  Absenderadresse und Domain werden jetzt aus dem unveränderten Kopfzeilenwert gelesen;
+  dekodiert wird nur noch der Name (HC2-2). Der seit HC-23 lesbare Klarname bleibt erhalten.
+
 ### Geändert
 - Alle nutzersichtbaren Texte sind englisch; Docstrings und `docs/` bleiben deutsch.
   **Seit ADR-083 ist das eine Festlegung**: Programmoberfläche und Nachrichtenrahmen sind

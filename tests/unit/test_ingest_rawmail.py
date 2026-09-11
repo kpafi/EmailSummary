@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 from datetime import datetime
 
 import pytest
@@ -22,6 +23,7 @@ from maildigest.ingest.imap_client import (
     backoff_delay,
     build_raw_mail,
 )
+from maildigest.models import CriticVerdict, Summary
 from maildigest.sanitize import MailSanitizer
 
 FULL_MAIL = b"""\
@@ -309,6 +311,144 @@ def test_empty_message_is_survivable() -> None:
     raw = build_raw_mail(make_message(b""))
     assert raw.dedupe_key.startswith("sha256:")
     assert raw.size_bytes >= 0
+
+
+# --- HC2-2: Adresse aus dem Rohheader, nur der Name wird dekodiert ---------------------
+
+
+def _address_in_raw_header(mail: bytes, header: str) -> str:
+    """Orakel: die Adresse, wie sie **im Rohheader** steht — ohne Produktionscode.
+
+    Bewusst strikt grosszügiger als die Implementierung (Regel 5 aus PLAN-FIXRUNDE §2):
+    RFC-2047-kodierte Wörter sind per Definition Anzeigename und werden zuerst entfernt;
+    was danach an Adressen übrig bleibt, ist die Adresse des Headers.
+    """
+    text = mail.decode("latin-1")
+    line = next(
+        row for row in text.splitlines() if row.lower().startswith(header.lower() + ":")
+    )
+    value = re.sub(r"=\?[^?]*\?[bBqQ]\?[^?]*\?=", "", line.split(":", 1)[1])
+    return re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", value)[-1].lower()
+
+
+def _encoded(name: str) -> bytes:
+    """`name` als RFC-2047-Base64-Wort (die Form aus dem Befund)."""
+    return b"=?utf-8?B?" + base64.b64encode(name.encode()) + b"?="
+
+
+def _attack_mail(from_header: bytes, *, reply_to: bytes = b"") -> bytes:
+    """Mail mit `Return-Path: billing@bank.example` und wählbarem From/Reply-To."""
+    return (
+        b"Return-Path: <billing@bank.example>\r\n"
+        + from_header
+        + b"\r\n"
+        + reply_to
+        + b"Subject: Ihre Rechnung\r\n"
+        b"Date: Tue, 01 Sep 2026 10:00:00 +0200\r\n"
+        b'Content-Type: text/plain; charset="utf-8"\r\n\r\n'
+        b"Guten Tag.\r\n"
+    )
+
+
+def test_hc2_2_kodierter_name_mit_adresse_bestimmt_die_domain_nicht() -> None:
+    """Der Anzeigename darf die Absender-Domain nicht ersetzen (Regression aus HC-23).
+
+    Vor dem Fix dekodierte `_display_header` den **ganzen** Headerwert; die im Namen
+    versteckte Adresse stand danach als erste in der Adressliste und gewann.
+    """
+    mail = _attack_mail(
+        b"From: " + _encoded("Bank <info@bank.example>,") + b" <attacker@evil.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+
+    assert raw.from_domain == _address_in_raw_header(mail, "From").split("@")[1]
+    assert raw.from_domain == "evil.example"
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    assert report.return_path_mismatch is True
+
+
+def test_hc2_2_zustellzeile_zeigt_die_echte_domain() -> None:
+    """Die Absenderzeile ist das zentrale Anti-Phishing-Signal — sie zeigt `evil`."""
+    from maildigest.output.composer import DigestComposer
+
+    mail = _attack_mail(
+        b"From: " + _encoded("Bank <info@bank.example>,") + b" <attacker@evil.example>"
+    )
+    sanitized = MailSanitizer().sanitize(build_raw_mail(make_message(mail)))
+    text = "\n".join(
+        DigestComposer()
+        .compose(
+            sanitized,
+            Summary(
+                headline="Rechnung",
+                summary_text="Eine Rechnung.",
+                importance="normal",
+                category="other",
+            ),
+            CriticVerdict(phishing_risk="low"),
+        )
+        .parts
+    )
+    from_line = next(row for row in text.split("\n") if row.startswith("From: "))
+    assert "evil[.]example" in from_line
+    assert "(bank[.]example)" not in from_line
+
+
+def test_hc2_2_nackte_adresse_als_name_loescht_die_domain_nicht() -> None:
+    """Variante des Befunds: `from_domain` wurde leer, die Domain verschwand ganz."""
+    mail = _attack_mail(
+        b"From: " + _encoded("info@bank.example") + b" <attacker@evil.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_domain == "evil.example"
+
+
+def test_hc2_2_pseudotag_im_namen_laesst_die_domain_stehen() -> None:
+    """Variante des Befunds: `Support <b>x</b>` liess `from_domain` leer werden."""
+    mail = _attack_mail(
+        b"From: " + _encoded("Support <b>x</b>") + b" <attacker@evil.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_domain == "evil.example"
+    # Der Name ist von Struktursymbolen befreit; die Winkelklammern im Ergebnis sind die
+    # der echten Adresse.
+    assert raw.from_addr == "Support b x /b <attacker@evil.example>"
+
+
+def test_hc2_2_reply_to_indikator_feuert_wieder() -> None:
+    """Auch `Reply-To` trägt einen Anzeigenamen — derselbe Angriff, dasselbe Signal."""
+    mail = _attack_mail(
+        b"From: " + _encoded("Bank") + b" <attacker@evil.example>",
+        reply_to=b"Reply-To: "
+        + _encoded("Bank <info@bank.example>,")
+        + b" <collect@evil2.example>\r\n",
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_domain == "evil.example"
+    assert _address_in_raw_header(mail, "Reply-To") == "collect@evil2.example"
+    assert "collect@evil2.example" in (raw.reply_to or "")
+    assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch is True
+
+
+def test_hc2_2_kontrollmail_ohne_kodierung_bleibt_unveraendert() -> None:
+    """Gegenprobe: Ohne Kodierung wird der Rohwert unverändert übernommen."""
+    mail = _attack_mail(b"From: Bank <info@bank.example>")
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_addr == "Bank <info@bank.example>"
+    assert raw.from_domain == "bank.example"
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    assert report.return_path_mismatch is False
+    assert report.reply_to_mismatch is False
+
+
+def test_hc2_2_hc23_bleibt_behoben() -> None:
+    """Der HC-23-Fall selbst bleibt korrekt dekodiert — kein Rückbau auf die ASCII-Hülse."""
+    mail = _attack_mail(
+        b"From: =?utf-8?Q?J=C3=B6rg_M=C3=BCller?= <j@b.example>"
+    )
+    raw = build_raw_mail(make_message(mail))
+    assert raw.from_addr == "Jörg Müller <j@b.example>"
+    assert raw.from_domain == "b.example"
 
 
 # --- Backoff ---------------------------------------------------------------------------------

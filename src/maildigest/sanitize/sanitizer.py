@@ -34,7 +34,7 @@ from maildigest.models import (
 )
 from maildigest.sanitize.attachments import detect_kind, sanitize_filename
 from maildigest.sanitize.extract_pdf import extract_pdf_text
-from maildigest.sanitize.html_to_text import html_to_text
+from maildigest.sanitize.html_to_text import HtmlTooComplexError, html_to_text
 from maildigest.sanitize.links import LinkCollector
 from maildigest.sanitize.unicode_clean import clean_text, is_mixed_script_domain
 
@@ -122,6 +122,7 @@ class _WalkState:
     processed_count: int = 0
     hidden_removed: int = 0
     control_chars_removed: int = 0
+    html_rejected: bool = False
     truncated: bool = False
     html_divergent: bool = False
     forged_markers: int = 0
@@ -178,7 +179,15 @@ class MailSanitizer:
             for html in state.body_html:
                 cleaned_html, removed = clean_text(html)
                 state.control_chars_removed += removed
-                text, hidden = html_to_text(cleaned_html)
+                try:
+                    text, hidden = self._to_text(cleaned_html)
+                except HtmlTooComplexError:
+                    # ADR-084/HC2-1: Der Teil ist zu gross/zu tief, um ihn in der
+                    # Poll-Periode sicher zu konvertieren. Er gilt als nicht verarbeitet —
+                    # kein roher HTML-Text geht weiter (I1), die Mail läuft mit dem Rest
+                    # (hier: ohne Body) fail-safe durch und der Nutzer sieht die Hinweiszeile.
+                    state.html_rejected = True
+                    continue
                 state.hidden_removed += hidden
                 converted.append(text)
             body_raw = "\n\n".join(converted)
@@ -234,6 +243,10 @@ class MailSanitizer:
             sanitization_report=report,
         )
 
+    def _to_text(self, cleaned_html: str) -> tuple[str, int]:
+        """HTML→Text mit der konfigurierten Elementschranke (ADR-084, HC2-1)."""
+        return html_to_text(cleaned_html, max_elements=self._limits.max_html_elements)
+
     def _html_diverges(self, body_plain: str, state: _WalkState) -> bool:
         """Weicht der (ignorierte) HTML-Teil inhaltlich vom Klartext-Teil ab? (CT-15)
 
@@ -254,7 +267,16 @@ class MailSanitizer:
         converted: list[str] = []
         for html in state.body_html:
             cleaned_html, _ = clean_text(html)
-            text, _ = html_to_text(cleaned_html)
+            try:
+                text, _ = self._to_text(cleaned_html)
+            except HtmlTooComplexError:
+                # Dieselbe Schranke wie im Body-Pfad (ADR-084): Der Divergenzcheck ist der
+                # praktisch wichtigere Einstieg (er trifft auch Mails *mit* harmlosem
+                # text/plain) und darf die Schranke deshalb nicht umgehen. Ohne Konversion
+                # gibt es keine Vergleichsbasis — gemeldet wird die Ablehnung, nicht eine
+                # Divergenz, die niemand geprüft hat.
+                state.html_rejected = True
+                return False
             converted.append(text)
         html_words = _content_words("\n".join(converted))
         if not html_words:
@@ -450,6 +472,7 @@ class MailSanitizer:
             mixed_script_domains=mixed,
             truncated=state.truncated,
             html_divergent=state.html_divergent,
+            html_rejected=state.html_rejected,
             blocked_attachments=sum(1 for info in attachments if not info.processed),
             reply_to_mismatch=_reply_to_mismatch(raw),
             return_path_mismatch=_return_path_mismatch(raw),

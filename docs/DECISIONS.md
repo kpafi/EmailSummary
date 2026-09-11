@@ -385,6 +385,23 @@
   markiert und sonst zu U+FFFD macht) über einen UTF-8-Versuch mit Latin-1-Auffang. Punkt
   (e) bleibt bindend — bei kaputter Kodierung gilt der Rohwert, geworfen wird nie. Der
   Sanitizer ist unverändert; er sieht jetzt nur endlich den echten Namen.
+- **Nachtrag (Nachfixrunde NF-1, 2026-09-11, HC2-2):** Der HC-23-Nachtrag hat die
+  Reihenfolge falsch herum gebaut: dekodiert wurde der **ganze** Headerwert, erst danach
+  liefen `getaddresses`/`parseaddr` darüber. Ein kodierter Anzeigename
+  (`=?utf-8?B?<'Bank <info@bank.example>,'>?=`) schleust damit eine zweite Adresse in die
+  Adressliste; sie steht als erste und bestimmt `from_domain`. Der Nutzer sah `bank.example`
+  für eine Mail von `attacker@evil.example`, und `reply_to_mismatch`/`return_path_mismatch`
+  verstummten gleichzeitig. Verbindlich ist ab jetzt: **Adresse zuerst, Name danach.**
+  `_address_header` liest Adresse und Namensteil mit `getaddresses` aus dem **rohen**
+  Headerwert, dekodiert ausschliesslich den Namen, befreit ihn von `<`, `>`, `,`, `;`, `:`,
+  `"`, `\` und setzt `from_addr` als `Name <adresse>` neu zusammen — in einer Form, die
+  `parseaddr` nachweislich wieder in genau diese zwei Teile zerlegt (Selbstprüfung im Code,
+  sonst quotiert, sonst bleibt die nackte Adresse). `from_domain` kommt aus der roh
+  geparsten Adresse, nicht mehr aus `from_addr`. Roh-8-bittige Bytes werden weiterhin
+  dekodiert, aber **vor** dem Adress-Parsen und nur, wenn der Header keine echten kodierten
+  Wörter trägt: Bytes ≥ 0x80 können keine Adressgrenze erzeugen, RFC-2047-Wörter schon.
+  Trägt der Name keine Kodierung, bleibt der Rohwert unverändert — es gibt dann nichts zu
+  reparieren. Punkt (e) bleibt bindend: geworfen wird nie.
 
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
@@ -2377,3 +2394,67 @@ ihre *Erkennung* zu eng.
   - Zahlformate bleiben, wie sie sind: Größen mit Dezimalkomma (`1,2 MB`) und Datum als
     `TT.MM. HH:MM`. Das sind Formate, keine Literale; sie sind in SPEC-CLI §6 als solche
     festgehalten. Eine Umstellung wäre eine eigene Entscheidung mit eigener Cold-Runde.
+
+## ADR-084: Schranken für die HTML-Konvertierung (Elementzahl und Schachtelungstiefe)
+- Status: accepted
+- WP / Datum: Nachfixrunde NF-1, 2026-09-11 (HC2-1)
+- Kontext: `html_to_text` hatte als einzige teure Stufe **kein** Limit — anders als die
+  PDF-Extraktion (I7/ADR-029: Subprozess, Timeout, `RLIMIT_AS`, Output-Kürzung). Zwei
+  Dinge kamen zusammen. (1) Die drei `element.decomposed`-Prüfungen liefen über
+  `Tag.__getattr__`: `_decomposed` existiert auf einem lebenden Tag nicht, also suchte bs4
+  den Namen als **Tag** im ganzen Teilbaum ab — quadratisch in der Schachtelungstiefe
+  (gemessen: 0,47 s / 1,77 s / 28,6 s für 2000 / 4000 / 16 000 Ebenen). (2) Auch ohne
+  diesen Fehler gab es keine Obergrenze: `max_mail_bytes` sind 25 MB, `max_text_chars`
+  greift erst **nach** der Konvertierung, und lxml begrenzt die Tiefe nicht. Der Runner ist
+  einthreadig; eine 68-KB-Mail hielt den Dienst 5,12 s an, ein 1-MB-HTML-Teil rechnerisch
+  Minuten — die 10-Sekunden-Zusage aus SPEC-CLI §5/ADR-080 war ab ~50 KB Angriffs-HTML
+  gebrochen (T10).
+- Entscheidung: Zwei Ebenen, beide klein.
+  1. **Ursache weg:** Die drei Prüfungen lauten `element.parent is None`. `decompose()` ruft
+     intern `extract()`, das `parent` auf `None` setzt; Nachfahren eines entfernten Elements
+     haben ein geleertes `__dict__` und liefern ebenfalls `None`. Ein Element aus `find_all`
+     hat sonst immer einen Elternknoten — die Prüfung ist bedeutungsgleich und O(1). Bewusst
+     nicht `element.__dict__.get("_decomposed", False)`: Das hinge an einem privaten
+     bs4-Attribut, `parent` ist öffentlicher Vertrag. Bewusst auch kein `set()` von `id()`s:
+     Das bräuchte eine eigene Lebensdauer-Buchführung (ids werden nach dem Freigeben neu
+     vergeben), um dasselbe auszudrücken.
+  2. **Schranke davor:** Ein HTML-Teil mit mehr als `[limits] max_html_elements` Elementen
+     (Default 50 000) oder mehr als `html_to_text.MAX_HTML_DEPTH` Ebenen (2000) gilt als
+     **nicht verarbeitet**. Gezählt wird in einem iterativen Durchlauf direkt nach dem
+     Parsen — vor Hidden-Heuristik und `get_text`, mit Abbruch beim Überschreiten; die Tiefe
+     wird beim Absteigen mitgeführt (über `parents` wäre sie selbst wieder quadratisch).
+  Die Elementzahl ist ein Config-Feld wie die PDF-Limits (Betriebsgrösse, je nach Postfach
+  unterschiedlich), die Tiefe eine Modulkonstante (Struktur-Plausibilität; echtes Mail-HTML
+  bleibt um Grössenordnungen darunter).
+- Verhalten bei Überschreitung: `html_to_text` wirft `HtmlTooComplexError`; der Sanitizer
+  verwirft **nur diesen Teil** und setzt `html_rejected` im Report, die Nachricht trägt die
+  Hinweiszeile `HTML part too complex, not converted`. Kein Fail-closed für die ganze Mail:
+  Ein vorhandener `text/plain`-Teil wird normal zugestellt, der Nutzer erfährt nur, dass ein
+  Teil ungelesen blieb. Kein rohes HTML verlässt die Stufe (I1). Der Divergenzcheck
+  (ADR-067, `_html_diverges`) benutzt **dieselbe** Schranke — er ist der praktisch
+  wichtigere Einstieg, weil er auch Mails *mit* harmlosem Klartext-Teil trifft; er meldet in
+  diesem Fall keine Divergenz (ungeprüft ist nicht abweichend), sondern die Ablehnung.
+- Alternativen:
+  - **Subprozess wie bei der PDF-Extraktion (ADR-029):** verworfen. Der Preis wäre ein
+    Prozessstart je HTML-Teil auf dem häufigsten aller Pfade (fast jede Mail hat HTML), plus
+    ein zweiter Serialisierungsweg für den Text. Die PDF-Extraktion sitzt in einem
+    Subprozess wegen des **Parsers** (`pdfminer.six` auf angreiferkontrollierten Binärdaten,
+    Speicherexplosion); hier ist die Gefahr allein die Baumgrösse, und die lässt sich vor
+    der Arbeit abzählen. Die billigere Massnahme, die dasselbe leistet, gewinnt.
+  - **Timeout (Wanduhr, Thread oder Signal):** verworfen. Ein Timeout ist nicht
+    deterministisch — dieselbe Mail liefe auf einer schnellen Maschine durch und auf einer
+    langsamen nicht, Tests wären Zeitwürfel. Ein `signal.alarm` funktioniert nur im
+    Hauptthread (der Runner bedient daneben den Befehlskanal), und ein Watchdog-Thread kann
+    eine laufende C-Erweiterung nicht unterbrechen. Eine Schranke auf einer *abzählbaren*
+    Eigenschaft ist reproduzierbar und im Bericht erklärbar.
+  - **Nur die Ursache beheben, keine Schranke:** verworfen. Linear ist nicht gratis: 25 MB
+    HTML bleiben 25 MB Arbeit, und der nächste quadratische Fehler in einer Fremdbibliothek
+    hätte wieder freie Bahn. SECURITY §2 T10 verlangt „Größenlimits auf jeder Stufe".
+  - **`max_text_chars` vorziehen:** verworfen — das Zeichenbudget kennt nur das Ergebnis,
+    und genau das gibt es bei einer Zeitbombe nie.
+- Konsequenzen: `[limits] max_html_elements` steht in SPEC-CLI §5, in der `init`-Vorlage und
+  in SECURITY §4; `html_rejected` ist Teil des `SanitizationReport` und damit auch eine
+  deterministische Tatsache für den Kritiker. Eine sehr grosse, legitime HTML-Mail (über
+  50 000 Elemente) verliert ihren HTML-Teil — sichtbar, nicht still. Kein Dauer-DoS: `claim`
+  reserviert den Dedupe-Key vor der Verarbeitung (ADR-019) und committet sofort, ein
+  Prozessabbruch mitten in der Sanitize-Stufe kostet höchstens diesen einen Zyklus.

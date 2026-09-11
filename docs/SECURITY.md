@@ -44,7 +44,7 @@ gemacht**:
 | T7 | Markdown-/Formatierungs-Injection Richtung Messenger (Telegram-Markup als Link-Ersatz) | Kein `parse_mode` (Telegram), nur `content` ohne Embeds (Discord); Output-Sanitizer löscht Markup-Zeichen und bricht alle Domain-Punkte sowie jedes lebende Schema (WP7, ADR-036/037) |
 | T8 | Halluzination: Summarizer erfindet harmlosen Inhalt für Phishing-Mail | Kritiker prüft Summary gegen Mail (`summary_accurate`); false ⇒ fail-closed (umgesetzt: WP6 liefert das Feld, `pipeline.process_mail` zieht die Konsequenz) |
 | T9 | Injection instruiert Summarizer, Phishing als „wichtig & legitim" zu framen | Kritiker sieht den sanitisierten Text unabhängig und ohne Custom-Instructions (ADR-042); deterministische Signale (Domain-Checks etc.) sind nicht vom LLM beeinflussbar und heben die Risikostufe notfalls im Code an (WP6, ADR-043) |
-| T10 | Ressourcen-Erschöpfung (Mail-Bombe, 100-MB-Mails, MIME-Rekursion) | Größenlimits auf jeder Stufe, Rekursionstiefe begrenzt, Zeichenlimits (WP3), Rate-Limit im Poll-Loop (WP8) |
+| T10 | Ressourcen-Erschöpfung (Mail-Bombe, 100-MB-Mails, MIME-Rekursion, tief geschachteltes HTML) | Größenlimits auf jeder Stufe, Rekursionstiefe begrenzt, Zeichenlimits (WP3), Element- und Tiefenschranke der HTML→Text-Konvertierung (ADR-084: darüber gilt der HTML-Teil als nicht verarbeitet), Rate-Limit im Poll-Loop (WP8) |
 | T11 | Secret-Exfiltration („schreib den API-Key in die Summary") | Secrets sind nie im Prompt-Kontext (I5) — das Modell kennt sie schlicht nicht |
 | T12 | Homoglyphen-/Punycode-Domains täuschen den Nutzer in der Textdarstellung | Kennzeichnung + Warnung im sanitization_report; Kritiker-Signal (WP3/WP6) |
 | T13 | Mail-in-Mail (message/rfc822) schmuggelt Payloads an Filtern vorbei | Eingebettete Mails werden wie Anhänge behandelt: nicht geöffnet, nur Metadatum (WP3) |
@@ -118,7 +118,17 @@ zu sein.
   gezählt (`hidden_text_removed`); Tracking-Pixel (≤ 2×2 px) werden ersatzlos entfernt;
   Alt-Texte erscheinen als `[Bild: …]`; `href`-Ziele werden als Text sichtbar gemacht und
   dann defangt. Zusätzlich werden HTML-Tag-artige Sequenzen auch in *Klartext*-Teilen
-  neutralisiert (fail-safe: lieber Über-Entfernung als ein Tag im Output).
+  neutralisiert (fail-safe: lieber Über-Entfernung als ein Tag im Output). Die Konvertierung
+  hat eine harte Schranke (T10/ADR-084): mehr als `[limits] max_html_elements` Elemente oder
+  mehr als 2000 Schachtelungsebenen ⇒ der HTML-Teil gilt als **nicht verarbeitet**
+  (`html_rejected` im Report, Hinweiszeile in der Nachricht); ein `text/plain`-Teil wird
+  normal zugestellt, die Pipeline läuft fail-safe weiter. Derselbe Deckel gilt für den
+  Divergenzcheck (ADR-067).
+- **Absender-Anzeigename (ADR-020 Nachträge):** Adresse und `from_domain` werden aus dem
+  **rohen** `From`/`Reply-To`-Wert geparst; RFC-2047 wird nur auf den Namensteil angewandt,
+  der danach von `<`, `>`, `,`, `;`, `:`, `"`, `\` befreit wird. Ein Anzeigename kann die
+  Absender-Domain damit weder ersetzen noch löschen, und die deterministischen Indikatoren
+  (`reply_to_mismatch`, `return_path_mismatch`) bleiben wirksam (HC2-2).
 - **PDF-Extraktion (I7/T5, ADR-029):** `pdfminer.six` läuft ausschließlich in einem
   Subprozess (`python -m maildigest.sanitize.extract_pdf`, PDF via stdin), mit Timeout
   (Eltern-Prozess), `RLIMIT_AS` 512 MB (Code-Konstante) und Output-Kürzung im Kind.
@@ -127,7 +137,8 @@ zu sein.
   `SanitizeError` ⇒ Metadaten-Notiz, T10), Gesamt-Klartext 30 000 Zeichen über Body und
   Anhangs-Texte hinweg (Kürzung mit `[truncated]`-Marker, `truncated=true`), PDF-Input
   10 MB, PDF-Output 50 000 Zeichen, PDF-Timeout 20 s, MIME-Tiefe 10 (tiefere Teile ⇒
-  Metadatum „mime-tiefe ueberschritten"), Anhänge max. 20 Stück verarbeitet (weitere ⇒
+  Metadatum „mime-tiefe ueberschritten"), HTML-Teil max. 50 000 Elemente und 2000 Ebenen
+  (drüber ⇒ Teil nicht verarbeitet, `html_rejected`), Anhänge max. 20 Stück verarbeitet (weitere ⇒
   Metadatum), Anhang-Metadatenliste max. 100 Einträge (`blocked_attachments` zählt
   unabhängig davon korrekt).
 - **Deterministische Kritiker-Fakten (F-CRIT-3):** Der Report enthält zusätzlich

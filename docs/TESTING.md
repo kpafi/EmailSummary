@@ -564,3 +564,40 @@ Der Haken **„Zweite Cold-Runde mit frischem Agenten"** bleibt offen — er lä
 Fixrunde ([docs/PLAN-FIXRUNDE.md](PLAN-FIXRUNDE.md)). Seine Voraussetzung ist seit HC-14
 erfüllt: Die Spec beschreibt wieder wörtlich, was das Programm ausgibt, und ein Vertragstest
 hält das fest. Bis die Runde stattgefunden hat, bleibt NF-8 `in-progress`.
+
+### Nachfixrunde NF-1 (HC2-1, HC2-2)
+
+Die zweite Testrunde (**`docs/TESTRUNDE-2.md`**, 45 Befunde) und die Abschlussprüfung
+(**`docs/ABNAHME-FIXRUNDE.md`**) sind Protokoll und werden nicht geändert. §8 der
+Abschlussprüfung macht zwei Befunde zur **Auflage vor dem Release**; sie sind hier
+nachgezogen. Die übrigen Pakete NF-2 … NF-7 aus jener Restliste sind offen.
+
+| Befund | Severity | Status | Tests | ADR |
+|--------|----------|--------|-------|-----|
+| HC2-1 `html_to_text` skaliert quadratisch mit der Schachtelungstiefe; keine Schranke | high | **gefixt** | `test_sanitize_html.py::TestHc21Schranken` (5), `test_sanitize_mail.py::TestHc21SchrankenDerHtmlKonvertierung` (6), `test_output_composer.py::test_hc2_1_*` (2), `test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos` | **ADR-084**, ADR-067/029/019 (N-frei: nur zitiert) |
+| HC2-2 RFC-2047-Dekodierung vor dem Adress-Parsen (Regression aus HC-23) | medium (blockierend) | **gefixt** | `test_ingest_rawmail.py::test_hc2_2_*` (7) | ADR-020 (N) |
+
+„(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11**. Fett gesetzte ADRs sind neu.
+
+**Was die beiden Tests beweisen sollen.** Für HC2-1 ist die Aussage des Befunds eine
+Zeitaussage, also misst der Regressionstest die Wanduhr: 16 000 Ebenen vor dem Fix 28,6 s,
+danach < 1 s (`test_hc2_1_deep_nesting_is_linear`; vor dem Fix gesehen und gemessen). Weil
+ein Zeittest allein auch durch einen früheren Abbruch grün werden kann, prüft
+`test_hc2_1_konversion_bleibt_linear` die Kennlinie **ohne** Schranke (vierfache Tiefe,
+höchstens achtfache Zeit — quadratisch wäre sechzehnfach). Für HC2-2 ist das Orakel die
+Adresse im **Rohheader**, unabhängig vom Produktionscode ermittelt (kodierte Wörter
+entfernen, dann die Adresse lesen) — nicht `build_raw_mail` selbst. Fünf der sieben
+HC2-2-Tests schlagen auf dem Stand vor dem Fix fehl, die beiden Kontrollfälle
+(unkodierte Mail, HC-23-Fall) bleiben grün.
+
+**Offene Frage aus HC2-1 beantwortet.** „Greift der Runner eine solche Mail nach einem
+Neustart erneut auf (Dauer-DoS)?" — Nein. `poll_once` reserviert den Dedupe-Key mit
+`StateDB.claim` **vor** der Verarbeitung (ADR-019), und `claim` committet sofort
+(`with self._conn` um das `INSERT OR IGNORE`). Ein harter Abbruch mitten in der
+Sanitize-Stufe hinterlässt die Zeile mit Status `pending`; der nächste Prozess bekommt für
+dieselbe Mail `ClaimResult.DUPLICATE` und überspringt sie. Eine Angriffsmail kostet also
+höchstens **einen** Zyklus. Belegt durch
+`test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos`. Ein
+`failed`-Status vor der Sanitize-Stufe ist damit nicht nötig.
+
+**Testzahl nach NF-1:** 1586 (von 1565), Laufzeit unverändert rund 110 s.

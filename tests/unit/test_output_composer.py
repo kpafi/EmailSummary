@@ -609,3 +609,24 @@ def test_hc10_ohne_kollision_keine_hinweiszeile() -> None:
     """Gegenprobe: Der Normalfall trägt den Hinweis nicht."""
     text = compose_text(DigestComposer(), make_mail(), make_summary(), make_verdict())
     assert "collides" not in text
+
+
+# --- HC2-1: abgelehnter HTML-Teil ----------------------------------------------------
+
+
+def test_hc2_1_hint_line_nennt_den_nicht_konvertierten_html_teil() -> None:
+    """ADR-084: Ein zu komplexer HTML-Teil wird nicht still weggelassen.
+
+    Ohne diese Zeile hielte der Nutzer eine Zusammenfassung ohne den (nicht gelesenen)
+    HTML-Teil für vollständig.
+    """
+    mail = make_mail(sanitization_report=SanitizationReport(html_rejected=True))
+    text = compose_text(DigestComposer(), mail, make_summary(), make_verdict())
+    hints = next(line for line in text.split("\n") if line.startswith("🔍 Notes:"))
+    assert "HTML part too complex, not converted" in hints
+
+
+def test_hc2_1_ohne_ablehnung_keine_hinweiszeile() -> None:
+    """Gegenprobe: Der Normalfall trägt den Hinweis nicht."""
+    text = compose_text(DigestComposer(), make_mail(), make_summary(), make_verdict())
+    assert "too complex" not in text

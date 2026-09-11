@@ -105,6 +105,10 @@ class SanitizationReport(BaseModel):
     #: ausgewerteten `text/plain`-Teil abweicht (CT-15, ADR-067). Mailprogramme zeigen den
     #: HTML-Teil — die Zusammenfassung beschriebe sonst unbemerkt einen anderen Inhalt.
     html_divergent: bool = False
+    #: Ein `text/html`-Teil überschritt die Element-/Tiefenschranke der Konvertierung und
+    #: gilt als **nicht verarbeitet** (ADR-084, HC2-1). Kein Fail-closed für die Mail: Der
+    #: Klartext-Teil (falls vorhanden) wird normal zugestellt, der HTML-Teil nicht.
+    html_rejected: bool = False
     blocked_attachments: int = Field(default=0, ge=0)
     reply_to_mismatch: bool = False
     return_path_mismatch: bool = False

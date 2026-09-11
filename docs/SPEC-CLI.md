@@ -563,6 +563,7 @@ Alle Felder mit ihren Defaults:
 | `[limits] pdf_timeout_seconds` | ≥ 1 | `20` | Zeitlimit der PDF-Extraktion |
 | `[limits] max_mime_depth` | ≥ 1 | `10` | Maximale MIME-Verschachtelung |
 | `[limits] max_attachments_processed` | ≥ 0 | `20` | Inhaltlich verarbeitete Anhänge je Mail |
+| `[limits] max_html_elements` | ≥ 1 | `50000` | Elemente je HTML-Teil; darüber wird der Teil nicht konvertiert (ADR-084) |
 
 **Umgebungsvariablen**
 
@@ -604,7 +605,8 @@ From: <Anzeigename> (<domain>) · <TT.MM. HH:MM>           ← ohne Date-Header:
 📎 Not processed: <datei (größe)>, … [and N more]
 🔍 Notes: <Injection-Verdacht; verschlüsselte Mail; Message-ID-Kollision; Auth-Fehler;
            Punycode; gemischte Schriftsysteme; versteckter Text im HTML entfernt;
-           HTML-Teil weicht vom Textteil ab; Reply-To-/Return-Path-Abweichung;
+           HTML-Teil weicht vom Textteil ab; HTML-Teil zu komplex (nicht konvertiert);
+           Reply-To-/Return-Path-Abweichung;
            Text gekürzt; Kritiker-Gründe bei Risiko low>
 <Link-Fußnote (defanged), eine Adresse je Zeile>          ← nur bei [links] footnote = true
 ```
@@ -614,7 +616,8 @@ Reihenfolge: `the mail contained instructions aimed at the AI (ignored)`,
 `encrypted (PGP/S-MIME) — content not readable by design`,
 `Message-ID collides with an earlier mail`, `sender checks failed: <SPF=…, DKIM=…>`,
 `punycode domain(s): <…>`, `mixed writing systems: <…>`,
-`HTML part differs from the text part`, `hidden text removed from the HTML`,
+`HTML part differs from the text part`, `HTML part too complex, not converted`,
+`hidden text removed from the HTML`,
 `reply address differs from the sender`, `return-path domain differs`, `text truncated`,
 `critic: <Gründe>`. Fehlt jeder Hinweis, entfällt die Zeile.
 

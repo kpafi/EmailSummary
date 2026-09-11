@@ -204,6 +204,9 @@ class LimitsConfig(_Section):
     pdf_max_output_chars: int = Field(default=50_000, ge=1)
     pdf_timeout_seconds: int = Field(default=20, ge=1)
     max_mime_depth: int = Field(default=10, ge=1)
+    #: Elementzahl eines HTML-Teils, ab der er als nicht verarbeitbar gilt (ADR-084, HC2-1).
+    #: Die Tiefengrenze dazu ist eine Modulkonstante (`html_to_text.MAX_HTML_DEPTH`).
+    max_html_elements: int = Field(default=50_000, ge=1)
     max_attachments_processed: int = Field(default=20, ge=0)
 
 

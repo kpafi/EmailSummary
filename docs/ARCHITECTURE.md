@@ -62,9 +62,16 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   Header; erst das zweite Merkmal unterscheidet „dieselbe Mail nochmal" von „fremde Mail
   unter gleichem Namen". Zeilen ohne Wert (Datenbank vor Schema-Version 3) gelten als
   „Inhalt unbekannt" und lösen nie eine Kollision aus.
-- **Anzeigenamen (ADR-020 Nachtrag, HC-23):** `From` und `Reply-To` werden wie der Betreff
-  RFC-2047-dekodiert, bevor sie in `RawMail` landen; roh-8-bittige Namen werden als UTF-8
-  (Auffang Latin-1) gelesen. Der Sanitizer sieht damit den Namen, nicht seine Kodierung.
+- **Anzeigenamen (ADR-020 Nachträge, HC-23/HC2-2):** `From` und `Reply-To` werden wie der
+  Betreff RFC-2047-dekodiert, bevor sie in `RawMail` landen; roh-8-bittige Namen werden als
+  UTF-8 (Auffang Latin-1) gelesen. Der Sanitizer sieht damit den Namen, nicht seine
+  Kodierung. **Reihenfolge ist dabei sicherheitsrelevant:** Adresse und `from_domain`
+  stammen aus dem mit `getaddresses` geparsten **Rohwert**, dekodiert wird ausschliesslich
+  der Namensteil. Sonst schleust ein kodierter Anzeigename eine zweite Adresse in die
+  Adressliste und bestimmt die angezeigte Absender-Domain (HC2-2). Der dekodierte Name wird
+  von `<`, `>`, `,`, `;`, `:`, `"`, `\` befreit; `from_addr` wird als `Name <adresse>` neu
+  zusammengesetzt, und zwar nur in einer Form, die `parseaddr` wieder in genau diese zwei
+  Teile zerlegt.
 - **Polling-Loop (`IngestService`):** `run_once()` für `run --once`; `run_forever()` mit
   `[imap] poll_interval_seconds` (Default 120 s) und Shutdown über ein `threading.Event`
   (`stop()`). Verbindungsfehler ⇒ Reconnect mit Exponential Backoff 5 s, 10 s, 20 s …
@@ -109,7 +116,7 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
 - **Ablauf je Mail:** Größencheck → `email.message_from_bytes` (compat32, robust gegen
   kaputte Header) → manueller MIME-Walk mit Tiefenlimit (`message/rfc822` wird nie
   betreten, T13) → Body-Aggregation (alle Inline-`text/plain`, sonst alle
-  Inline-`text/html` via `html_to_text`) → pro Text: `unicode_clean.clean_text` →
+  Inline-`text/html` via `html_to_text`, mit Element- und Tiefenschranke, s. u.) → pro Text: `unicode_clean.clean_text` →
   Marker-Neutralisierung (`neutralize_forged_markers`: ein nachgebauter
   `<<<MAILDIGEST-…-UNTRUSTED-…>>>`-Block wird zum Token
   `[forged data-block marker removed]` und in `forged_markers` gezählt — **vor** dem
@@ -126,6 +133,15 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `parseaddr`, fehlendes Reply-To ⇒ False), `return_path_mismatch` (nur bei zwei
   bekannten Domains), `auth_results` (Regex-Parse `spf|dkim|dmarc=wert`, erste Nennung
   gewinnt), Punycode-/Mixed-Script-Kennzeichnung auch für die Absender-Domain.
+- **Schranken der HTML-Konvertierung (ADR-084, HC2-1):** `html_to_text` zählt direkt nach
+  dem Parsen Elemente und Schachtelungstiefe und bricht bei mehr als
+  `[limits] max_html_elements` (Default 50 000) bzw. `html_to_text.MAX_HTML_DEPTH` (2000)
+  mit `HtmlTooComplexError` ab — **vor** Hidden-Heuristik und `get_text`. Der Sanitizer
+  verwirft dann genau diesen Teil, setzt `html_rejected` im Report (Hinweiszeile `HTML part
+  too complex, not converted`) und läuft fail-safe weiter; ein vorhandener
+  `text/plain`-Teil wird normal zugestellt, rohes HTML verlässt die Stufe nie (I1).
+  Derselbe Deckel gilt im Divergenzcheck `_html_diverges` (ADR-067) — er ist der
+  praktisch wichtigere Einstieg, weil er auch bei vorhandenem Klartext-Teil läuft.
 - **Nicht Aufgabe des Sanitizers:** `RawMail.date`/`from_domain` werden unverändert
   übernommen (Vertrauensmodell aus ADR-020); die Nachrichten-Formatierung der
   Anhang-Hinweise („⚠ 2 nicht verarbeitete Anhänge …") ist WP7 (`output/`), auf Basis
@@ -439,8 +455,10 @@ wieder rein additiv und wird beim Öffnen still vollzogen — neue Tabellen legt
 class RawMail(BaseModel, frozen=True):
     message_id: str | None          # Header; None wenn fehlend
     dedupe_key: str                 # message_id oder Fallback-Hash
-    from_addr: str                  # "Anzeigename <adresse>", RFC-2047-dekodiert, sonst roh
-    from_domain: str                # extrahiert, lowercase
+    from_addr: str                  # "Anzeigename <adresse>"; Name RFC-2047-dekodiert und
+                                    # von Struktursymbolen befreit, Adresse aus dem Rohheader
+    from_domain: str                # aus der roh geparsten Adresse, lowercase (nie aus dem
+                                    # Anzeigenamen — HC2-2)
     reply_to: str | None
     return_path_domain: str | None
     to_addrs: list[str]
@@ -671,6 +689,7 @@ pdf_max_output_chars = 50000
 pdf_timeout_seconds = 20
 max_mime_depth = 10
 max_attachments_processed = 20
+max_html_elements = 50000          # Elemente je HTML-Teil (ADR-084)
 ```
 
 **Umsetzungshinweise (WP1, `config.py` — Begründung in ADR-015):**

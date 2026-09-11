@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from maildigest.sanitize.html_to_text import html_to_text
+import time
+
+import pytest
+
+from maildigest.sanitize.html_to_text import (
+    MAX_HTML_DEPTH,
+    HtmlTooComplexError,
+    html_to_text,
+)
 
 
 class TestGrundfunktionen:
@@ -111,3 +119,60 @@ class TestRobustheit:
     def test_entities_werden_dekodiert(self) -> None:
         text, _ = html_to_text("<p>a &amp; b</p>")
         assert text == "a & b"
+
+
+# --- HC2-1: Schranken und Laufzeit (ADR-084) -------------------------------------------
+
+
+class TestHc21Schranken:
+    """Die Konvertierung ist linear und hat harte Schranken (HC2-1, ADR-084, T10)."""
+
+    def test_hc2_1_deep_nesting_is_linear(self) -> None:
+        """16 000 Ebenen in unter einer Sekunde.
+
+        Vor dem Fix lief derselbe Aufruf 28,6 s (gemessen; die drei
+        `element.decomposed`-Prüfungen gingen über `Tag.__getattr__` und suchten
+        `_decomposed` als Tag-Namen im ganzen Teilbaum). Der Test misst bewusst die
+        Wanduhr: Die Aussage des Befunds ist eine Zeitaussage.
+        """
+        html = "<div>" * 16_000 + "x" + "</div>" * 16_000
+        start = time.perf_counter()
+        with pytest.raises(HtmlTooComplexError):
+            html_to_text(html)
+        assert time.perf_counter() - start < 1.0
+
+    def test_hc2_1_konversion_bleibt_linear(self) -> None:
+        """Ohne Schranke gemessen: die vierfache Tiefe kostet nicht das Sechzehnfache.
+
+        Der Nachweis, dass der Zeitgewinn aus der Ursache kommt und nicht nur aus dem
+        früheren Abbruch. Der Faktor ist grosszügig (8 statt 4), damit der Test auf
+        einer belasteten Maschine nicht flackert; quadratisch wäre er 16.
+        """
+
+        def duration(levels: int) -> float:
+            html = "<div>" * levels + "x" + "</div>" * levels
+            start = time.perf_counter()
+            html_to_text(html, max_elements=10**9)
+            return time.perf_counter() - start
+
+        small = duration(250)
+        large = duration(1_000)
+        assert large < max(small * 8, 0.5)
+
+    def test_hc2_1_element_limit_rejects_part(self) -> None:
+        html = "<p>x</p>" * 200
+        assert html_to_text(html, max_elements=10_000)[0].startswith("x")
+        with pytest.raises(HtmlTooComplexError):
+            html_to_text(html, max_elements=50)
+
+    def test_hc2_1_depth_limit_rejects_part(self) -> None:
+        """Die Tiefengrenze greift auch bei wenigen Elementen."""
+        html = "<div>" * (MAX_HTML_DEPTH + 5) + "x" + "</div>" * (MAX_HTML_DEPTH + 5)
+        with pytest.raises(HtmlTooComplexError):
+            html_to_text(html, max_elements=10**9)
+
+    def test_hc2_1_gewoehnliches_html_bleibt_unberuehrt(self) -> None:
+        """Gegenprobe: echtes Mail-HTML liegt um Grössenordnungen unter den Schranken."""
+        rows = "".join(f"<tr><td>Pos {n}</td><td>{n},00 €</td></tr>" for n in range(200))
+        text, _ = html_to_text(f"<html><body><table>{rows}</table></body></html>")
+        assert "Pos 199" in text

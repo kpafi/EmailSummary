@@ -49,7 +49,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.header import decode_header, make_header
-from email.utils import getaddresses, parsedate_to_datetime
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from types import TracebackType
 from typing import Final, Protocol
 
@@ -238,36 +238,98 @@ def _header(msg: MailMessage, name: str) -> str | None:
     return _collapse(values[0]) or None
 
 
-def _decode_display_value(value: object) -> str:
-    """Dekodiert einen anzeigenamentragenden Headerwert (HC-23).
+def _predecode_eight_bit(value: object) -> str:
+    """Wandelt roh-8-bittige Headerbytes in Zeichen, lässt RFC-2047 unangetastet (HC2-2).
 
-    Zwei Fälle: RFC-2047-kodierte Wörter (``=?utf-8?Q?…?=``) übernimmt `make_header`, das
-    auch die Wortzusammenführung nach RFC 2047 §6.2 richtig macht. Roh-8-bittige Bytes
-    kennt `make_header` nicht — die kommen aus `decode_header` als ``unknown-8bit`` und
-    werden hier selbst dekodiert.
+    Reine Transport-Entzerrung **vor** dem Adress-Parsen: Bytes ≥ 0x80 können in einer
+    Adresse nicht vorkommen, und ihre Dekodierung erzeugt nie ein ASCII-Struktursymbol
+    (`<`, `>`, `,`) — die Adressgrenzen bleiben exakt die des Rohwerts. Anders als die
+    RFC-2047-Dekodierung ist dieser Schritt deshalb harmlos.
+
+    Trägt der Header zugleich echte kodierte Wörter, wird nichts angefasst: `decode_header`
+    liefert deren Inhalt bereits dekodiert, eine Zusammenführung hier würde genau die
+    Reihenfolge herstellen, die HC2-2 ausmacht.
     """
     try:
         parts = decode_header(value)  # type: ignore[arg-type]
     except Exception:  # kaputte Kodierung: Rohwert behalten (ADR-020 (e))
         return str(value)
-    if any(isinstance(text, bytes) and charset == "unknown-8bit" for text, charset in parts):
+    has_eight_bit = any(
+        isinstance(text, bytes) and charset == "unknown-8bit" for text, charset in parts
+    )
+    only_eight_bit = all(charset in (None, "unknown-8bit") for _text, charset in parts)
+    if has_eight_bit and only_eight_bit:
         return "".join(
             _decode_unknown_8bit(text) if isinstance(text, bytes) else text
             for text, _charset in parts
         )
-    return _decode_mime_words(str(value))
+    return str(value)
 
 
-def _display_header(msg: MailMessage, name: str) -> str | None:
-    """Wie :func:`_header`, aber mit Dekodierung des Anzeigenamens (HC-23).
+#: Zeichen, die ein Anzeigename nicht tragen darf, ohne die Adressstruktur zu verändern.
+_DISPLAY_NAME_SPECIALS = str.maketrans(dict.fromkeys('<>,;:"\\', " "))
 
-    Für die Header, die einen Anzeigenamen tragen können (`From`, `Reply-To`). Die Adresse
-    selbst ist immer ASCII; dekodiert wird faktisch nur der Namensteil.
+
+def _clean_display_name(name: str) -> str:
+    """Entfernt aus einem dekodierten Anzeigenamen alles Strukturgebende (HC2-2)."""
+    return " ".join(name.translate(_DISPLAY_NAME_SPECIALS).split())
+
+
+def _first_address(text: str) -> tuple[str, str]:
+    """Erste Angabe eines Adress-Headers als ``(name, adresse)`` (Rohwert-Parse)."""
+    pairs = getaddresses([text])
+    if not pairs:
+        return "", ""
+    for name, address in pairs:
+        local, at_sign, domain = address.rpartition("@")
+        if at_sign and local and domain.strip().strip("<>[]").rstrip("."):
+            return name, address
+    return pairs[0]
+
+
+def _compose_display_address(name: str, address: str) -> str:
+    """Baut ``Name <adresse>`` so, dass `parseaddr` genau diese beiden Teile zurückgibt.
+
+    Der Name kommt aus der RFC-2047-Dekodierung und ist damit angreiferkontrolliert; ohne
+    Selbstprüfung könnte er die Adresse erneut verschieben (HC2-2). Geprüft wird deshalb
+    gegen den Parser selbst: erst unquotiert (das ist die Form, die heutige Tests und der
+    Korpus sehen), sonst quotiert, sonst bleibt nur die nackte Adresse.
+    """
+    if not address:
+        return name
+    if not name:
+        return address
+    plain = f"{name} <{address}>"
+    if parseaddr(plain) == (name, address):
+        return plain
+    quoted = f'"{name}" <{address}>'
+    if parseaddr(quoted) == (name, address):
+        return quoted
+    return address
+
+
+def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
+    """Anzeigenamentragender Header (`From`, `Reply-To`) → ``(anzeigeform, adresse)``.
+
+    Reihenfolge ist hier sicherheitsrelevant (HC2-2, Regression aus HC-23): Zuerst wird die
+    Adresse aus dem **rohen** Headerwert gelesen, erst danach der Namensteil dekodiert. Ein
+    kodierter Anzeigename wie ``=?utf-8?B?<'Bank <info@bank.example>,'>?=`` schleust sonst
+    eine zweite Adresse in die Liste, die als erste steht und die Absender-Domain bestimmt.
+
+    Enthält der Name keine Kodierung, wird der Rohwert unverändert übernommen — es gibt
+    dann nichts zu reparieren, und jede Normalisierung wäre nur eine weitere Fehlerquelle.
     """
     values = _raw_header_values(msg, name)
     if not values:
-        return None
-    return _collapse(_decode_display_value(values[0])) or None
+        return "", ""
+    raw_text = _collapse(_predecode_eight_bit(values[0]))
+    if not raw_text:
+        return "", ""
+    display, address = _first_address(raw_text)
+    decoded = _decode_mime_words(display) if display else ""
+    if decoded == display:
+        return raw_text, address
+    return _compose_display_address(_clean_display_name(decoded), address), address
 
 
 def _domain_of(address: str) -> str:
@@ -374,7 +436,7 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         From + Date + Subject + Body-Präfix.
     """
     message_id = _header(msg, "Message-ID")
-    from_addr = _display_header(msg, "From") or ""
+    from_addr, from_address = _address_header(msg, "From")
     date_str = _header(msg, "Date") or ""
 
     try:
@@ -405,8 +467,9 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         message_id=message_id,
         dedupe_key=dedupe_key,
         from_addr=from_addr,
-        from_domain=_domain_of(from_addr),
-        reply_to=_display_header(msg, "Reply-To"),
+        # HC2-2: aus der **roh** geparsten Adresse, nie aus dem (dekodierten) Anzeigenamen.
+        from_domain=_domain_of(from_address),
+        reply_to=_address_header(msg, "Reply-To")[0] or None,
         return_path_domain=_return_path_domain(return_path),
         to_addrs=to_addrs,
         subject_raw=subject_raw,

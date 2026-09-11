@@ -445,6 +445,12 @@ class DigestComposer:
             # der Klartext-Teil. Ohne diesen Hinweis wäre eine „harmlos"-Meldung zu einem
             # Text möglich, den der Nutzer nie zu Gesicht bekommt (ADR-067).
             hints.append("HTML part differs from the text part")
+        if report.html_rejected:
+            # ADR-084/HC2-1: Der HTML-Teil war zu gross oder zu tief geschachtelt, um ihn
+            # in der Poll-Periode sicher zu konvertieren. Der Nutzer soll wissen, dass
+            # hier bewusst etwas *nicht* gelesen wurde — sonst hält er eine unvollständige
+            # Zusammenfassung für eine vollständige.
+            hints.append("HTML part too complex, not converted")
         if report.hidden_text_removed:
             # Deterministisch, ohne jedes Modell (CT-6): Der Sanitizer *weiß*, dass im HTML
             # unsichtbarer Text stand. Bewusst als eigener Hinweis und nicht über

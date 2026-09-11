@@ -412,6 +412,7 @@ _KEY_ORDER: dict[str, tuple[str, ...]] = {
         "pdf_timeout_seconds",
         "max_mime_depth",
         "max_attachments_processed",
+        "max_html_elements",
     ),
 }
 
@@ -446,6 +447,7 @@ _KEY_COMMENTS: dict[str, str] = {
     "llm.base_url": "only for openai_compatible / local servers",
     "messenger.active": "telegram | discord | signal",
     "messenger.telegram.accept_commands": "accept /digest and /status from your chat",
+    "limits.max_html_elements": "HTML parts above this are not converted",
 }
 
 #: Auskommentierte Platzhalter für Felder ohne Default (Pflichtfelder) und für Secrets.
@@ -781,6 +783,7 @@ def cmd_init(ctx: Context) -> int:
             "pdf_timeout_seconds": 20,
             "max_mime_depth": 10,
             "max_attachments_processed": 20,
+            "max_html_elements": 50000,
         },
     }
     # Die Werte aus den Abfragen müssen das Schema erfüllen, bevor die Datei entsteht.

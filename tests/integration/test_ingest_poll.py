@@ -268,6 +268,35 @@ def test_idempotent_across_process_restart(tmp_path: Path) -> None:
     assert len(processor.seen) == 1
 
 
+def test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos(tmp_path: Path) -> None:
+    """HC2-1 (offene Frage): Greift der Runner eine teure Mail nach einem Absturz erneut auf?
+
+    Nein. `poll_once` reserviert den Dedupe-Key **vor** der Verarbeitung (`claim`, ADR-019),
+    und `claim` committet sofort. Ein harter Abbruch mitten in der Sanitize-Stufe — hier
+    als `BaseException` nachgestellt, die der I6-Handler bewusst nicht fängt — hinterlässt
+    die Zeile in der Datenbank; der nächste Prozess sieht ein Duplikat. Eine einzelne
+    Angriffsmail kostet damit höchstens *einen* Zyklus, nicht jeden folgenden.
+    """
+    path = tmp_path / "state.db"
+    box = FakeMailBox([make_message(make_mail("a"), "1")])
+    attempts: list[str] = []
+
+    def killed(raw: RawMail) -> PipelineResult:
+        attempts.append(raw.dedupe_key)
+        raise KeyboardInterrupt("Prozess wird abgeschossen")
+
+    with StateDB(path) as first, pytest.raises(KeyboardInterrupt):
+        poll_once(make_client(box), first, killed)
+
+    processor = RecordingProcessor()
+    with StateDB(path) as second:
+        stats = poll_once(make_client(box), second, processor)
+
+    assert attempts == ["<a@example.org>"]
+    assert processor.seen == []
+    assert (stats.fetched, stats.duplicates) == (1, 1)
+
+
 def test_mails_without_message_id_dedupe_via_fallback_hash(db: StateDB) -> None:
     raw = make_mail("x").replace(b"Message-ID: <x@example.org>\r\n", b"")
     box = FakeMailBox([make_message(raw, "1")])

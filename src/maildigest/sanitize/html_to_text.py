@@ -6,6 +6,11 @@ Politik: docs/SECURITY.md §4 (T2). Umsetzung in WP3 (Hidden-Text-Heuristik: ADR
 Wichtig für Aufrufer: Das Ergebnis ist noch **nicht** fertig sanitisiert — es muss danach
 durch `unicode_clean.clean_text` (HTML-Entities wie ``&zwnj;`` erzeugen beim Parsen neue
 Zero-Width-Zeichen) und durch `links.LinkCollector.scrub` laufen.
+
+Schranken (ADR-084, HC2-1): Ein HTML-Teil mit mehr als `max_elements` Elementen oder mehr
+als :data:`MAX_HTML_DEPTH` Schachtelungsebenen gilt als **nicht verarbeitbar** —
+:class:`HtmlTooComplexError`. Der Aufrufer behandelt den Teil dann wie einen geblockten
+Anhang (Metadatum statt Inhalt), nie als Fehler der ganzen Mail.
 """
 
 from __future__ import annotations
@@ -15,7 +20,27 @@ import re
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import NavigableString
 
-__all__ = ["html_to_text"]
+__all__ = ["MAX_HTML_DEPTH", "HtmlTooComplexError", "html_to_text"]
+
+#: Harte Obergrenze der Schachtelungstiefe eines HTML-Teils (ADR-084, HC2-1).
+#:
+#: Bewusst eine Modulkonstante und kein Config-Feld: Die Zahl ist keine Betriebsgrösse,
+#: sondern eine Struktur-Plausibilität — echtes Mail-HTML (auch generiertes Tabellen-HTML)
+#: bleibt um Grössenordnungen darunter, und lxml selbst kennt keine Tiefengrenze.
+MAX_HTML_DEPTH = 2_000
+
+#: Default für `max_elements`; der Betrieb setzt `[limits] max_html_elements` (ADR-084).
+DEFAULT_MAX_HTML_ELEMENTS = 50_000
+
+
+class HtmlTooComplexError(Exception):
+    """Der HTML-Teil überschreitet Element- oder Tiefenschranke (ADR-084, T10).
+
+    Kein Fail-closed für die ganze Mail: Der Aufrufer verwirft **nur diesen Teil** und
+    läuft weiter (fail-safe). Der Meldungstext ist ein konstantes Label ohne Mail-Inhalt
+    (I5), wie bei :class:`~maildigest.sanitize.sanitizer.SanitizeError`.
+    """
+
 
 #: Elemente, deren Inhalt nie Text werden darf (Skripte, Styles, eingebettete Objekte …).
 _DROP_TAGS = (
@@ -109,15 +134,50 @@ def _is_tracking_pixel(img: Tag) -> bool:
     return width is not None and height is not None and width <= 2 and height <= 2
 
 
-def html_to_text(html: str) -> tuple[str, int]:
+def _check_complexity(soup: BeautifulSoup, max_elements: int) -> None:
+    """Zählt Elemente und Tiefe in **einem** iterativen Durchlauf und bricht früh ab.
+
+    Läuft absichtlich vor jeder weiteren Arbeit (ADR-084): Parsen ist linear und billig,
+    alles danach (Hidden-Heuristik, `get_text`) skaliert mit der Baumgrösse. Die Tiefe
+    wird beim Absteigen mitgeführt statt je Element über `parents` ermittelt — letzteres
+    wäre selbst wieder quadratisch. Kein Rekursionsabstieg: 2000 Ebenen sprengen den
+    Python-Stack.
+    """
+    stack: list[tuple[Tag, int]] = [(soup, 0)]
+    elements = 0
+    while stack:
+        node, depth = stack.pop()
+        child_depth = depth + 1
+        for child in node.contents:
+            if not isinstance(child, Tag):
+                continue
+            if child_depth > MAX_HTML_DEPTH:
+                raise HtmlTooComplexError("html_zu_tief")
+            elements += 1
+            if elements > max_elements:
+                raise HtmlTooComplexError("html_zu_viele_elemente")
+            stack.append((child, child_depth))
+
+
+def html_to_text(
+    html: str, *, max_elements: int = DEFAULT_MAX_HTML_ELEMENTS
+) -> tuple[str, int]:
     """Konvertiert HTML in Klartext.
+
+    Args:
+        html: Der HTML-Teil (bereits durch `unicode_clean.clean_text` gelaufen).
+        max_elements: Obergrenze der Elementzahl (`[limits] max_html_elements`).
 
     Returns:
         ``(text, hidden_removed)`` — `hidden_removed` ist die Anzahl entfernter
         unsichtbarer Elemente, die nicht-leeren Text enthielten (für den
         `sanitization_report`).
+
+    Raises:
+        HtmlTooComplexError: Element- oder Tiefenschranke überschritten (ADR-084).
     """
     soup = BeautifulSoup(html, "lxml")
+    _check_complexity(soup, max_elements)
     hidden_removed = 0
 
     for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
@@ -127,7 +187,14 @@ def html_to_text(html: str) -> tuple[str, int]:
         tag.decompose()
 
     for element in list(soup.find_all(True)):
-        if not isinstance(element, Tag) or element.decomposed:
+        # `element.parent is None` statt `element.decomposed` (HC2-1): `Tag.decomposed`
+        # liest `_decomposed`, das auf einem *lebenden* Tag nicht existiert — damit greift
+        # `Tag.__getattr__` und sucht den Namen als Tag im ganzen Teilbaum ab (quadratisch,
+        # 28 s bei 16 000 Ebenen). `decompose()` ruft intern `extract()`, das `parent` auf
+        # `None` setzt; Nachfahren eines entfernten Elements haben ein geleertes `__dict__`
+        # und liefern ebenfalls `None`. Ein Element aus `find_all` hat sonst immer einen
+        # Elternknoten — die Prüfung ist bedeutungsgleich und O(1).
+        if not isinstance(element, Tag) or element.parent is None:
             continue
         if _is_hidden(element):
             if element.get_text(strip=True):
@@ -135,7 +202,7 @@ def html_to_text(html: str) -> tuple[str, int]:
             element.decompose()
 
     for img in list(soup.find_all("img")):
-        if not isinstance(img, Tag) or img.decomposed:
+        if not isinstance(img, Tag) or img.parent is None:  # HC2-1: O(1), s. o.
             continue
         if _is_tracking_pixel(img):
             img.decompose()
@@ -147,7 +214,7 @@ def html_to_text(html: str) -> tuple[str, int]:
             img.decompose()
 
     for anchor in list(soup.find_all("a")):
-        if not isinstance(anchor, Tag) or anchor.decomposed:
+        if not isinstance(anchor, Tag) or anchor.parent is None:  # HC2-1: O(1), s. o.
             continue
         href = anchor.get("href")
         if isinstance(href, str):
