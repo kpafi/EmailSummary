@@ -3,6 +3,9 @@ config.toml
 .env
 *.db
 *.sqlite*
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Python
 __pycache__/
