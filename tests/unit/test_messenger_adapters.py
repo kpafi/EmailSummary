@@ -400,3 +400,51 @@ def test_signal_skips_empty_parts_and_repr_is_harmless() -> None:
     adapter.send(message("", "Inhalt"))
     assert len(socket.sent) == 1
     assert "signal.sock" in repr(adapter)
+
+
+# --- HC-30: unbrauchbare `Retry-After`-Werte --------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["nan", "-nan", "inf", "1e400", "-5", "abc"])
+def test_hc30_messenger_retry_after_bleibt_endlich(value: str) -> None:
+    """Ein `Retry-After: nan` darf die Zustellung nicht aus der Taxonomie werfen (HC-30).
+
+    `time.sleep(nan)` wirft `ValueError`; die ist kein `MessengerError` und liefe an der
+    Zustell-Warteschlange vorbei. Unbrauchbare Werte fallen deshalb auf das normale
+    exponentielle Backoff zurück.
+    """
+    responses = [
+        httpx.Response(429, headers={"retry-after": value}, json={"ok": False}),
+        httpx.Response(200, json={"ok": True}),
+    ]
+    sleep = SleepSpy()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    adapter = TelegramMessenger(
+        token=SecretStr(TELEGRAM_TOKEN),
+        chat_id="4711",
+        client=client_for(handler),
+        sleep=sleep,
+    )
+    adapter.send(message("Inhalt"))
+    assert sleep.calls == [1.0]
+
+
+def test_hc30_dauerhaftes_429_mit_nan_bleibt_ein_messenger_error() -> None:
+    """Auch nach dem letzten Versuch bleibt es ein `MessengerError`."""
+    sleep = SleepSpy()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"retry-after": "nan"}, json={"ok": False})
+
+    adapter = TelegramMessenger(
+        token=SecretStr(TELEGRAM_TOKEN),
+        chat_id="4711",
+        client=client_for(handler),
+        sleep=sleep,
+    )
+    with pytest.raises(MessengerError):
+        adapter.send(message("Inhalt"))
+    assert sleep.calls == [1.0, 2.0]

@@ -19,6 +19,7 @@ Politik (identisch zu docs/ARCHITECTURE.md §6 für die LLM-Schicht):
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from typing import Any
@@ -50,7 +51,9 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         seconds = float(raw.strip())
     except ValueError:
         return None
-    if seconds < 0:
+    # Wie in `llm/_http`: `nan`/`inf` überstehen jeden Vergleich und würden erst in
+    # `time.sleep` als `ValueError` auffallen — an `MessengerError` vorbei (HC-30).
+    if not math.isfinite(seconds) or seconds < 0:
         return None
     return min(seconds, _BACKOFF_MAX_SECONDS)
 

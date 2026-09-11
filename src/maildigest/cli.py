@@ -29,6 +29,7 @@ erreicht.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import getpass
 import json
@@ -66,7 +67,13 @@ from maildigest.config import (
     load_config,
     validate_section,
 )
-from maildigest.ingest.imap_client import ImapClient, IngestError, build_raw_mail
+from maildigest.foreign_text import mask_secrets, sanitize_foreign_text
+from maildigest.ingest.imap_client import (
+    ImapAuthError,
+    ImapClient,
+    IngestError,
+    build_raw_mail,
+)
 from maildigest.llm.base import LLMError
 from maildigest.llm.factory import build_provider_from_settings
 from maildigest.logging_setup import configure_logging
@@ -119,6 +126,10 @@ _PLAINTEXT_IMAP_PORT = 143
 
 #: Zeichen, die ein vom Server gelieferter Ordnername auf dem Terminal haben darf.
 _SAFE_NAME_RE = re.compile(r"[^0-9A-Za-zÄÖÜäöüß _./-]")
+
+#: Deckel für eine Fehlerzeile auf `stderr`. Großzügig: Die längsten eigenen Meldungen
+#: (Anbieter-Hinweise beim Einrichten) sind mehrzeilig und sollen vollständig erscheinen.
+_ERROR_TEXT_MAX_CHARS = 4000
 
 #: Text der Testnachricht (`connect-messenger`). Bewusst ohne Punkte, Domains und Markup —
 #: der Nachbrenner des Output-Sanitizers würde sie sonst sichtbar entschärfen.
@@ -347,6 +358,18 @@ def _safe_name(value: str, *, max_chars: int = 80) -> str:
     """Reduziert einen vom Server gelieferten Namen auf eine Zeichen-Allowlist (ADR-055)."""
     cleaned = _SAFE_NAME_RE.sub("·", value.replace("\n", " ").replace("\r", " ")).strip()
     return cleaned[:max_chars] if cleaned else "(namenlos)"
+
+
+def _terminal_text(text: str) -> str:
+    """Letzter Filter vor `stderr`: Allowlist über die fertige Fehlermeldung (HC-4).
+
+    Die Meldung ist zusammengesetzt — eigener Rahmen plus oft ein Textstück einer
+    Gegenstelle (Anbieterfehler, Serverantwort). Statt jeden künftigen Pfad einzeln zu
+    härten, läuft die ganze Zeile durch dieselbe Zeichen-Allowlist wie Ordnernamen
+    (ADR-055). Eigene Zeilenumbrüche bleiben erhalten, weil mehrere Meldungen bewusst
+    mehrzeilig sind.
+    """
+    return sanitize_foreign_text(text, max_chars=_ERROR_TEXT_MAX_CHARS, keep_newlines=True)
 
 
 # --- Konfigurationsdatei -------------------------------------------------------------------
@@ -579,31 +602,51 @@ class ConfigFile:
         return cursor
 
     def save(self) -> None:
-        """Schreibt die Datei mit Dateirechten `0600` (I5, F-SEC-8).
+        """Schreibt die Datei atomar mit Dateirechten `0600` (I5, F-SEC-8, ADR-081).
 
         Der gerenderte Text wird vorher selbst geparst — eine unlesbare Datei würde jedes
         weitere Kommando blockieren.
+
+        Geschrieben wird in eine temporäre Datei **im Zielverzeichnis** (damit `os.replace`
+        nicht über eine Dateisystemgrenze muss), erst danach wird umbenannt. Ein Abbruch
+        mitten im Schreiben (volle Platte, Quota, `RLIMIT_FSIZE`, EIO, SIGKILL) lässt die
+        bisherige Konfiguration damit unverändert stehen; ohne das Verfahren blieb eine
+        halb geschriebene Datei zurück, in der Zugangsdaten fehlten (HC-20).
         """
         text = render_toml(self.data)
         try:
             tomllib.loads(text)
         except tomllib.TOMLDecodeError as exc:  # pragma: no cover - Schutz gegen Regression
             raise CliError(f"Internal error while writing the configuration: {exc}") from exc
+        temporary: Path | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+            # `O_EXCL`: Eine bereits existierende Temp-Datei (Symlink eines anderen
+            # Nutzers im selben Verzeichnis, Rest eines abgestürzten Laufs) wird nicht
+            # beschrieben, sondern führt zum Fehler.
             descriptor = os.open(
-                self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
             )
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 handle.write(text)
-            # `O_CREAT` wirkt nur bei neuen Dateien — eine bestehende bekommt hier ihre
-            # Rechte, falls sie zu offen war.
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+            temporary = None
+            # `os.replace` übernimmt die Rechte der Temp-Datei (0600). Der `chmod` bleibt
+            # als Absicherung — er kostet nichts und deckt exotische Dateisysteme ab.
             os.chmod(self.path, 0o600)
         except OSError as exc:
             raise CliError(
                 f"Configuration file {self.path} cannot be written: "
                 f"{exc.strerror}."
             ) from exc
+        finally:
+            if temporary is not None:
+                # Der Schreibvorgang ist gescheitert: kein halber Rest im Verzeichnis.
+                with contextlib.suppress(OSError):  # z. B. nie angelegt
+                    temporary.unlink()
 
 
 def _set_or_clear(section: dict[str, Any], key: str, value: str) -> None:
@@ -963,9 +1006,19 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
         client = ctx.hooks.imap_client(section)
         client.connect()
     except IngestError as exc:
-        hint = providers.auth_failure_hint(section.host)
+        # Der anbieterspezifische Hinweis („App-Passwort nötig") gehört nur an einen
+        # Anmeldefehler. Bei einem abgelehnten oder unerreichbaren Port führt er in die
+        # Irre — dort ist nicht das Passwort das Problem, sondern Host, Port oder Netz
+        # (HC-32).
+        if isinstance(exc, ImapAuthError):
+            advice = providers.auth_failure_hint(section.host)
+        else:
+            advice = (
+                "The server could not be reached at all — no login was attempted. Check "
+                "host, port (IMAPS is usually 993) and your network connection."
+            )
         raise CliError(
-            f"{exc}\n\n{hint}\n\nWith --no-test the values can also be saved without "
+            f"{exc}\n\n{advice}\n\nWith --no-test the values can also be saved without "
             "testing them.",
             EXIT_ERROR,
         ) from exc
@@ -991,12 +1044,16 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
             f'The configured folder "{section.folder}" does not exist on the server.'
         )
         if not console.interactive:
-            console.err(
-                "Keeping it unchanged — pick one of the folders listed above with "
-                "--folder, otherwise the next run will fail."
-            )
+            # Erst die Liste, dann die Meldung: Sie verwies auf eine Liste „above", die
+            # noch gar nicht gedruckt war — und sie steht auf stderr, die Liste auf
+            # stdout, wo die Reihenfolge beim Umleiten ohnehin nicht verlässlich ist.
+            # Deshalb nennt die Meldung die Liste ohne Ortsangabe (HC-32).
             for number, name in enumerate(folders, start=1):
                 console.out(f"  {number:>2}) {_safe_name(name)}")
+            console.err(
+                "Keeping it unchanged — pick one of the folders listed on stdout with "
+                "--folder, otherwise the next run will fail."
+            )
             return section.folder
 
     names = [_safe_name(name) for name in folders]
@@ -1128,6 +1185,15 @@ def cmd_connect_llm(ctx: Context) -> int:
     return EXIT_OK
 
 
+def _known_secrets(section: LlmConfig) -> list[str]:
+    """Die Secrets, die bei einem LLM-Testaufruf im Spiel sind (Config **und** Umgebung)."""
+    values = [os.environ.get(ENV_LLM_API_KEY, "")]
+    key = section.api_key
+    if key is not None:
+        values.append(key.get_secret_value())
+    return [value for value in values if value]
+
+
 def _test_llm(ctx: Context, section: LlmConfig) -> None:
     """Schickt einen minimalen Testaufruf an den Provider.
 
@@ -1163,8 +1229,12 @@ def _test_llm(ctx: Context, section: LlmConfig) -> None:
     except ConfigError as exc:
         raise CliError(str(exc), EXIT_ERROR) from exc
     except LLMError as exc:
+        # Der Anbietertext ist bereits zeichengefiltert (`llm/_http._foreign`). Hier kommt
+        # die zweite Zusage dazu: Zitiert die Gegenstelle den gesendeten Schlüssel, steht
+        # er nicht auf dem Terminal (I5, SPEC-CLI §2).
+        detail = mask_secrets(str(exc), _known_secrets(section))
         raise CliError(
-            f"Test call failed ({type(exc).__name__}): {exc}\n"
+            f"Test call failed ({type(exc).__name__}): {detail}\n"
             "Check the model name, API key and base URL.",
             EXIT_ERROR,
         ) from exc
@@ -1917,15 +1987,16 @@ def main(
             context.hooks.configure_logging("WARNING", stream=streams_err)
         return command(context)
     except CliError as exc:
-        streams_err.write(f"Error: {exc}\n")
+        streams_err.write(f"Error: {_terminal_text(str(exc))}\n")
         return exc.code
     except KeyboardInterrupt:
         streams_err.write("Abgebrochen.\n")
         return EXIT_ERROR
     except (ConfigError, StateError, IngestError, MessengerError, LLMError) as exc:
         # Sicherheitsnetz: Eine hier durchgerutschte Ausnahme darf keinen Traceback mit
-        # möglichen Inhalten auf das Terminal schreiben (I5).
-        streams_err.write(f"Error: {exc}\n")
+        # möglichen Inhalten auf das Terminal schreiben (I5) — und keine Steuersequenz
+        # einer Gegenstelle, die sich in den Text gerettet hat (HC-4).
+        streams_err.write(f"Error: {_terminal_text(str(exc))}\n")
         return EXIT_ERROR
     except httpx.HTTPError as exc:
         streams_err.write(f"Error: network problem ({type(exc).__name__}).\n")

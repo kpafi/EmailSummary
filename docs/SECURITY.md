@@ -85,6 +85,14 @@ zu sein.
   Stego), `message/rfc822` (T13: wird **nie** betreten, auch nicht rekursiv),
   `.html`-Anhänge (Smuggling), alles Unbekannte. Erfasst werden sanitisierter Dateiname
   (ASCII-Allowlist, Pfadanteile entfernt, max. 80 Zeichen), deklarierter MIME-Typ, Größe.
+- **Verschlüsselte Mail (PGP/S-MIME, ADR-082):** `multipart/encrypted`,
+  `application/pgp-encrypted`, `application/pkcs7-mime` und `application/x-pkcs7-mime`
+  werden **erkannt und benannt**, nicht entschlüsselt. Sicherheitlich folgt daraus nichts
+  Neues: Der Chiffretext steht nicht auf der Allowlist und ist damit ohnehin nur
+  Metadatum — kein Modell sieht ihn. Das Flag `SanitizationReport.encrypted` dient
+  ausschließlich der Erklärung gegenüber dem Nutzer (Hinweiszeile) und dem Kritiker
+  (weiches Signal, kein Risiko-Aufschlag). Kein Fail-closed: Bei verschlüsselter Mail ist
+  nichts schiefgegangen, es ist nur nichts zu lesen.
 - **Link-Behandlung (I3/T3, ADR-028):** Ersetzen im Text durch `[Link #n: domain.tld]`
   (`mailto:` ⇒ `[Mail #n: domain]`, `tel:` ⇒ `[Tel #n]`); die defangte Vollliste steht
   immer in `links_found` (`hxxps[:]//evil[.]com/…`, max. 100 Einträge à 300 Zeichen) und
@@ -299,9 +307,33 @@ prüft.
   liegt eine Variable vor, wird der Wert gar nicht erst in die Datei geschrieben (ADR-056).
   Die einzige Secret-Option ist `--webhook-url` (Discord hat keine Env-Variable im Schema).
   Fremddaten, die bei der Einrichtung anfallen — IMAP-Ordnernamen, Telegram-Chats aus
-  `getUpdates`, die Antwort des Testaufrufs — erreichen das Terminal nur gefiltert
-  (Zeichen-Allowlist), nur als numerische ID plus Chat-Typ aus fester Werteliste bzw. gar
-  nicht (ADR-055); ein Terminal interpretiert sonst Steuersequenzen aus fremder Hand.
+  `getUpdates`, die Antwort des Testaufrufs, der **Fehlertext des Modell-Anbieters** —
+  erreichen das Terminal nur gefiltert (Zeichen-Allowlist), nur als numerische ID plus
+  Chat-Typ aus fester Werteliste bzw. gar nicht (ADR-055); ein Terminal interpretiert
+  sonst Steuersequenzen aus fremder Hand.
+- **Terminal-Filter als letzte Schicht (HC-4, ADR-055 Nachtrag).** Die Allowlist sitzt
+  nicht nur an den bekannten Einzelstellen (`cli._safe_name`, `llm/_http._foreign`),
+  sondern zusätzlich an der **Ausgabestelle** in `cli.main`: Jede Fehlerzeile auf stderr
+  läuft durch `foreign_text.sanitize_foreign_text`. Damit hängt der Schutz nicht daran,
+  dass jeder künftige Pfad, der einen Fremdtext mitnimmt, daran gedacht hat. Zusätzlich
+  maskiert `foreign_text.mask_secrets` einen von der Gegenstelle zitierten eigenen
+  API-Key (voller Wert oder Präfix ab acht Zeichen) durch `***` — die Zusage aus
+  SPEC-CLI §2 („Fehlermeldungen enthalten niemals … API-Keys") hängt damit nicht am
+  Wohlverhalten des Anbieters.
+- **Verzicht auf die Serverantwort bei `connect-mail` (I5, HC-32).** Die Meldung eines
+  fehlgeschlagenen IMAP-Verbindungsversuchs nennt Host, Port, Ordner und die
+  Fehlerklasse, **nie** den Antworttext des Servers: Er zitiert regelmäßig den gesendeten
+  Benutzernamen und stammt aus fremder Hand. Der Diagnosewert wird stattdessen über die
+  Fehlerklasse erzeugt — `ImapAuthError` (Zugangsdaten abgelehnt) zieht den
+  anbieterspezifischen App-Passwort-Hinweis nach sich, jeder andere
+  `ImapConnectionError` den Hinweis auf Host, Port und Netz. SPEC-CLI §4 `connect-mail`
+  beschreibt dieses konservative Verhalten.
+- **Atomares Schreiben der Konfiguration (ADR-081, HC-20).** `ConfigFile.save` schreibt in
+  eine temporäre Datei im Zielverzeichnis (`O_WRONLY|O_CREAT|O_EXCL`, 0600), synchronisiert
+  sie (`flush` + `os.fsync`) und benennt erst dann per `os.replace` um; ein Fehlschlag
+  räumt die temporäre Datei auf. Ein Abbruch mitten im Schreiben (volle Platte, Quota,
+  `RLIMIT_FSIZE`, EIO, Stromausfall) lässt damit die bisherige Konfiguration unverändert
+  stehen — vorher blieb eine abgeschnittene Datei zurück, in der Zugangsdaten fehlten.
 - IMAP nur über TLS (IMAPS 993); Zertifikatsprüfung an (kein `verify=False` irgendwo —
   Lint-Check in WP12).
 - Im Mirror-Postfach wird nie gelöscht und nie expunged (ADR-064): `\Deleted` und `EXPUNGE`

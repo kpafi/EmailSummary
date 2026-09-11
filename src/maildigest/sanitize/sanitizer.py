@@ -38,7 +38,25 @@ from maildigest.sanitize.html_to_text import html_to_text
 from maildigest.sanitize.links import LinkCollector
 from maildigest.sanitize.unicode_clean import clean_text, is_mixed_script_domain
 
-__all__ = ["FORGED_MARKER_TOKEN", "MailSanitizer", "SanitizeError"]
+__all__ = [
+    "ENCRYPTED_CONTENT_TYPES",
+    "FORGED_MARKER_TOKEN",
+    "MailSanitizer",
+    "SanitizeError",
+]
+
+#: MIME-Typen, die eine Ende-zu-Ende-verschlüsselte Mail auszeichnen (HC-33, ADR-082).
+#: MailDigest entschlüsselt nicht — es hält nur fest, *warum* kein Inhalt da ist. Der
+#: Sanitizer behandelt die Teile im Übrigen wie jeden anderen Anhang: Sie stehen nicht auf
+#: der Allowlist und werden deshalb ohnehin nur als Metadatum geführt (SECURITY §4).
+ENCRYPTED_CONTENT_TYPES = frozenset(
+    {
+        "multipart/encrypted",
+        "application/pgp-encrypted",
+        "application/pkcs7-mime",
+        "application/x-pkcs7-mime",
+    }
+)
 
 #: Ersatztext für einen nachgebauten Datenblock-Marker (HC-5). Er muss die Tag-Löschung
 #: überleben (keine Winkelklammern) und darf selbst kein Marker-Wortlaut sein.
@@ -107,6 +125,7 @@ class _WalkState:
     truncated: bool = False
     html_divergent: bool = False
     forged_markers: int = 0
+    encrypted: bool = False
 
 
 class MailSanitizer:
@@ -262,6 +281,12 @@ class MailSanitizer:
             return
 
         ctype = _content_type(part)
+        if ctype in ENCRYPTED_CONTENT_TYPES:
+            # Nur ein Faktum für Report und Hinweiszeile — der Teil läuft danach ganz
+            # normal weiter (multipart/encrypted wird betreten, der Chiffretext landet
+            # als geblockter Anhang in der Liste). Kein Fail-closed: Es ist nichts
+            # schiefgegangen, es ist nur nichts zu lesen (ADR-082).
+            state.encrypted = True
         if ctype.startswith("message/"):
             # T13: eingebettete Mails sind Anhänge, ihr Inhalt wird nie geöffnet.
             self._handle_attachment(part, state, force_metadata_only=True)
@@ -430,6 +455,7 @@ class MailSanitizer:
             return_path_mismatch=_return_path_mismatch(raw),
             id_collision=raw.id_collision,
             forged_markers=state.forged_markers,
+            encrypted=state.encrypted,
             auth_results=_parse_auth_results(raw.auth_results_header),
         )
 

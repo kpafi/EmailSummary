@@ -19,6 +19,7 @@ from pydantic import SecretStr
 
 from maildigest.config import ImapConfig
 from maildigest.ingest.imap_client import (
+    ImapAuthError,
     ImapClient,
     ImapConnectionError,
     IngestError,
@@ -225,6 +226,36 @@ def test_network_error_becomes_connection_error() -> None:
     box = FakeMailBox(login_error=OSError("connection refused"))
     with pytest.raises(ImapConnectionError):
         make_client(box).connect()
+
+
+def test_hc32_login_failure_is_an_auth_error() -> None:
+    """Ein abgelehnter Login ist unterscheidbar — aber weiterhin ein Verbindungsfehler.
+
+    Die Einrichtung hängt den anbieterspezifischen Hinweis („App-Passwort") nur an einen
+    Anmeldefehler; der Polling-Loop behandelt beides gleich (Reconnect mit Backoff),
+    deshalb bleibt `ImapAuthError` eine Unterklasse von `ImapConnectionError` (HC-32).
+    """
+    box = FakeMailBox(login_error=MailboxLoginError(("NO", [b"AUTHENTICATIONFAILED"]), "OK"))
+    with pytest.raises(ImapAuthError) as excinfo:
+        make_client(box).connect()
+    assert isinstance(excinfo.value, ImapConnectionError)
+    assert "geheim" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConnectionRefusedError("connection refused"),
+        OSError("no route to host"),
+        ssl.SSLError("handshake failed"),
+    ],
+)
+def test_hc32_transport_failure_is_no_auth_error(error: Exception) -> None:
+    """Ein Netz-/TLS-Fehler ist **kein** Anmeldefehler — es wurde nie ein Login versucht."""
+    box = FakeMailBox(login_error=error)
+    with pytest.raises(ImapConnectionError) as excinfo:
+        make_client(box).connect()
+    assert not isinstance(excinfo.value, ImapAuthError)
 
 
 def test_access_without_connection_raises() -> None:

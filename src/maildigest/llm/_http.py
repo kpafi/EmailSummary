@@ -17,12 +17,14 @@ Politik (PLAN.md WP4, docs/ARCHITECTURE.md §6):
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from typing import Any
 
 import httpx
 
+from maildigest.foreign_text import sanitize_foreign_text
 from maildigest.llm.base import (
     MAX_ATTEMPTS,
     LLMRateLimited,
@@ -62,7 +64,10 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         seconds = float(raw.strip())
     except ValueError:
         return None
-    if seconds < 0:
+    # `float()` akzeptiert `nan`, `inf` und `1e400`. NaN überlebt jeden Vergleich
+    # (`nan < 0` ist falsch, `min(nan, 30.0)` ist NaN) und träte erst in `time.sleep`
+    # als `ValueError` hervor — außerhalb der Fehler-Taxonomie (HC-30, ADR-012).
+    if not math.isfinite(seconds) or seconds < 0:
         return None
     return min(seconds, _BACKOFF_MAX_SECONDS)
 
@@ -95,6 +100,17 @@ def _provider_error_message(response: httpx.Response) -> str:
     return _describe_error(error)
 
 
+def _foreign(value: str) -> str:
+    """Ein Textstück aus der Antwort der Gegenstelle, terminalsicher gemacht (HC-4).
+
+    Der Anbietertext ist Fremddaten (ADR-055): Er trägt im Zweifel ESC-Sequenzen, die den
+    Bildschirm leeren, den Fenstertitel setzen oder eine eingefärbte Falschmeldung
+    platzieren. Die Whitespace-Normalisierung allein reichte dafür nicht — sie kennt nur
+    `str.split`, und ESC/BEL sind für Python kein Whitespace.
+    """
+    return sanitize_foreign_text(" ".join(value.split()))
+
+
 def _describe_error(error: dict[str, Any]) -> str:
     """Setzt `message` und — falls vorhanden — die Angaben aus `metadata` zusammen.
 
@@ -107,18 +123,18 @@ def _describe_error(error: dict[str, Any]) -> str:
     parts: list[str] = []
     message = error.get("message")
     if isinstance(message, str) and message.strip():
-        parts.append(" ".join(message.split()))
+        parts.append(_foreign(message))
 
     metadata = error.get("metadata")
     if isinstance(metadata, dict):
         name = metadata.get("provider_name")
         if isinstance(name, str) and name.strip():
-            parts.append(f"upstream provider: {' '.join(name.split())}")
+            parts.append(f"upstream provider: {_foreign(name)}")
         raw = metadata.get("raw")
         if isinstance(raw, str) and raw.strip():
-            parts.append(f"upstream says: {' '.join(raw.split())}")
+            parts.append(f"upstream says: {_foreign(raw)}")
         elif raw is not None and not isinstance(raw, str):
-            parts.append(f"upstream says: {raw!r}")
+            parts.append(f"upstream says: {_foreign(repr(raw))}")
 
     return " | ".join(parts)[:400]
 
@@ -141,7 +157,8 @@ def _provider_error_type(response: httpx.Response) -> str:
     if isinstance(error, dict):
         error_type = error.get("type")
         if isinstance(error_type, str) and error_type:
-            return error_type
+            # Auch dieser kurze Wert ist Fremdtext und steht später in der Meldung (HC-4).
+            return _foreign(error_type)
     return "unknown"
 
 
@@ -249,7 +266,10 @@ def body_error_suffix(data: dict[str, Any], *, reveal: bool) -> str:
     if not isinstance(error, dict):
         return ""
     code = error.get("code")
-    suffix = f" The provider reported an error in the response body (code {code!r})."
+    suffix = (
+        " The provider reported an error in the response body "
+        f"(code {_foreign(repr(code))})."
+    )
     if not reveal:
         return suffix
     described = _describe_error(error)

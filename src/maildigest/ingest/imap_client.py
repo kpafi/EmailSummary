@@ -54,6 +54,7 @@ from types import TracebackType
 from typing import Final, Protocol
 
 from imap_tools import AND, BaseMailBox, ImapToolsError, MailBox, MailMessage
+from imap_tools.errors import MailboxLoginError
 from imap_tools.utils import encode_folder
 
 from maildigest.config import ImapConfig
@@ -64,6 +65,7 @@ from maildigest.state.db import ClaimResult, MailState, StateDB, dedupe_hash
 
 __all__ = [
     "MAX_BACKOFF_SECONDS",
+    "ImapAuthError",
     "ImapClient",
     "ImapConnectionError",
     "IngestError",
@@ -106,6 +108,18 @@ class ImapConnectionError(IngestError):
     """Verbindung/Login zum Mirror-Postfach fehlgeschlagen oder abgerissen.
 
     Löst im Polling-Loop einen Reconnect mit Exponential Backoff aus.
+    """
+
+
+class ImapAuthError(ImapConnectionError):
+    """Der Server hat die Anmeldung abgelehnt (falscher Nutzer, falsches Passwort, IMAP aus).
+
+    Eigene Klasse, aber **Unterklasse** von :class:`ImapConnectionError`: Für den
+    Polling-Loop bleibt es ein Verbindungsfehler mit Reconnect-Backoff, alle bestehenden
+    `except ImapConnectionError` gelten unverändert. Getrennt wird sie nur, damit die
+    Einrichtung den anbieterspezifischen Hinweis („App-Passwort nötig") genau dann
+    anhängt, wenn er passt — bei einem abgelehnten TCP-Verbindungsversuch ist er
+    irreführend (HC-32).
     """
 
 
@@ -510,7 +524,13 @@ class ImapClient:
             mailbox = self._factory()
             mailbox.login(self.cfg.username, password, initial_folder=self.cfg.folder)
         except (ImapToolsError, ssl.SSLError, OSError) as exc:
-            raise ImapConnectionError(
+            # Der Servertext wird bewusst nicht übernommen (I5) — er kann den gesendeten
+            # Nutzernamen zitieren. Übrig bleibt die Fehlerklasse; ob es ein Transport-
+            # oder ein Anmeldefehler war, entscheidet der Typ der Ausnahme (HC-32).
+            failure = (
+                ImapAuthError if isinstance(exc, MailboxLoginError) else ImapConnectionError
+            )
+            raise failure(
                 f"IMAP connection to {self.cfg.host}:{self.cfg.port} "
                 f"(folder {self.cfg.folder}) failed: {type(exc).__name__}"
             ) from exc

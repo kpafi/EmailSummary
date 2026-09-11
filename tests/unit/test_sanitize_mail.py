@@ -333,3 +333,63 @@ class TestHc5GefaelschteDatenblockMarker:
         )
         assert mail.sanitization_report.forged_markers == 0
         assert FORGED_MARKER_TOKEN not in mail.body_text
+
+
+# --- HC-33: verschlüsselte Mail wird als solche erkannt (ADR-082) ---------------------
+
+
+class TestHc33VerschluesselteMail:
+    """Der Sanitizer hält fest, *warum* kein Inhalt da ist — er entschlüsselt nichts.
+
+    Vor dem Fix war eine PGP-Mail von einer inhaltsleeren Mail ununterscheidbar: gleiche
+    Zustellung, gleiche Zeile „Mail without displayable content", kein Hinweis.
+    """
+
+    PGP = (
+        b"Content-Type: multipart/encrypted; "
+        b'protocol="application/pgp-encrypted"; boundary="B"\r\n\r\n--B\r\n'
+        b"Content-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n--B\r\n"
+        b"Content-Type: application/octet-stream\r\n"
+        b'Content-Disposition: inline; filename="encrypted.asc"\r\n\r\n'
+        b"-----BEGIN PGP MESSAGE-----\r\nhQIMA0t4sFcAAAAAAQ//\r\n"
+        b"-----END PGP MESSAGE-----\r\n--B--\r\n"
+    )
+
+    SMIME = (
+        b"Content-Type: application/pkcs7-mime; smime-type=enveloped-data; "
+        b'name="smime.p7m"\r\n'
+        b'Content-Disposition: attachment; filename="smime.p7m"\r\n'
+        b"Content-Transfer-Encoding: base64\r\n\r\nMIAGCSqGSIb3DQEHA6CAMIAC\r\n"
+    )
+
+    def test_hc33_pgp_mime_setzt_das_flag(self) -> None:
+        mail = MailSanitizer().sanitize(make_raw(self.PGP))
+        assert mail.sanitization_report.encrypted is True
+        # Kein Fail-closed: Die Mail läuft regulär durch, der Chiffretext bleibt ein
+        # geblockter Anhang und erreicht kein Modell.
+        assert mail.body_text == ""
+        assert mail.sanitization_report.blocked_attachments >= 1
+        assert "BEGIN PGP MESSAGE" not in mail.body_text
+
+    def test_hc33_smime_setzt_das_flag(self) -> None:
+        mail = MailSanitizer().sanitize(make_raw(self.SMIME))
+        assert mail.sanitization_report.encrypted is True
+        assert mail.body_text == ""
+        assert all(not info.processed for info in mail.attachments)
+
+    def test_hc33_gewoehnliche_mail_bleibt_unverschluesselt(self) -> None:
+        """Gegenprobe: Das Flag darf nicht bei jeder Mail ohne Body hängen bleiben."""
+        mail = MailSanitizer().sanitize(make_raw(plain_mail("Guten Tag.")))
+        assert mail.sanitization_report.encrypted is False
+
+    def test_hc33_signierte_mail_gilt_nicht_als_verschluesselt(self) -> None:
+        """`multipart/signed` ist lesbar — nur verschlüsselte Typen zählen."""
+        mime = (
+            b'Content-Type: multipart/signed; protocol="application/pgp-signature"; '
+            b'boundary="B"\r\n\r\n--B\r\n'
+            b"Content-Type: text/plain; charset=utf-8\r\n\r\nGuten Tag.\r\n--B\r\n"
+            b"Content-Type: application/pgp-signature\r\n\r\nsig\r\n--B--\r\n"
+        )
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        assert mail.sanitization_report.encrypted is False
+        assert "Guten Tag." in mail.body_text

@@ -15,11 +15,15 @@ from __future__ import annotations
 
 import io
 import os
+import signal
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from maildigest.cli import EXIT_ERROR, EXIT_OK, EXIT_USAGE, Hooks, main
+from maildigest.foreign_text import mask_secrets, sanitize_foreign_text
+from maildigest.llm.base import LLMTransportError
 
 #: Vollständige, gültige Config mit erkennbaren „Secrets".
 VALID_CONFIG = """
@@ -223,3 +227,171 @@ def test_help_always_works_without_a_config() -> None:
     with pytest.raises(SystemExit) as excinfo:
         main(["--help"], stdin=io.StringIO(), stdout=out, stderr=err, hooks=Hooks())
     assert excinfo.value.code == EXIT_OK
+
+
+# --- HC-20: die Konfiguration wird atomar geschrieben -------------------------------------
+
+
+def _full_config(tmp_path: Path) -> Path:
+    """Eine vollständige, gültige Konfiguration mit Secrets."""
+    path = tmp_path / "full.toml"
+    path.write_text(VALID_CONFIG, encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
+def _leftovers(directory: Path) -> list[str]:
+    """Alle Dateien im Verzeichnis außer der Konfiguration selbst."""
+    return sorted(entry.name for entry in directory.iterdir() if entry.name != "full.toml")
+
+
+def test_hc20_abgebrochenes_schreiben_laesst_die_alte_datei_unveraendert(
+    tmp_path: Path,
+) -> None:
+    """Volle Platte/Quota mitten im Schreiben: die bisherige Konfiguration überlebt.
+
+    Repro des Berichts mit `RLIMIT_FSIZE`. Vor dem Fix öffnete `ConfigFile.save` das Ziel
+    direkt mit `O_TRUNC`: Die Datei war danach abgeschnitten, `[imap] host`/`username`
+    fehlten und jedes Folgekommando scheiterte an der Validierung. Jetzt wird in eine
+    temporäre Datei im selben Verzeichnis geschrieben und erst am Ende umbenannt.
+    """
+    resource = pytest.importorskip("resource")
+    path = _full_config(tmp_path)
+    before = path.read_bytes()
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (len(before) // 2, hard))
+        code, out, err = run(
+            ["connect-llm", "--config", str(path), "--non-interactive", "--provider", "none"]
+        )
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+        signal.signal(signal.SIGXFSZ, previous)
+
+    assert_clean_error(code, out, err)
+    assert path.read_bytes() == before, "die alte Konfiguration wurde beschädigt"
+    assert _leftovers(tmp_path) == [], "temporäre Datei nicht aufgeräumt"
+
+
+def test_hc20_fehler_beim_umbenennen_laesst_die_alte_datei_unveraendert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auch ein Fehler im letzten Schritt (`os.replace`) darf nichts hinterlassen."""
+    path = _full_config(tmp_path)
+    before = path.read_bytes()
+
+    def boom(src: object, dst: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", boom)
+    code, out, err = run(
+        ["connect-llm", "--config", str(path), "--non-interactive", "--provider", "none"]
+    )
+
+    assert_clean_error(code, out, err)
+    assert path.read_bytes() == before
+    assert _leftovers(tmp_path) == []
+
+
+def test_hc20_erfolgreiches_schreiben_ergibt_0600_und_vollstaendigen_inhalt(
+    tmp_path: Path,
+) -> None:
+    """Der Normalfall bleibt, wie er war: vollständige Datei, Rechte 0600, kein Rest."""
+    path = _full_config(tmp_path)
+    code, _out, _err = run(
+        ["connect-llm", "--config", str(path), "--non-interactive", "--provider", "none"]
+    )
+    assert code == EXIT_OK
+    assert path.stat().st_mode & 0o777 == 0o600
+    written = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert written["imap"]["host"] == "imap.example.org"
+    assert written["llm"]["provider"] == "none"
+    assert _leftovers(tmp_path) == []
+
+
+# --- HC-4: kein Fremdtext mit Steuerzeichen auf stderr ------------------------------------
+
+
+def test_hc4_stderr_traegt_keine_steuerzeichen_einer_gegenstelle(tmp_path: Path) -> None:
+    """Die Ausgabestelle in `main` filtert jede Fehlermeldung (HC-4, ADR-055).
+
+    Der Schutz hängt damit nicht mehr daran, dass jeder einzelne Fremdtext-Pfad daran
+    gedacht hat: Auch eine Ausnahme, die künftig irgendwo einen Servertext mitnimmt,
+    erreicht das Terminal nur gefiltert.
+    """
+    path = _full_config(tmp_path)
+    hostile = "\x1b[2J\x1b]0;PWNED\x07 boom"
+
+    def provider(**kwargs: object) -> object:
+        raise LLMTransportError(hostile)
+
+    out, err = io.StringIO(), io.StringIO()
+    code = main(
+        [
+            "connect-llm",
+            "--config",
+            str(path),
+            "--non-interactive",
+            "--provider",
+            "anthropic",
+            "--model",
+            "m",
+        ],
+        stdin=io.StringIO(""),
+        stdout=out,
+        stderr=err,
+        hooks=Hooks(build_provider=provider),
+    )
+    text = err.getvalue()
+    assert code == EXIT_ERROR
+    assert "\x1b" not in text and "\x07" not in text
+    assert all(ord(char) >= 0x20 or char == "\n" for char in text)
+    assert "boom" in text
+
+
+# --- HC-4: die Filterfunktionen selbst ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "\x1b[2J",  # Bildschirm löschen
+        "\x1b]0;Fenstertitel\x07",  # Fenstertitel setzen
+        "\x00\x01\x02",  # weitere C0-Zeichen
+        "\x9b31m",  # C1-Steuerzeichen (CSI)
+        "harmlos\ttabuliert",
+    ],
+)
+def test_hc4_allowlist_laesst_kein_steuerzeichen_durch(hostile: str) -> None:
+    """`sanitize_foreign_text` lässt außer `\\n` kein Steuerzeichen stehen."""
+    result = sanitize_foreign_text(hostile)
+    assert all(ord(char) >= 0x20 or char == "\n" for char in result)
+    assert "\x1b" not in result and "\x07" not in result
+
+
+def test_hc4_eigene_satzzeichen_und_umlaute_bleiben_lesbar() -> None:
+    """Die eigenen Meldungen verwenden Gedankenstrich, Auslassungspunkte und Umlaute."""
+    text = "Abbruch — zu viele ungültige Eingaben … „so nicht\" (Größe: 5 §3)"
+    assert sanitize_foreign_text(text, keep_newlines=True) == text
+
+
+def test_hc4_zeilenumbrueche_nur_auf_wunsch() -> None:
+    """Ein Fremdtext darf die Zeilenstruktur nicht zerreißen; eigene Meldungen dürfen es."""
+    assert sanitize_foreign_text("a\nb") == "a b"
+    assert sanitize_foreign_text("a\r\nb", keep_newlines=True) == "a\nb"
+
+
+def test_hc4_maske_greift_auch_bei_gekuerztem_schluessel() -> None:
+    """Manche Anbieter zitieren den Schlüssel gekürzt — auch das ist ein Leck (I5)."""
+    key = "sk-ABCDEF1234567890"
+    text = f"unknown key {key}, sent as {key[:10]}"
+    masked = mask_secrets(text, [key])
+    assert key not in masked and key[:10] not in masked
+    assert masked.count("***") == 2
+
+
+def test_hc4_kurze_werte_werden_nicht_maskiert() -> None:
+    """Ein zu kurzer „Schlüssel" würde sonst harmlosen Text zerstören."""
+    assert mask_secrets("port 993 abgelehnt", ["993", ""]) == "port 993 abgelehnt"

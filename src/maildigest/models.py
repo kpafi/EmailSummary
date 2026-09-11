@@ -117,6 +117,11 @@ class SanitizationReport(BaseModel):
     #: Tag-Stripper, der den Nachbau sonst spurlos entfernt; `> 0` setzt den
     #: Injection-Verdacht unabhängig von jeder Modellantwort (F-SEC-5).
     forged_markers: int = Field(default=0, ge=0)
+    #: Die Mail war Ende-zu-Ende verschlüsselt (`multipart/encrypted`,
+    #: `application/pkcs7-mime`, `application/pgp-encrypted`) — MailDigest entschlüsselt
+    #: nicht (ADR-082). Kein Fehler und kein Risiko-Signal, sondern die Erklärung dafür,
+    #: dass kein Inhalt da ist (HC-33).
+    encrypted: bool = False
     auth_results: dict[str, str] = Field(default_factory=dict)
 
 

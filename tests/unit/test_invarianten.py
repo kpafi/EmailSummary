@@ -196,3 +196,153 @@ def test_i8_kritiker_sieht_die_nutzer_vorgaben_nicht() -> None:
     from maildigest.llm.prompts import critic_system_prompt
 
     assert "custom_instructions" not in critic_system_prompt.__code__.co_varnames
+
+
+# --- I3/I4 (HC-38): Sendestellen und ihre Argumente sind mechanisch gesperrt -------------
+#
+# Wer hier eine Stelle ergänzt, muss den variablen Anteil scrubben (HC-28): `compose_plain`
+# ist eine reine Code-Nachricht, ihr Nachbrenner ist kein Feld-Scrub. Die drei Tests halten
+# fest, was in der Fixrunde stillschweigend fragil geworden war — HC-28 wäre beim Einbauen
+# der `/status`-Antwort aufgefallen, hätte es sie schon gegeben (HC-38 (3)).
+
+#: Jede Stelle, die eine Nachricht an einen Adapter oder in die Warteschlange gibt:
+#: `datei:funktion`. Die Liste ist bewusst von Hand gepflegt.
+SEND_SITES = {
+    # Der einzige Aufruf eines Messenger-Adapters im Dauerbetrieb (teilweise Zustellung,
+    # CT-13/ADR-066).
+    "delivery.py:_attempt",
+    # Einreihen in die persistente Warteschlange (`Outbox.send`).
+    "runner.py:maybe_send_low_digest",
+    "runner.py:handle_command",
+    # Direktzustellung der Pipeline.
+    "pipeline.py:_fail_closed",
+    "pipeline.py:_process_sanitized",
+    # CLI: Testnachricht und Selbsttest-Vorspann.
+    "cli.py:_send_test_message",
+    "cli.py:_announce_selftest",
+}
+
+#: Funktionen, die eine `DigestMessage` bauen dürfen. Sie alle enden in
+#: `DigestComposer._finalize` (Nachbrenner + Split, I3).
+COMPOSE_FUNCS = frozenset(
+    {"compose", "compose_failure", "compose_low_digest", "compose_plain"}
+)
+
+#: Positivliste der Aufrufer von `compose_plain` — Stand nach FP-6.
+COMPOSE_PLAIN_CALLERS = {
+    "cli.py:_send_test_message",
+    "cli.py:_announce_selftest",
+    "runner.py:handle_command",
+}
+
+
+def _functions(path: Path) -> list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """Alle Funktionen eines Moduls als `(datei:funktion, Knoten)`."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return [
+        (f"{path.relative_to(SRC)}:{node.name}", node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+
+
+def _calls(node: ast.AST, attr: str) -> list[ast.Call]:
+    """Alle `….<attr>(…)`-Aufrufe unterhalb von `node`."""
+    return [
+        sub
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Call)
+        and isinstance(sub.func, ast.Attribute)
+        and sub.func.attr == attr
+    ]
+
+
+def _returns_digest_message(path: Path, name: str) -> bool:
+    """True, wenn die Modulfunktion `name` ausschließlich `DigestMessage(…)` zurückgibt."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) or node.name != name:
+            continue
+        returns = [sub for sub in ast.walk(node) if isinstance(sub, ast.Return) and sub.value]
+        return bool(returns) and all(
+            isinstance(ret.value, ast.Call)
+            and isinstance(ret.value.func, ast.Name)
+            and ret.value.func.id == "DigestMessage"
+            for ret in returns
+        )
+    return False
+
+
+def _is_composed(expr: ast.expr, path: Path) -> bool:
+    """True, wenn der Ausdruck nachweislich aus dem Composer stammt."""
+    if isinstance(expr, ast.Call):
+        if isinstance(expr.func, ast.Attribute) and expr.func.attr in COMPOSE_FUNCS:
+            return True
+        if isinstance(expr.func, ast.Name):
+            # Modul-Helfer wie `delivery._single_part`: erlaubt, solange er nichts
+            # anderes als eine `DigestMessage` konstruiert (er übernimmt die bereits
+            # fertigen Teile unverändert).
+            return _returns_digest_message(path, expr.func.id)
+    return False
+
+
+def _argument_source_ok(
+    func: ast.FunctionDef | ast.AsyncFunctionDef, arg: ast.expr, path: Path
+) -> bool:
+    """Prüft, ob das Sende-Argument aus dem Composer stammt — auch über eine Variable."""
+    if _is_composed(arg, path):
+        return True
+    if isinstance(arg, ast.Name):
+        bindings = [
+            assign.value
+            for assign in ast.walk(func)
+            if isinstance(assign, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == arg.id
+                for target in assign.targets
+            )
+        ]
+        if bindings:
+            return all(_is_composed(value, path) for value in bindings)
+        # Parameter der Funktion: die Nachricht kam fertig von außen (`_attempt`,
+        # `_process_sanitized`); der Bau liegt dann bei der aufrufenden Stelle, die
+        # ihrerseits in SEND_SITES bzw. über ihr Argument geprüft wird.
+        params = {a.arg for a in func.args.args} | {a.arg for a in func.args.kwonlyargs}
+        return arg.id in params
+    return False
+
+
+def test_hc38_send_sites_sind_vollstaendig_gelistet() -> None:
+    """Keine neue `.send(`-Stelle ohne Eintrag in der Positivliste."""
+    found = {
+        name
+        for path in PY_FILES
+        for name, node in _functions(path)
+        if _calls(node, "send")
+    }
+    assert found == SEND_SITES, (
+        f"Nicht gelistet: {sorted(found - SEND_SITES)}; "
+        f"verschwunden: {sorted(SEND_SITES - found)}"
+    )
+
+
+def test_hc38_send_sites_senden_nur_composer_ausgaben() -> None:
+    """Jedes Sende-Argument stammt aus `compose*` oder einem `DigestMessage`-Ausdruck."""
+    verletzungen: list[str] = []
+    for path in PY_FILES:
+        for name, node in _functions(path):
+            for call in _calls(node, "send"):
+                if not call.args or not _argument_source_ok(node, call.args[0], path):
+                    verletzungen.append(f"{name}: {ast.unparse(call)}")
+    assert verletzungen == []
+
+
+def test_hc38_compose_plain_hat_nur_die_gelisteten_aufrufer() -> None:
+    """`compose_plain` ist eine reine Code-Nachricht — variable Anteile scrubbt der Aufrufer."""
+    found = {
+        name
+        for path in PY_FILES
+        for name, node in _functions(path)
+        if _calls(node, "compose_plain")
+    }
+    assert found == COMPOSE_PLAIN_CALLERS

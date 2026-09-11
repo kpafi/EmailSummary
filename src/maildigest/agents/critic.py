@@ -217,6 +217,17 @@ def collect_signals(mail: SanitizedMail) -> tuple[Signal, ...]:
                 f"(types declared in the mail: {listed})",
             )
         )
+    if report.encrypted:
+        # Weich im Sinne von ADR-043: Verschlüsselung ist kein Fälschungsindiz und darf die
+        # Risikostufe nicht anheben. Der Kritiker braucht das Faktum trotzdem, sonst hält er
+        # den leeren Text für eine verunglückte Zusammenfassung (F-CRIT-3, ADR-082).
+        signals.append(
+            Signal(
+                "encrypted",
+                "the mail is end-to-end encrypted (PGP/S-MIME) and was not decrypted — "
+                "an empty body is expected here and is not a sign of manipulation",
+            )
+        )
     signals.append(
         Signal("links_removed", f"Entfernte/ersetzte Links: {report.links_removed}")
     )

@@ -382,3 +382,30 @@ def test_ct15_html_divergenz_ist_weich_und_hebt_die_stufe_nicht() -> None:
         make_mail(report=SanitizationReport(html_divergent=True))
     ) if s.key == "html_divergent"]
     assert signals and not signals[0].hard
+
+
+# --- HC-33: Verschlüsselung als Fakt, nicht als Risiko --------------------------------
+
+
+def test_hc33_verschluesselung_ist_ein_signal() -> None:
+    """Der Kritiker erfährt, warum der Text leer ist (F-CRIT-3, ADR-082)."""
+    signals = collect_signals(make_mail(report=SanitizationReport(encrypted=True)))
+    encrypted = next(signal for signal in signals if signal.key == "encrypted")
+    assert "end-to-end encrypted" in encrypted.text
+    # Weich: Verschlüsselung darf keine Risikostufe erzwingen (ADR-043).
+    assert encrypted.hard is False
+
+
+def test_hc33_ohne_verschluesselung_kein_signal() -> None:
+    """Gegenprobe: Das Signal entsteht nur aus dem Report-Flag."""
+    signals = collect_signals(make_mail())
+    assert all(signal.key != "encrypted" for signal in signals)
+
+
+def test_hc33_verschluesselung_hebt_die_risikostufe_nicht_an() -> None:
+    """Eine verschlüsselte Mail bleibt ohne weitere Signale bei `none` (ADR-043)."""
+    mail = make_mail(report=SanitizationReport(encrypted=True))
+    verdict = enforce_verdict_policy(
+        CriticVerdict(phishing_risk="none", summary_accurate=True), collect_signals(mail)
+    )
+    assert verdict.phishing_risk == "none"

@@ -48,6 +48,15 @@ sie ab Stufe `WARNING` auf **stderr**, damit stdout ausschließlich die in §4 f
 Ausgabe enthält.
 
 Fehlermeldungen enthalten **niemals** Passwörter, API-Keys, Bot-Tokens oder Webhook-URLs.
+Zitiert eine Gegenstelle den gesendeten API-Key in ihrer Fehlerantwort, wird er vor der
+Ausgabe durch `***` ersetzt (auch als Präfix ab acht Zeichen) — die Zusage hängt nicht am
+Wohlverhalten des Anbieters.
+
+Jede Fehlerzeile läuft vor der Ausgabe durch eine **Zeichen-Allowlist** (druckbares ASCII,
+Umlaute/ß, die üblichen Satzzeichen; alles andere wird zu `·`, ADR-055). Damit kann ein
+Text, der von einer Gegenstelle stammt — Fehlertext des Modell-Anbieters, Ordnername des
+IMAP-Servers —, keine ANSI-/Steuersequenz auf das Terminal bringen und dort Bildschirm,
+Farbe, Fenstertitel oder eine erfundene Programmmeldung setzen.
 
 ## 3. Globale Optionen
 
@@ -153,11 +162,22 @@ Abfragen in dieser Reihenfolge:
    `Ordner [<Nummer des aktuellen Ordners>]: `
 
 Port 143 (Klartext-IMAP) wird immer abgelehnt (Exit-Code 1). Verbindet sich MailDigest
-nicht, endet das Kommando mit Exit-Code 1 und schreibt **nichts** in die Datei; die Meldung
-enthält die Serverantwort, danach einen anbieterspezifischen Hinweis, woran die Anmeldung
-typischerweise scheitert (bei unbekanntem Anbieter einen allgemeinen), und den Verweis auf
-`--no-test`. Lässt sich die Ordnerliste nicht abrufen, bleibt es bei einer
-Warnung auf stderr und beim bisherigen Ordner.
+nicht, endet das Kommando mit Exit-Code 1 und schreibt **nichts** in die Datei. Die
+Meldung nennt Host, Port, Ordner und die **Fehlerklasse**; der Antworttext des Servers
+wird bewusst **nicht** ausgegeben — er kann den gesendeten Benutzernamen zitieren (I5,
+docs/SECURITY.md §6). Danach folgt eine Erklärung, die zur Fehlerklasse passt:
+
+* **Anmeldefehler** (der Server hat die Zugangsdaten abgelehnt): der anbieterspezifische
+  Hinweis, woran die Anmeldung typischerweise scheitert — meist ein separat erzeugtes
+  App-Passwort (bei unbekanntem Anbieter ein allgemeiner Hinweis).
+* **Transportfehler** (Verbindung abgelehnt, Zeitüberschreitung, TLS): der Hinweis, dass
+  gar kein Login versucht wurde und Host, Port und Netzverbindung zu prüfen sind.
+
+Zum Schluss steht in beiden Fällen der Verweis auf `--no-test`. Lässt sich die Ordnerliste
+nicht abrufen, bleibt es bei einer Warnung auf stderr und beim bisherigen Ordner. Existiert
+der eingestellte Ordner nicht und läuft das Kommando nicht-interaktiv, wird die nummerierte
+Ordnerliste zuerst auf stdout gedruckt und danach auf stderr darauf verwiesen; der
+eingestellte Ordner bleibt unverändert.
 
 Gespeichert wird erst nach dem Test. Die Datei behält die Rechte 0600.
 
@@ -509,11 +529,24 @@ Von: <Anzeigename> (<domain>) · <TT.MM. HH:MM>            ← ohne Date-Header:
 <Zusammenfassung>
 — <datei>: <1–2 Sätze je verarbeitetem Anhang>
 📎 Nicht verarbeitet: <datei (größe)>, … [und N weitere]
-🔍 Hinweise: <Injection-Verdacht; Auth-Fehler; Punycode; gemischte Schriftsysteme;
-              versteckter Text im HTML entfernt; HTML-Teil weicht vom Textteil ab;
-              Reply-To-/Return-Path-Abweichung; Text gekürzt; Kritiker-Gründe bei Risiko low>
+🔍 Hinweise: <Injection-Verdacht; verschlüsselte Mail; Message-ID-Kollision; Auth-Fehler;
+              Punycode; gemischte Schriftsysteme; versteckter Text im HTML entfernt;
+              HTML-Teil weicht vom Textteil ab; Reply-To-/Return-Path-Abweichung;
+              Text gekürzt; Kritiker-Gründe bei Risiko low>
 <Link-Fußnote (defanged), eine Adresse je Zeile>          ← nur bei [links] footnote = true
 ```
+
+Zwei Hinweise erklären, warum eine Mail anders aussieht als erwartet, und haben deshalb
+einen festen Wortlaut:
+
+- `encrypted (PGP/S-MIME) — content not readable by design` — die Mail war Ende-zu-Ende
+  verschlüsselt (`multipart/encrypted`, `application/pgp-encrypted`,
+  `application/pkcs7-mime`). MailDigest entschlüsselt nicht; Kopfzeile, Absender und die
+  Liste der nicht verarbeiteten Teile kommen trotzdem an (ADR-082). Signierte, aber
+  unverschlüsselte Mail (`multipart/signed`) löst den Hinweis nicht aus.
+- `Message-ID collides with an earlier mail` — die `Message-ID` dieser Mail war bereits von
+  einer inhaltlich **anderen** Mail belegt. Sie wird trotzdem zugestellt (ADR-079); der
+  Hinweis erklärt, warum ein Vorgang doppelt erscheinen kann.
 
 Ohne Sprachmodell (`[llm] provider = "none"`) steht in der Anhangszeile statt der
 Zusammenfassung ein beschrifteter Auszug des gelesenen Anhangstextes

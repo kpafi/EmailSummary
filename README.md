@@ -310,7 +310,8 @@ Das ist die bekannteste Lücke: MailDigest liest keine Bildinhalte (kein OCR). E
 kann seinen Text als Screenshot verschicken; die Zusammenfassung sagt dann sinngemäß „Mail
 ohne Text mit einem Bildanhang". Das ist auffällig, aber es ist kein Schutz — die
 Bewertung musst du in dem Fall selbst treffen. Auch verschlüsselte Mails (PGP/S-MIME)
-werden nicht entschlüsselt und deshalb nicht zusammengefasst.
+werden nicht entschlüsselt und deshalb nicht zusammengefasst — die Nachricht sagt das
+dann ausdrücklich („encrypted (PGP/S-MIME) — content not readable by design").
 
 **Kann die KI durch eine Mail übernommen werden?**
 Übernehmen kann sie nichts, weil sie nichts darf: kein Werkzeug, kein Netz, keine Datei.
@@ -371,8 +372,11 @@ Testprotokoll verlangt danach eine zweite, unabhängige Runde. Sie hat nicht sta
 verschickt, bekommt eine Zusammenfassung wie „Mail ohne Text mit einem Bildanhang" — das
 ist auffällig, aber es ist keine Prüfung.
 
-**Verschlüsselte Mail wird nicht gelesen.** PGP und S/MIME werden nicht entschlüsselt; du
-bekommst nur die Metadaten-Notiz.
+**Verschlüsselte Mail wird nicht gelesen.** PGP und S/MIME werden nicht entschlüsselt. Du
+bekommst trotzdem eine reguläre Nachricht — Kopfzeile, Absender, die Liste der nicht
+verarbeiteten Teile (`📎 Nicht verarbeitet: …`) und die Hinweiszeile
+`🔍 Hinweise: encrypted (PGP/S-MIME) — content not readable by design`. Zum Lesen musst du
+ins echte Postfach. Signierte, aber unverschlüsselte Mail ist davon nicht betroffen.
 
 **Signal nur als Notiz an dich selbst.** Der Signal-Adapter schreibt in „Notiz an mich" und
 setzt ein laufendes `signal-cli --daemon` voraus. Andere Empfänger sind nicht vorgesehen.

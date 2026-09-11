@@ -1326,6 +1326,23 @@ ihre *Erkennung* zu eng.
   Stellen; die Zuordnung bleibt über die Nummer eindeutig. Bei mehreren Telegram-Chats muss
   der Nutzer die Chat-ID anhand der Nummer erkennen — akzeptabel, weil der Normalfall genau
   ein Chat ist.
+- **Nachtrag (Fixrunde, 2026-09-11):** Es gibt eine **vierte** Fremddatenquelle, die beim
+  Schreiben dieses ADR übersehen wurde: den **Fehlertext des Modell-Anbieters**
+  (`llm/_http._describe_error` — `error.message`, `error.metadata.provider_name`,
+  `error.metadata.raw` und der Körperfehler-Suffix). Er wird beim Verbindungstest von
+  `connect-llm` bewusst ausgegeben (der Diagnosewert ist erheblich), lief aber nur durch
+  eine Whitespace-Normalisierung (`" ".join(x.split())`) — ESC und BEL sind für Python
+  kein Whitespace und passierten unverändert (HC-4). Die Entscheidung wird deshalb in zwei
+  Punkten erweitert: (d) Jedes aus einer Antwort übernommene Textstück läuft durch dieselbe
+  Allowlist wie Ordnernamen; sie liegt jetzt als eigenes Modul `maildigest.foreign_text`
+  vor, damit CLI **und** HTTP-Schichten sie ohne Importzyklus benutzen können. (e) Die
+  Allowlist sitzt zusätzlich an der stderr-**Ausgabestelle** in `cli.main`: Der Schutz
+  hängt damit nicht daran, dass jeder künftige Pfad an ihn gedacht hat. Ergänzend maskiert
+  `mask_secrets` einen von der Gegenstelle zitierten eigenen API-Key (voller Wert oder
+  Präfix ab acht Zeichen) als `***`. Die Allowlist ist etwas weiter als die für
+  Ordnernamen (sie lässt alle druckbaren ASCII-Zeichen und die typografischen Satzzeichen
+  der eigenen Meldungen zu), weil sie über **zusammengesetzte** Meldungen läuft; sie
+  enthält kein einziges Steuerzeichen außer dem Zeilenumbruch.
 
 ## ADR-056: Secrets haben keine Kommandozeilen-Optionen
 - Status: accepted
@@ -2236,3 +2253,65 @@ ihre *Erkennung* zu eng.
   MailDigest mehr `getUpdates`-Aufrufe als bisher — die Zahl ist durch
   `poll_interval_seconds / 10` je Zyklus beschränkt und liegt weit unter Telegrams
   Grenzen.
+
+## ADR-081: Die Konfigurationsdatei wird atomar geschrieben
+- Status: accepted
+- WP / Datum: Fixrunde, 2026-09-11 (Befund HC-20)
+- Kontext: `ConfigFile.save` öffnete das Ziel direkt mit `O_TRUNC` und schrieb hinein.
+  Jeder Fehler danach — volle Platte, Quota, `RLIMIT_FSIZE`, EIO, Stromausfall, SIGKILL —
+  hinterließ eine **halb geschriebene** Datei. Im Repro des Berichts schrumpfte eine
+  gültige Konfiguration von 2216 auf 1194 Bytes; `[imap] host` und `username` fehlten, und
+  jedes Folgekommando scheiterte an der Validierung. Welche Werte verloren gehen, hängt vom
+  Abbruchpunkt ab; die Datei ist neben den Umgebungsvariablen der einzige Ort der Secrets,
+  ein Backup gibt es nicht. Zugleich geben `init` und jedes `connect-*` an anderer Stelle
+  die Zusage, bei einem Abbruch **nichts** zu ändern.
+- Entscheidung: Geschrieben wird in eine temporäre Datei **im Zielverzeichnis**
+  (`os.open(..., O_WRONLY|O_CREAT|O_EXCL, 0o600)`), danach `flush()` + `os.fsync()`, dann
+  `os.replace` auf den endgültigen Namen. Schlägt irgendein Schritt fehl, wird die
+  temporäre Datei in einem `finally` entfernt und ein `CliError` (Exit 1) geworfen; die
+  bisherige Datei bleibt byteidentisch stehen. Der bestehende `os.chmod(0o600)` bleibt als
+  Absicherung.
+- Warum im Zielverzeichnis: `os.replace` ist nur innerhalb eines Dateisystems atomar; eine
+  Temp-Datei in `/tmp` wäre auf einem anderen Mount und würde zu einem Kopiervorgang mit
+  genau dem Problem zurückführen, das vermieden werden soll. `O_EXCL` schließt aus, dass
+  ein Rest eines abgestürzten Laufs oder ein untergeschobener Symlink beschrieben wird.
+- Warum kein Backup der alten Datei: Eine Kopie mit Secrets, deren Rechte und Lebensdauer
+  niemand verwaltet, ist ein zweiter Ort für Passwörter (I5) — genau das, was SECURITY §6
+  ausschließt. Das Rename-Verfahren braucht keine.
+- Konsequenzen: Während des Schreibens liegt kurzzeitig eine Datei `.<name>.<pid>.tmp` mit
+  Rechten 0600 im Konfigurationsverzeichnis; sie verschwindet in jedem Ausgang. Das
+  Verzeichnis muss schreibbar sein — das war es vorher auch schon, `O_TRUNC` verlangt
+  ebenfalls Schreibrechte an der Datei. Der `fsync` kostet einen Festplatten-Sync je
+  gespeicherter Änderung; bei einem Kommando, das ohnehin auf Netzwerkantworten wartet,
+  fällt das nicht ins Gewicht.
+
+## ADR-082: Verschlüsselte Mail wird benannt, nicht fail-closed behandelt
+- Status: accepted
+- WP / Datum: Fixrunde, 2026-09-11
+- Kontext: README §„Grenzen dieser Version" sagte für PGP/S-MIME die fünfzeilige
+  Metadaten-Notiz zu. Tatsächlich läuft eine `multipart/encrypted`-Mail regulär durch:
+  Kopfzeile, `From:`, „Mail without displayable content, 2 blocked attachments: …",
+  `📎 Not processed: …`, Exit 0 (HC-33, nachgestellt mit einer PGP/MIME- und einer
+  S/MIME-Mail). Der Nutzer konnte eine verschlüsselte Mail damit nicht von einer kaputten
+  oder inhaltsleeren unterscheiden.
+- Entscheidung: Das **Verhalten bleibt**, die Erklärung kommt dazu. Der Sanitizer erkennt
+  `multipart/encrypted`, `application/pgp-encrypted`, `application/pkcs7-mime` und
+  `application/x-pkcs7-mime` (Konstante `sanitize.sanitizer.ENCRYPTED_CONTENT_TYPES`) und
+  setzt `SanitizationReport.encrypted = True`. Der Composer hängt die `🔍`-Zeile
+  `encrypted (PGP/S-MIME) — content not readable by design` an; der Kritiker bekommt das
+  Faktum als **weiches** Signal (`encrypted`), damit er den leeren Text nicht für eine
+  verunglückte Zusammenfassung hält. README beschreibt das tatsächliche Verhalten.
+- Warum kein Fail-closed: Die Metadaten-Notiz heißt „could not be processed safely" und
+  beschreibt einen Fehler (I6, ADR-012). Bei verschlüsselter Mail ist nichts
+  schiefgegangen — es ist nur nichts zu lesen. Sie in den Fehlerpfad zu schicken hieße,
+  eine Normalität als Störung zu melden, und nähme dem Nutzer zugleich Absender, Betreff
+  und die Anhangsliste, die er heute bekommt. Der Informationsgehalt wäre geringer, die
+  Warnmüdigkeit höher.
+- Warum kein Risiko-Aufschlag: Verschlüsselung ist kein Fälschungsindiz (ADR-043). Das
+  Signal ist weich und hebt die Risikostufe nicht an.
+- Sicherheitslage unverändert: Der Chiffretext steht nicht auf der Anhangs-Allowlist
+  (SECURITY §4) und wird deshalb ohnehin nur als Metadatum geführt; kein Modell sieht ihn,
+  entschlüsselt wird nichts.
+- Konsequenzen: Ein neues Report-Feld (`encrypted`, additiv, Default `False`), eine neue
+  Hinweiszeile in SPEC-CLI §6, ein neues Kritiker-Signal. `multipart/signed` bleibt
+  ausdrücklich draußen — signierte Mail ist lesbar.

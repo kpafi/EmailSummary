@@ -417,6 +417,16 @@ class DigestComposer:
         hints: list[str] = []
         if summary.injection_suspected:
             hints.append("the mail contained instructions aimed at the AI (ignored)")
+        if report.encrypted:
+            # ADR-082: kein Fehler, sondern die Erklärung für die fehlende Zusammenfassung.
+            # Ohne diese Zeile sieht der Nutzer nur „Mail without displayable content"
+            # und hält eine verschlüsselte Mail für eine kaputte (HC-33).
+            hints.append("encrypted (PGP/S-MIME) — content not readable by design")
+        if report.id_collision:
+            # HC-10/ADR-079: Die Message-ID dieser Mail war bereits von einer inhaltlich
+            # anderen belegt. Beide werden zugestellt; der Nutzer soll wissen, warum eine
+            # Rechnungsnummer zweimal auftaucht.
+            hints.append("Message-ID collides with an earlier mail")
         failed_auth = [
             f"{key.upper()}={value}"
             for key, value in sorted(report.auth_results.items())
