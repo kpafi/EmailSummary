@@ -487,6 +487,78 @@
   `False`. Begründung: Sonst schaltet ein Angreifer die Warnung ab, indem er den `From`
   zerstört, statt ihn zu fälschen — die teurere Richtung des Fehlers ist hier die stille.
 
+- **Nachtrag (Nachfixrunde NF-1, fünfte Iteration, 2026-09-12, S-1 und S-2):** Beide
+  Punkte sind Nähte, die die vierte Iteration selbst aufgemacht hat — der Deckel galt nur
+  für die gemeldete Instanz, und der neue Rückfall las Text, den er nicht lesen durfte.
+  **(1) S-1, der Deckel gilt für die Klasse.** `_MAX_HEADER_CHARS` sass in
+  `_address_header` und im Betreff-Zweig; `To` lief ungedeckelt durch `getaddresses`
+  (20-MB-`To` = 18,5 s CPU), und — gravierender, weil vorher nie gemessen — die
+  Rück-Serialisierung `msg.obj.as_bytes()` in `_raw_bytes` faltet **jede** Kopfzeile
+  **jedes** Teils neu (`Header.encode`, rund 4 µs je Whitespace-Stück und 50 µs je Zeile):
+  250 000 Kopfzeilen à 80 Byte 13,8 s, ein 20-MB-`name`-Parameter eines Teils 13,9 s,
+  5000 Teile à 4 KB Kopfzeilen 13,0 s, ein 20-MB-`Return-Path` 11,5 s. Verbindlich ist ab
+  jetzt: **Der Rohwert JEDES gelesenen Headers wird an einer einzigen Stelle gedeckelt,
+  und der geparste Baum selbst vor der Serialisierung.** (a) `_raw_header_values` ist die
+  einzige Lesestelle; sie schneidet jeden Wert auf `_MAX_HEADER_CHARS` (4096) und gibt
+  höchstens `_MAX_HEADER_VALUES` (32) Werte je Name heraus. Der Betreff läuft nicht mehr
+  über `msg.subject` (das liest am Deckel vorbei), sondern formgleich mit imap-tools
+  (`decode_header` + `decode_value`) auf dem gedeckelten Wert. (b) `_cap_message_headers`
+  deckelt vor `as_bytes()` den ganzen Baum im Objekt: jeden Wert auf 4096 Zeichen, die
+  Summe auf `_MAX_HEADER_CHARS_PER_MAIL` (256 KiB, gemessen 0,15 s in der dichtesten Form)
+  und die Zahl auf `_MAX_HEADERS_PER_MAIL` (4096, gemessen 0,42 s). Ist ein Gesamtbudget
+  erschöpft, werden die weiteren Teile aus dem Baum entfernt — die Mail ist ab dort
+  abgeschnitten, alles Nachgelagerte (Hash, Sanitizer) sieht denselben konsistenten Baum,
+  das Log meldet `mail_headers_capped` ohne Inhalt. Für gewöhnliche Mails greift keine der
+  Schranken, die Serialisierung bleibt byteidentisch und `content_hash` stabil (Gegenprobe
+  im Test). Die Ersetzung der Kopfzeilenliste greift auf `Message._headers` zu — die einzige
+  Operation, die `email` dafür nicht öffentlich anbietet; `del part[name]` je Name wäre bei
+  vielen verschiedenen Namen quadratisch. Ein Test prüft, dass `get_all` und der Generator
+  die Ersetzung sehen. (c) `RawMail.to_addrs` trägt höchstens `MAX_RECIPIENTS` (200)
+  Adressen. Alle drei Konstanten sind bewusst keine Config-Felder (Begründung wie im
+  vierten Nachtrag: kein Betriebsfall). Messreihe `To` 1/2/4/8 MB, `build_raw_mail`
+  allein: vorher 0,57 / 1,36 / 2,00 / 4,11 s (Form `a@b.example, `) und 0,80 / 1,60 /
+  3,22 / 6,51 s (Form `<a@b`), nachher 0,01 s durchweg. Alle anderen Kopfzeilen (Cc,
+  Authentication-Results, Message-ID, Date, Return-Path, 20 MB): vorher 0,3 bis 11,5 s,
+  nachher 0,00 s. Die Formen mit vielen Kopfzeilen bzw. Teilen: 13,8 / 12,5 / 13,9 /
+  13,0 s → 0,22 / 0,35 / 0,01 / 0,16 s. Was bleibt, ist der Parse durch imap-tools
+  **vor** `build_raw_mail` (1,6 s für eine Million Kopfzeilen) — den kann keine Schranke
+  im eigenen Code abwenden, er ist die Standardbibliothek.
+  **(2) S-2, Regression aus der vierten Iteration.** Der Klammer-Rückfall aus R-9 nahm die
+  erste `<lokalteil@domain>`-Klammer des maskierten Rohtexts — auch aus einem Kommentar
+  `(…)` oder Quoted String `"…"`. Und der 4096-Schnitt aus R-8 trennt beides mitten durch:
+  `From: (<x@bank.example> A×4200) <real@evil.example>` ⇒ `from_domain='bank.example'`,
+  `return_path_mismatch=False`, `reply_to_mismatch=False`; ohne Polsterung genügte ein
+  offener Kommentar. Auf `649a9b8` war beides korrekt. Verbindlich ist ab jetzt der
+  Leitsatz: **Rückfälle lesen nie Kommentar- oder Quoted-String-Inhalt.** (a) Ein kleiner
+  linearer Scanner (`_outside_comments_and_quotes`, RFC 5322 §3.2.2/§3.2.4: Klammertiefe,
+  Backslash-Escapes, Anführungszeichen; eine Streuklammer `)` ist Text) liefert den Text
+  ausserhalb von Kommentaren und Quoted Strings samt Originalpositionen und ob der Header
+  balanciert ist. Der Rückfall greift nur noch, wenn die **erste** spitze Klammer dieses
+  Aussentexts genau eine vollständige `<lokalteil@domain>`-Klammer ist — `<<x@bank.example>…>`
+  liefert damit nichts mehr. (b) Ist der Header unbalanciert — offener Kommentar oder
+  Quoted String, auch als Folge des Deckels —, gilt die Adresse als **unbekannt**, egal was
+  `getaddresses` daraus macht; dann feuert die R-9-Regel (Warnung bei bekannter
+  Gegenseite). Unbekannt-mit-Warnung ist die sichere Richtung; eine fremde Domain zu
+  zeigen die einzige verbotene. (c) Derselbe Fehler in der Löschrichtung sass im
+  `Reply-To`: `RawMail.reply_to` trägt nur die Anzeigeform, und der Sanitizer liest die
+  Antwortadresse daraus mit `parseaddr` — bei `Reply-To: <collect@evil2.example> (x) TOKEN`
+  liest `parseaddr` nichts, und `_reply_to_mismatch` schwieg („kein Reply-To"). Zwei
+  Griffe: `_address_header` setzt die Anzeigeform auch ohne kodierte Wörter neu zusammen,
+  wenn `parseaddr` die geparste Adresse aus dem Rohwert nicht wiederfindet (Selbstprüfung
+  wie bisher); und `_reply_to_mismatch` behandelt einen **vorhandenen, aber unlesbaren**
+  `Reply-To` neben einer bekannten Absenderadresse als Warnfall — Punkt (b) dieses ADR
+  bleibt für zwei Unbekannte, ein fehlender `Reply-To` bleibt kein Mismatch. (d) Orakel für
+  jeden Test ist `email.policy.default` auf demselben Rohheader; das Werkzeug darf davon
+  nur nach „echte Angreiferadresse" oder „unbekannt + Warnung" abweichen. Geprüft für
+  neun unbalancierte/verschachtelte Formen in `From` und `Reply-To`, acht balancierte
+  Gegenproben (verschachtelt, escaped, Kommentar nach der Adresse, Smiley) und die
+  bisherigen HC2-2-/R-9-Tests. Messreihe des neuen Scanners (Regel der vierten Iteration,
+  n = 4096 / 8192 / 16 384 / 32 768 / 262 144 Zeichen, dichteste Form `(a(a(a…`): 0,0005 /
+  0,0009 / 0,0019 / 0,0036 / 0,030 s — linear, und im Betrieb ohnehin auf 4096 Zeichen
+  gedeckelt (`test_s2_scanner_ist_linear`). Bekannte, harmlose Abweichung: `"real@evil.example"@evil.example
+  TOKEN` ergibt über `getaddresses` `evil.exampletoken` — ein Bruchstück der eigenen
+  Adresse des Angreifers im Adressteil, keine fremde Domain und kein Anzeigenamen-Inhalt.
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28
@@ -2710,3 +2782,31 @@ ihre *Erkennung* zu eng.
   2,4 s (unverändert, R-7). Damit hält der Sanitize-Pfad die 3-s-Marke des Auftrags und
   liegt weit unter der 10-s-Zusage aus SPEC-CLI §5/ADR-080. Die Wandzeit einer PDF-lastigen
   Mail steht daneben und wird vom PDF-Zeitbudget begrenzt (ADR-029-Nachtrag, R-11).
+
+- **Nachtrag (Nachfixrunde NF-1, fünfte Iteration, 2026-09-12, S-3):** Die „2,70 s" des
+  dritten Nachtrags waren wieder zu günstig gemessen — das Skript füllte die Anhänge mit
+  URLs (die das Roh-Budget früh abschneidet), nicht mit der dichtesten Form für den
+  **Parser**. Die teuerste Mail innerhalb aller Grenzen ist 25,06 MB: vier `text/html`-Teile
+  über den ganzen Byte-Deckel, zwanzig `text/plain`-Anhänge à 1,17 MB aus lauter
+  Dreibyte-Zeilen `a\r\n` (acht Millionen Zeilen), 476 weitere Teile. Gemessen (dieselbe
+  Maschine, `time.process_time`): `sanitize()` 3,6 bis 5,1 s, davon 1,9 bis 2,3 s allein
+  `email.message_from_bytes` — der zeilenweise `feedparser` der Standardbibliothek, der
+  **vor** jedem Budget läuft — und 1,7 bis 2,2 s die eigenen Pässe (HTML-Konvertierung der
+  vier Teile, Rest unter 0,1 s). Ende-zu-Ende kommen der Parse durch imap-tools beim Abruf
+  (2,5 bis 2,8 s, dieselbe Bibliothek) und `build_raw_mail` (1,3 bis 1,7 s, im Wesentlichen
+  die Rück-Serialisierung der acht Millionen Zeilen) hinzu: rund **8 s CPU je Mail** in
+  dieser Form. Entschieden wurde **gegen** ein Rohbyte-Budget für Textteile vor der
+  Dekodierung: Dekodierung und Zeichensatz-Umsetzung aller zwanzig Anhänge kosten
+  zusammen 0,01 s (`_payload_bytes`/`_decode_text_part`, per Profil belegt) — die Kosten
+  hängen an der **Zeilenzahl im Parser**, und der hat seine Arbeit getan, bevor der
+  Sanitizer den ersten Teil sieht; ein Budget dort brächte nichts und vergrösserte die
+  Fläche. Ein Zeilenzähler vor dem Parse (`mime_bytes.count(b"\n")`, ~10 ms) könnte den
+  Sanitizer-Parse sparen, nicht aber den von imap-tools, und wäre eine neue
+  Fail-closed-Regel auf legitime Eingaben für rund 2 s Ersparnis — verworfen. **Geltende
+  Zusage:** Die 10 s aus SPEC-CLI §5/ADR-080 sind die Befehlslatenz im Wartepfad, die
+  unabhängig von der Mail hält; für die Dauer eines Zyklus gilt „die teuerste Mail
+  innerhalb aller Grenzen kostet rund 8 s CPU Ende-zu-Ende, davon 3,6 bis 5,1 s im
+  Sanitizer, und mehr als die Hälfte davon ist der Parser der Standardbibliothek". Die
+  3-s-Marke des Auftrags gilt weiterhin für die eigenen Pässe des Sanitizers (1,7 bis
+  2,2 s), nicht für die Bibliothek. Die Zahl in SPEC-CLI §5, SECURITY §4 und TESTING §7
+  ist entsprechend korrigiert.

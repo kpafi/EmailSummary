@@ -588,6 +588,9 @@ nachgezogen. Die übrigen Pakete NF-2 … NF-7 aus jener Restliste sind offen.
 | R-9 (vierte Iteration) Kodiertes Wort hinter der Adresse löscht Absenderadresse und Domain; beide Rückweg-Warnungen verstummen | mittel | **gefixt** | `test_ingest_rawmail.py::test_r9_angehaengtes_kodiertes_wort_loescht_die_domain_nicht` (4 Formen), `::test_r9_zweiter_griff_nimmt_die_erste_klammer` | ADR-020 (N, vierte Iteration) |
 | R-10 (vierte Iteration) Klartext-Vorschnitt je Textstück statt je Mail; Teilezahl ohne Schranke | hoch (9,2–10,2 s CPU je Mail) | **gefixt** | `test_sanitize_mail.py::TestR10SchrankenDesAnhangsPfads` (6) | ADR-084 (N, dritter Nachtrag) |
 | R-11 (vierte Iteration) `pdf_timeout_seconds` gilt je Anhang; 20 PDFs ≈ 400 s Wandzeit | hoch (DoS über die Poll-Periode) | **gefixt** | `test_sanitize_mail.py::TestR11PdfZeitbudget` (2), `test_spec_cli.py::test_alle_config_felder_stehen_in_der_referenz` (Feldsatz) | ADR-029 (N, vierte Iteration) |
+| S-1 (fünfte Iteration) Kopfzeilen-Deckel nur für From/Reply-To/Subject; `To` ungedeckelt (20 MB = 18,5 s), Rück-Serialisierung faltet jede Kopfzeile jedes Teils (bis 14 s) | hoch (DoS im Ingest) | **gefixt** | `test_ingest_rawmail.py::test_s1_riesiger_to_header_kostet_keine_zeit`, `::test_s1_messreihe_to_header`, `::test_s1_jeder_gelesene_header_ist_gedeckelt` (10 Header), `::test_s1_empfaengerzahl_ist_gedeckelt`, `::test_s1_viele_kopfzeilen_kosten_keine_zeit`, `::test_s1_kopfzeilen_gesamtbudget_schneidet_den_baum`, `::test_s1_kopfzeilen_ersetzen_ist_sichtbar`, `::test_s1_gewoehnliche_mail_bleibt_byteidentisch` | ADR-020 (N, fünfte Iteration) |
+| S-2 (fünfte Iteration) Regression aus R-9: Klammer-Rückfall liest Kommentar-/Quoted-String-Inhalt; 4096-Schnitt öffnet Kommentare; unlesbarer `Reply-To` schaltet Warnung ab | hoch | **gefixt** | `test_ingest_rawmail.py::test_s2_klammer_in_kommentar_oder_quote_bestimmt_die_domain_nicht` (9 Formen), `::test_s2_dasselbe_im_reply_to` (9), `::test_s2_balancierte_kommentare_und_quotes_bleiben_lesbar` (8), `::test_s2_scanner_kennt_verschachtelung_escapes_und_offene_enden`, `::test_s2_token_hinter_der_klammer_loescht_die_antwortadresse_nicht`, `::test_s2_reply_to_gleich_absender_mit_kommentar_ist_kein_mismatch`, `test_sanitize_mail.py::TestReport::test_s2_*` (2) | ADR-020 (N, fünfte Iteration) |
+| S-3 (fünfte Iteration) Gesamt-Worst-Case zu günstig gemessen (2,70 s); real 3,6–5,1 s, davon ~2 s Standardbibliotheks-Parser | mittel | **gefixt** (Zahl korrigiert, Rohbyte-Budget begründet verworfen) | Messung `sk4_final.py`, Profil (`_payload_bytes`/`_decode_text_part` zusammen 0,01 s) | ADR-084 (N, vierter Nachtrag) |
 
 „(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11**. Fett gesetzte ADRs sind neu.
 
@@ -665,6 +668,44 @@ die Wanduhr, sondern die **vergebenen Zeitlimits** (`[20,0; 10,0]` statt dreimal
 die Zahl der Aufrufe — deterministisch und in Millisekunden, mit einer Uhr-Attrappe statt
 echter Kindprozesse.
 
+**Fünfte Iteration (2026-09-12).** Der Skeptiker der vierten Iteration bestätigte alle
+bisherigen Repros als tot und belegte drei neue Punkte (oben als S-1 bis S-3). S-1: Der
+Deckel aus R-8 galt für die gemeldete Instanz, nicht für die Klasse — `To` lief ungedeckelt
+durch `getaddresses`, und beim Nachmessen aller Lesestellen zeigte sich die eigentlich
+teure: `as_bytes()` in `_raw_bytes` faltet jede Kopfzeile jedes Teils neu (250 000
+Kopfzeilen 13,8 s, 20-MB-Teil-Header 13,9 s, 5000 Teile à 4 KB 13,0 s, 20-MB-`Return-Path`
+11,5 s). Messreihe `To` 1/2/4/8 MB, `build_raw_mail` allein, alt (Stand `649a9b8`) → neu:
+0,57 / 1,36 / 2,00 / 4,11 s → 0,01 s durchweg (Form `a@b.example, `); 0,80 / 1,60 / 3,22 /
+6,51 s → 0,01 s (Form `<a@b`). Die übrigen Formen: 20-MB-`To`-Repro des Skeptikers
+(`sk4_to2.py`) 2,41 / 5,38 / 9,58 / 18,57 s → 0,05 / 0,09 / 0,15 / 0,12 s (der Rest ist
+Serialisierung und Hash des 20-MB-Bodys); Cc / Authentication-Results / Message-ID / Date /
+Return-Path je 20 MB: 1,99 / 2,41 / 0,29 / 4,12 / 11,51 s → 0,00 s; viele Kopfzeilen bzw.
+Teile 13,8 / 12,5 / 13,9 / 13,0 s → 0,22 / 0,35 / 0,01 / 0,16 s. S-2: Orakel ist
+`email.policy.default` auf demselben Rohheader; neun unbalancierte Formen liefern vor dem
+Fix in drei Fällen `bank.example` ohne jede Warnung, nach dem Fix in keinem Fall eine fremde
+Domain (unbekannt + Warnung oder die echte Adresse), acht balancierte Gegenproben
+(verschachtelt, escaped, Kommentar nach der Adresse) bleiben `evil.example`; der neue
+Scanner ist linear (4096 … 262 144 Zeichen: 0,0005 … 0,030 s, `test_s2_scanner_ist_linear`).
+S-3 ist eine Messkorrektur, per Profil begründet: Der Parser der Standardbibliothek trägt 1,9 bis 2,3 s
+der 3,6 bis 5,1 s, die eigenen Pässe 1,7 bis 2,2 s, die Dekodierung der Anhänge 0,01 s.
+
+**Das Muster der Nachfixrunde und die Regel daraus.** Jede der vier vorigen Iterationen hat
+an der Naht, die sie neu gezogen hat, ein Loch geöffnet, das erst der Skeptiker fand: Die
+Maske formgleich zum Dekoder (R-4) brachte das quadratische `.*?` (R-8); der Deckel gegen
+R-8 sass nur bei der gemeldeten Kopfzeile (S-1) und zerschnitt Kommentare, die der neue
+Rückfall aus R-9 dann las (S-2); das Roh-Budget je Textstück (R-6) wurde von der Anhangszahl
+multipliziert (R-10), und die Worst-Case-Zahl wurde dreimal nach oben korrigiert (R-7,
+R-10, S-3). Die Regel ab jetzt, zusätzlich zur Messreihen-Pflicht der vierten Iteration:
+**(1) Jede Schranke wird für die Klasse gebaut, nicht für die Instanz** — wer einen Header
+deckelt, deckelt an der einen Lesestelle alle Header und misst danach jede andere Stelle,
+die dasselbe liest (hier: die Rück-Serialisierung). **(2) Ein Rückfall, der mehr Text liest
+als der Hauptweg, ist verdächtig** — Rückfälle lesen nie Kommentar- oder
+Quoted-String-Inhalt, und im Zweifel ist das Ergebnis „unbekannt + Warnung", nie eine
+Domain. **(3) Der Worst Case wird mit der für den Parser dichtesten Form gemessen**, nicht
+mit der Form, die das eigene Budget am frühesten abschneidet, und der Anteil der
+Standardbibliothek wird getrennt ausgewiesen. **(4) Vor der Abgabe laufen alle
+Repro-Skripte aller Iterationen gegen den alten und den neuen Stand.**
+
 **Offene Frage aus HC2-1 beantwortet.** „Greift der Runner eine solche Mail nach einem
 Neustart erneut auf (Dauer-DoS)?" — Nein. `poll_once` reserviert den Dedupe-Key mit
 `StateDB.claim` **vor** der Verarbeitung (ADR-019), und `claim` committet sofort
@@ -675,6 +716,7 @@ höchstens **einen** Zyklus. Belegt durch
 `test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos`. Ein
 `failed`-Status vor der Sanitize-Stufe ist damit nicht nötig.
 
-**Testzahl nach NF-1:** 1627 (von 1565; 1586 nach der ersten, 1604 nach der zweiten
-Iteration), Laufzeit rund 180 s auf belasteter Maschine — der Zuwachs kommt aus den
-Zeitmessungen der zweiten und dritten Iteration.
+**Testzahl nach NF-1:** 1693 (von 1565; 1586 nach der ersten, 1604 nach der zweiten,
+1627 nach der dritten, 1644 nach der vierten Iteration), Laufzeit rund 145 bis 180 s je
+nach Maschinenlast — der Zuwachs kommt aus den Zeitmessungen der zweiten bis fünften
+Iteration.

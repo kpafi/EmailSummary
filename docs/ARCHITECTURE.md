@@ -54,6 +54,16 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   antwortet `NO` — typisch: `move_processed_to` zeigt auf einen nicht existierenden Ordner)
   wird in `poll_once` je Mail abgefangen, als `imap_postprocess_failed` protokolliert und
   stoppt den Zyklus nicht. Nur `ImapConnectionError` löst Reconnect/Backoff aus.
+- **Kopfzeilen-Deckel (ADR-020-Nachtrag, NF-1 vierte und fünfte Iteration):** Jeder
+  Headerwert wird an **einer** Stelle (`_raw_header_values`) gelesen und dort vor jeder
+  Verarbeitung auf 4096 Zeichen und 32 Werte je Name geschnitten; `to_addrs` trägt höchstens
+  `MAX_RECIPIENTS` (200) Adressen. Vor der Rück-Serialisierung (`mime_bytes`) deckelt
+  `_cap_message_headers` zusätzlich den ganzen geparsten Baum (256 KiB und 4096 Kopfzeilen
+  je Mail; weitere Teile werden entfernt, Log `mail_headers_capped`), weil der Falter der
+  Standardbibliothek sonst je Kopfzeile und Whitespace-Stück zahlt. Gewöhnliche Mails
+  bleiben byteidentisch. Der Adress-Rückfall (R-9) liest nie Kommentar- oder
+  Quoted-String-Inhalt (linearer Scanner nach RFC 5322); ein unbalancierter Header liefert
+  „Adresse unbekannt".
 - **Dedupe-Key:** `Message-ID`, sonst `sha256:` + Hash über From + Date + Subject +
   Body-Präfix (512 Zeichen), Felder `\x00`-getrennt. Das Präfix macht Fallback-Keys von
   echten Message-IDs unterscheidbar.
@@ -163,7 +173,10 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   und hat mit `links.MAX_LINKS_PER_MAIL` (2000) ein eigenes Budget je Mail: Weitere Funde
   werden entfernt (I3 gilt ausnahmslos), erscheinen aber nur noch als `[Link removed]` und
   setzen `links_capped` im Report (Hinweiszeile
-  `too many links, further links removed unlisted`).
+  `too many links, further links removed unlisted`). Was keine dieser Schranken erreicht,
+  ist `email.message_from_bytes` selbst: Der zeilenweise Parser der Standardbibliothek läuft
+  **vor** jedem Budget, und eine 25-MB-Mail aus Dreibyte-Zeilen kostet dort allein rund 2 s
+  (ADR-084-Nachtrag, fünfte Iteration).
 - **Nicht Aufgabe des Sanitizers:** `RawMail.date`/`from_domain` werden unverändert
   übernommen (Vertrauensmodell aus ADR-020); die Nachrichten-Formatierung der
   Anhang-Hinweise („⚠ 2 nicht verarbeitete Anhänge …") ist WP7 (`output/`), auf Basis
@@ -483,7 +496,7 @@ class RawMail(BaseModel, frozen=True):
                                     # Anzeigenamen — HC2-2)
     reply_to: str | None
     return_path_domain: str | None
-    to_addrs: list[str]
+    to_addrs: list[str]           # höchstens MAX_RECIPIENTS (200)
     subject_raw: str                # undekodiert/dekodiert roh
     date: datetime | None
     auth_results_header: str | None # Authentication-Results, roh
@@ -573,7 +586,8 @@ class FailureNotice(BaseModel, frozen=True):
   Ingest/Sanitizer keine Pflicht-Boilerplate erzeugen; identifizierende Felder
   (`dedupe_key`, `from_domain`, `body_text`, `mime_bytes`, …) bleiben Pflichtfelder.
 - **`RawMail`-Konventionen für Unbekanntes (WP2, ADR-020):** `from_domain` ist der
-  Leerstring, wenn im `From`-Header keine `lokalteil@domain`-Adresse steht;
+  Leerstring, wenn im `From`-Header keine `lokalteil@domain`-Adresse steht oder der Header
+  unbalanciert ist (offener Kommentar/Quoted String, S-2);
   `return_path_domain` ist in diesem Fall `None` (damit der Domain-Vergleich in WP6 nicht
   zwei Unbekannte als Treffer wertet). `date` ist `None` bei fehlendem oder unparsbarem
   `Date`-Header. `subject_raw` ist der RFC-2047-dekodierte, aber unsanitisierte Betreff mit

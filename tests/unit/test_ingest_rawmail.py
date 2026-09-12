@@ -772,3 +772,348 @@ def test_r9_zweiter_griff_nimmt_die_erste_klammer() -> None:
     raw = build_raw_mail(make_message(mail))
 
     assert raw.from_domain == "evil.example"
+
+
+# --- NF-1, fünfte Iteration: S-1 (Deckel für JEDE Kopfzeile) und S-2 (Kommentare) --------
+#
+# S-1: Der R-8-Deckel sass nur in `_address_header` und im Betreff-Zweig; `To` lief
+# ungedeckelt durch `getaddresses` (20-MB-`To` = 18,5 s CPU), und die Rück-Serialisierung
+# in `_raw_bytes` faltete jede Kopfzeile jedes Teils neu (250 000 Kopfzeilen = 13,8 s).
+# S-2: Der Klammer-Rückfall aus R-9 las die erste `<…>` auch aus einem Kommentar oder
+# Quoted String — und der 4096-Schnitt aus R-8 zerschnitt beides mitten durch.
+
+
+def _mail_mit_header(name: bytes, value: bytes) -> bytes:
+    """Sonst gewöhnliche Mail mit einem beliebig grossen Header `name`."""
+    return (
+        b"Message-ID: <x@y.example>\r\nFrom: <a@b.example>\r\n"
+        + name
+        + b": "
+        + value
+        + b"\r\nSubject: Hi\r\nDate: Mon, 01 Sep 2026 10:00:00 +0200\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHallo.\r\n"
+    )
+
+
+def _from_domain_oracle(mail: bytes, header: str = "From") -> str:
+    """Orakel: `email.policy.default` — das, was ein modernes Mailprogramm anzeigt."""
+    import email
+    import email.policy
+
+    message = email.message_from_bytes(mail, policy=email.policy.default)
+    try:
+        addresses = message[header].addresses
+    except Exception:
+        return ""
+    if not addresses or not addresses[0].domain:
+        return ""
+    return addresses[0].domain.lower()
+
+
+def test_s1_riesiger_to_header_kostet_keine_zeit() -> None:
+    """Der Repro des Skeptikers: 8 MB `To` (vorher 3,7 bis 4,1 s CPU je Form)."""
+    import time
+
+    from maildigest.ingest.imap_client import MAX_RECIPIENTS
+
+    for value in (b"a@b.example, " * (8 * 1024 * 1024 // 13), b"<a@b" * (2 * 1024 * 1024)):
+        message = make_message(_mail_mit_header(b"To", value))
+        beginn = time.process_time()
+        raw = build_raw_mail(message)
+        dauer = time.process_time() - beginn
+
+        assert dauer < 0.5, dauer
+        assert len(raw.to_addrs) <= MAX_RECIPIENTS
+        assert raw.from_domain == "b.example"
+
+
+def test_s1_messreihe_to_header() -> None:
+    """n/2n/4n/8n = 1/2/4/8 MB `To`: die Zeit hängt nicht mehr an der Grösse."""
+    import time
+
+    zeiten: dict[int, float] = {}
+    for mb in (1, 2, 4, 8):
+        value = b"a@b.example, " * (mb * 1024 * 1024 // 13)
+        message = make_message(_mail_mit_header(b"To", value))
+        beginn = time.process_time()
+        build_raw_mail(message)
+        zeiten[mb] = time.process_time() - beginn
+
+    # Vorher (Stand b7d093d): 0,57 / 1,36 / 2,00 / 4,11 s — linear und ungedeckelt.
+    assert all(dauer < 0.3 for dauer in zeiten.values()), zeiten
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        b"To",
+        b"Cc",
+        b"Message-ID",
+        b"Date",
+        b"Return-Path",
+        b"Authentication-Results",
+        b"Subject",
+        b"From",
+        b"Reply-To",
+        b"List-Unsubscribe",
+    ],
+)
+def test_s1_jeder_gelesene_header_ist_gedeckelt(name: bytes) -> None:
+    """Die Schranke gilt für die Klasse (jede Kopfzeile), nicht für die gemeldete Instanz."""
+    import time
+
+    from maildigest.ingest.imap_client import _MAX_HEADER_CHARS
+
+    value = b"a@b.example, " * (2 * 1024 * 1024 // 13)
+    message = make_message(_mail_mit_header(name, value))
+    beginn = time.process_time()
+    raw = build_raw_mail(message)
+    dauer = time.process_time() - beginn
+
+    assert dauer < 0.5, (name, dauer)
+    # Nichts, was aus einem Header stammt, ist länger als der Deckel.
+    for feld in (raw.message_id, raw.subject_raw, raw.from_addr, raw.reply_to):
+        assert feld is None or len(feld) <= _MAX_HEADER_CHARS
+    assert raw.auth_results_header is None or len(raw.auth_results_header) <= 32 * _MAX_HEADER_CHARS
+    assert len(raw.dedupe_key) <= _MAX_HEADER_CHARS
+    # Auch die Roh-Mail trägt den Riesen-Header nicht mehr (Serialisierung, Hash, Sanitizer).
+    assert len(raw.mime_bytes) < 64 * 1024
+
+
+def test_s1_empfaengerzahl_ist_gedeckelt() -> None:
+    """Höchstens MAX_RECIPIENTS Adressen — auch über mehrere `To:`-Zeilen hinweg."""
+    from maildigest.ingest.imap_client import MAX_RECIPIENTS
+
+    zeile = b", ".join(b"u%d@b.example" % n for n in range(150))
+    mail = (
+        b"Message-ID: <x@y>\r\nFrom: <a@b.example>\r\nTo: "
+        + zeile
+        + b"\r\nTo: "
+        + zeile
+        + b"\r\nSubject: Hi\r\n\r\nHallo.\r\n"
+    )
+    raw = build_raw_mail(make_message(mail))
+
+    assert len(raw.to_addrs) == MAX_RECIPIENTS == 200
+    assert raw.to_addrs[0] == "u0@b.example"
+
+
+def test_s1_viele_kopfzeilen_kosten_keine_zeit() -> None:
+    """250 000 Kopfzeilen à 80 Byte: vorher 13,8 s in `as_bytes()`, jetzt gedeckelt."""
+    import time
+
+    kopf = (b"X-A: " + b"a " * 37 + b"\r\n") * 250_000
+    mail = b"Message-ID: <x@y>\r\nFrom: <a@b.example>\r\n" + kopf + b"Subject: Hi\r\n\r\nHallo.\r\n"
+    message = make_message(mail)
+    beginn = time.process_time()
+    raw = build_raw_mail(message)
+    dauer = time.process_time() - beginn
+
+    assert dauer < 1.0, dauer
+    assert raw.from_domain == "b.example"
+    assert len(raw.mime_bytes) < 512 * 1024
+
+
+def test_s1_kopfzeilen_gesamtbudget_schneidet_den_baum() -> None:
+    """5000 Teile à 4 KB Kopfzeilen (20 MB): vorher 13,0 s; der Baum wird sichtbar gekürzt."""
+    import time
+
+    teile = b"".join(
+        b"--BB\r\nContent-Type: text/plain\r\nX-A: " + b"a " * 2045 + b"\r\n\r\nTeil %d\r\n" % n
+        for n in range(5000)
+    )
+    mail = (
+        b"Message-ID: <x@y>\r\nFrom: <a@b.example>\r\nMIME-Version: 1.0\r\n"
+        b"Content-Type: multipart/mixed; boundary=BB\r\n\r\n" + teile + b"--BB--\r\n"
+    )
+    message = make_message(mail)
+    beginn = time.process_time()
+    raw = build_raw_mail(message)
+    dauer = time.process_time() - beginn
+
+    assert dauer < 1.0, dauer
+    assert len(raw.mime_bytes) < 512 * 1024
+    # Die gekürzte Mail bleibt eine verarbeitbare Mail: der erste Teil ist da.
+    sanitized = MailSanitizer().sanitize(raw)
+    assert "Teil 0" in sanitized.body_text
+    assert "Teil 4999" not in sanitized.body_text
+
+
+def test_s1_kopfzeilen_ersetzen_ist_sichtbar() -> None:
+    """`_cap_message_headers` wirkt auf `get_all` UND auf den Generator (privates `_headers`)."""
+    import email
+
+    from maildigest.ingest.imap_client import _MAX_HEADER_CHARS, _cap_message_headers
+
+    message = email.message_from_bytes(_mail_mit_header(b"X-Gross", b"a" * 10_000))
+    assert _cap_message_headers(message) is True
+    werte = message.get_all("X-Gross")
+    assert werte is not None and len(str(werte[0])) == _MAX_HEADER_CHARS
+    assert len(message.as_bytes()) < 6000
+    assert message["Message-ID"] == "<x@y.example>"
+
+
+def test_s1_gewoehnliche_mail_bleibt_byteidentisch() -> None:
+    """Gegenprobe: Ohne Riesen-Header greift nichts — Serialisierung und Hash unverändert."""
+    import email
+
+    from maildigest.ingest.imap_client import _cap_message_headers
+
+    unberuehrt = email.message_from_bytes(FULL_MAIL).as_bytes()
+    message = email.message_from_bytes(FULL_MAIL)
+    assert _cap_message_headers(message) is False
+    assert message.as_bytes() == unberuehrt
+
+    raw = build_raw_mail(make_message(FULL_MAIL, size=len(FULL_MAIL)))
+    assert raw.mime_bytes == unberuehrt
+    assert raw.content_hash == hashlib.sha256(unberuehrt).hexdigest()
+    assert raw.to_addrs == ["mirror@example.org", "zweite@example.org"]
+    assert raw.subject_raw == "Rechnung Maerz"
+
+
+#: S-2: Formen, in denen die Bank-Klammer in einem Kommentar oder Quoted String steht —
+#: teils erst durch den 4096-Zeichen-Schnitt geöffnet, teils von vornherein offen.
+_PAD = b"A" * 4200
+_KOMMENTAR_FORMEN = [
+    b"(<x@bank.example> " + _PAD + b") <real@evil.example>",
+    b"(<x@bank.example> <real@evil.example>",
+    b"(Bank Support <x@bank.example> " + _PAD + b") <real@evil.example>",
+    b'"<x@bank.example> ' + _PAD + b'" <real@evil.example>',
+    b'"<x@bank.example> <real@evil.example>',
+    b"<real@evil.example> (<x@bank.example> TOKEN",
+    b"(a (<x@bank.example>) b <real@evil.example> TOKEN",
+    b'"' + _PAD + b'<x@bank.example>" <real@evil.example>',
+    b"<<x@bank.example>real@evil.example>",
+]
+
+
+@pytest.mark.parametrize("from_rest", _KOMMENTAR_FORMEN)
+def test_s2_klammer_in_kommentar_oder_quote_bestimmt_die_domain_nicht(from_rest: bytes) -> None:
+    """Rückfälle lesen nie Kommentar- oder Quoted-String-Inhalt; unbalanciert ⇒ unbekannt.
+
+    Orakel ist `email.policy.default` auf demselben Rohheader. Das Werkzeug darf davon
+    nur in die ungefährliche Richtung abweichen: echte Angreiferadresse oder unbekannt
+    **mit** Warnung — nie die fremde Domain aus dem Kommentar. Auf dem Stand b7d093d
+    lieferten die ersten drei Formen `bank.example` mit beiden Warnungen False.
+    """
+    mail = _attack_mail(b"From: " + from_rest)
+    raw = build_raw_mail(make_message(mail))
+    orakel = _from_domain_oracle(mail)
+
+    assert raw.from_domain != "bank.example"
+    assert raw.from_domain in {"", orakel, "evil.example"}
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    if not raw.from_domain:
+        assert report.return_path_mismatch is True
+
+
+@pytest.mark.parametrize("from_rest", _KOMMENTAR_FORMEN)
+def test_s2_dasselbe_im_reply_to(from_rest: bytes) -> None:
+    """Dieselben Formen im `Reply-To` schalten die Antwortadress-Warnung nicht ab."""
+    mail = _attack_mail(
+        b"From: <sender@evil.example>", reply_to=b"Reply-To: " + from_rest + b"\r\n"
+    )
+    raw = build_raw_mail(make_message(mail))
+    report = MailSanitizer().sanitize(raw).sanitization_report
+
+    assert raw.reply_to is not None
+    # Was der Sanitizer als Antwortadresse liest, ist nie die Bank-Adresse aus dem
+    # Kommentar/Quoted String (bei unbalancierten Formen bleibt der Rohtext stehen und
+    # `parseaddr` liest daraus höchstens ein unbrauchbares Bruchstück, nie eine Adresse).
+    assert parseaddr_domain(raw.reply_to) != "bank.example"
+    assert parseaddr_address(raw.reply_to) != "x@bank.example"
+    # Die Antwortadresse ist entweder die echte (real@evil.example ≠ sender@evil.example)
+    # oder unbekannt — in beiden Fällen ist die Warnung an.
+    assert report.reply_to_mismatch is True
+
+
+def parseaddr_address(value: str) -> str:
+    from email.utils import parseaddr
+
+    return parseaddr(value)[1].lower()
+
+
+def parseaddr_domain(value: str) -> str:
+    return parseaddr_address(value).rpartition("@")[2]
+
+
+@pytest.mark.parametrize(
+    "from_rest",
+    [
+        b"Real Name (Firma) <real@evil.example>",
+        b'"Real, Name" <real@evil.example>',
+        b"(a (<x@bank.example>) b) <real@evil.example> TOKEN",
+        b"(\\) <x@bank.example>) <real@evil.example> TOKEN",
+        b'"\\" <x@bank.example>" <real@evil.example> TOKEN',
+        b"<real@evil.example> (<x@bank.example>) TOKEN",
+        b"(<x@bank.example>) <real@evil.example>",
+        b"Real :) <real@evil.example>",
+    ],
+)
+def test_s2_balancierte_kommentare_und_quotes_bleiben_lesbar(from_rest: bytes) -> None:
+    """Gegenprobe: verschachtelt, escaped, Kommentar nach der Adresse — die Domain steht."""
+    mail = _attack_mail(b"From: " + from_rest)
+    raw = build_raw_mail(make_message(mail))
+
+    assert raw.from_domain == "evil.example"
+    assert MailSanitizer().sanitize(raw).sanitization_report.return_path_mismatch is True
+
+
+def test_s2_scanner_kennt_verschachtelung_escapes_und_offene_enden() -> None:
+    """Der lineare Scanner nach RFC 5322 §3.2.2/§3.2.4, direkt geprüft."""
+    from maildigest.ingest.imap_client import _outside_comments_and_quotes
+
+    assert _outside_comments_and_quotes("a (b (c) d) e")[0] == "a  e"
+    assert _outside_comments_and_quotes('a "b (c" d')[0] == "a  d"
+    assert _outside_comments_and_quotes("a (b \\) c) d")[0] == "a  d"
+    assert _outside_comments_and_quotes('a "b \\" c" d')[0] == "a  d"
+    assert _outside_comments_and_quotes("a ) b")[0] == "a ) b"  # Streuklammer: Text
+    assert _outside_comments_and_quotes("a (b")[2] is False
+    assert _outside_comments_and_quotes('a "b')[2] is False
+    assert _outside_comments_and_quotes("a (b (c) d")[2] is False
+    text, positionen, balanciert = _outside_comments_and_quotes("(x) <a@b>")
+    assert (text, balanciert) == (" <a@b>", True)
+    assert text[positionen.index(4)] == "<"
+
+
+def test_s2_token_hinter_der_klammer_loescht_die_antwortadresse_nicht() -> None:
+    """R-9-Form im `Reply-To`: `parseaddr` liest sie nicht, die Warnung muss trotzdem an sein."""
+    mail = _attack_mail(
+        b"From: <sender@evil.example>",
+        reply_to=b"Reply-To: <collect@evil2.example> (x) TOKEN\r\n",
+    )
+    raw = build_raw_mail(make_message(mail))
+    report = MailSanitizer().sanitize(raw).sanitization_report
+
+    assert parseaddr_domain(raw.reply_to or "") == "evil2.example"
+    assert report.reply_to_mismatch is True
+
+
+def test_s2_reply_to_gleich_absender_mit_kommentar_ist_kein_mismatch() -> None:
+    """Gegenprobe: Antwortadresse = Absender, nur mit Kommentar und Token — keine Warnung."""
+    mail = _attack_mail(
+        b"From: <sender@evil.example>",
+        reply_to=b"Reply-To: <sender@evil.example> (Support) TOKEN\r\n",
+    )
+    raw = build_raw_mail(make_message(mail))
+
+    assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch is False
+
+
+def test_s2_scanner_ist_linear() -> None:
+    """Messreihe n/2n/4n/8n für den neuen Scanner im Hot Path (Regel der vierten Iteration)."""
+    import time
+
+    from maildigest.ingest.imap_client import _outside_comments_and_quotes
+
+    zeiten: dict[int, float] = {}
+    for n in (4096, 8192, 16384, 32768):
+        text = "(a" * (n // 2)  # lauter offene Kommentare: die tiefste Verschachtelung
+        beginn = time.process_time()
+        _, _, balanciert = _outside_comments_and_quotes(text)
+        zeiten[n] = time.process_time() - beginn
+        assert balanciert is False
+
+    assert zeiten[32768] < 0.1, zeiten
+    if zeiten[4096] > 0.001:
+        assert zeiten[32768] / zeiten[4096] < 16, zeiten

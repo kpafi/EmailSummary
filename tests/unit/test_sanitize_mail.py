@@ -146,6 +146,18 @@ class TestReport:
         mail = MailSanitizer().sanitize(make_raw(plain_mail("x")))
         assert mail.sanitization_report.reply_to_mismatch is False
 
+    def test_s2_unlesbarer_reply_to_neben_bekanntem_absender_ist_ein_mismatch(self) -> None:
+        """S-2: vorhanden, aber ohne lesbare Adresse — eine Unbekannte neben einer Bekannten."""
+        mail = MailSanitizer().sanitize(make_raw(plain_mail("x"), reply_to="(Support)"))
+        assert mail.sanitization_report.reply_to_mismatch is True
+
+    def test_s2_zwei_unbekannte_bleiben_kein_mismatch(self) -> None:
+        """ADR-020 (b): Absender UND Antwortadresse unbekannt ⇒ kein Treffer."""
+        raw = make_raw(plain_mail("x"), reply_to="(Support)").model_copy(
+            update={"from_addr": "(Niemand)", "from_domain": ""}
+        )
+        assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch is False
+
     def test_return_path_mismatch(self) -> None:
         mail = MailSanitizer().sanitize(
             make_raw(plain_mail("x"), return_path_domain="bulk-sender.example")

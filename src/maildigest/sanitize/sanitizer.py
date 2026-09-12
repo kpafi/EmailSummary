@@ -756,13 +756,16 @@ def _reply_to_mismatch(raw: RawMail) -> bool:
     if not raw.reply_to:
         return False
     reply = parseaddr(raw.reply_to)[1].strip().lower()
-    if not reply:
-        return False
     sender = parseaddr(raw.from_addr)[1].strip().lower()
-    if not sender:
-        # R-9: Eine **unbekannte** Absender-Adresse neben einer bekannten Antwortadresse ist
-        # genau der Fall, für den die Warnung gedacht ist — schweigen hiesse, dass ein
-        # Angreifer die Warnung durch Zerstören des `From` abschalten kann.
+    if not reply and not sender:
+        # ADR-020 (b): zwei Unbekannte sind weder Übereinstimmung noch Mismatch-Beweis.
+        return False
+    if not reply or not sender:
+        # R-9/S-2: **eine** Unbekannte neben einer Bekannten ist genau der Fall, für den
+        # die Warnung gedacht ist — schweigen hiesse, dass ein Angreifer sie abschaltet,
+        # indem er den `From` zerstört (R-9) oder den `Reply-To` so schreibt, dass er
+        # vorhanden, aber für `parseaddr` unlesbar ist (S-2: offener Kommentar, Token
+        # hinter der Klammer). Ein fehlender `Reply-To` bleibt oben kein Mismatch.
         return True
     return reply != sender
 

@@ -50,13 +50,14 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.header import decode_header, make_header
+from email.message import Message
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from types import TracebackType
 from typing import Final, Protocol
 
 from imap_tools import AND, BaseMailBox, ImapToolsError, MailBox, MailMessage
 from imap_tools.errors import MailboxLoginError
-from imap_tools.utils import encode_folder
+from imap_tools.utils import decode_value, encode_folder
 
 from maildigest.config import ImapConfig
 from maildigest.logging_setup import traceback_enabled
@@ -66,6 +67,7 @@ from maildigest.state.db import ClaimResult, MailState, StateDB, dedupe_hash
 
 __all__ = [
     "MAX_BACKOFF_SECONDS",
+    "MAX_RECIPIENTS",
     "ImapAuthError",
     "ImapClient",
     "ImapConnectionError",
@@ -168,18 +170,125 @@ class IngestStats:
 
 
 def _raw_header_values(msg: MailMessage, name: str) -> list[object]:
-    """Alle Werte eines Headers **unverwandelt**; defensiv gegen kaputte Header-Objekte.
+    """Alle Werte eines Headers **unverwandelt**, aber gedeckelt; wirft nie.
+
+    Das ist die **einzige** Stelle, an der ein Headerwert aus der Nachricht gelesen wird
+    (NF-1, fünfte Iteration, S-1): Jeder Wert wird hier — vor jeder Verarbeitung — auf
+    :data:`_MAX_HEADER_CHARS` geschnitten, und es werden höchstens
+    :data:`_MAX_HEADER_VALUES` Werte je Headername herausgegeben. Die vierte Iteration
+    deckelte nur `From`, `Reply-To` und `Subject`; ein 20-MB-`To:` lief ungedeckelt durch
+    `getaddresses` (18,5 s CPU). Eine Schranke gilt für die Klasse, nicht für die
+    gemeldete Instanz — deshalb sitzt sie hier und nicht beim Aufrufer.
 
     Wichtig für HC-23: Enthält ein Header roh-8-bittige Bytes (RFC-Verstoß, in freier
     Wildbahn häufig), liefert `email` dafür ein :class:`email.header.Header`-Objekt. Dessen
     `str()` ersetzt jedes solche Byte durch U+FFFD — die Originalbytes stehen danach
-    nirgends mehr. `decode_header` auf dem **Objekt** bekommt sie dagegen noch.
+    nirgends mehr. `decode_header` auf dem **Objekt** bekommt sie dagegen noch; unterhalb
+    der Obergrenze bleibt das Objekt deshalb unangetastet.
     """
     try:
         values = msg.obj.get_all(name)
     except Exception:  # pragma: no cover - defekte email.Message-Implementierungen
         return []
-    return list(values or [])
+    return [_cap_header_value(value) for value in list(values or [])[:_MAX_HEADER_VALUES]]
+
+
+def _cap_header_value(value: object) -> object:
+    """Schneidet einen einzelnen Rohwert auf :data:`_MAX_HEADER_CHARS` (S-1).
+
+    Unterhalb der Obergrenze kommt der Wert unverändert zurück (auch ein
+    `Header`-Objekt); darüber der Anfang als String. Der Schnitt liegt vor
+    `decode_header`, `getaddresses` und jeder anderen Verarbeitung.
+    """
+    return _cap_header_value_with_length(value)[0]
+
+
+def _cap_header_value_with_length(value: object) -> tuple[object, int]:
+    """Wie :func:`_cap_header_value`, gibt die Zeichenlänge des Ergebnisses mit zurück."""
+    text = str(value)
+    if len(text) > _MAX_HEADER_CHARS:
+        return text[:_MAX_HEADER_CHARS], _MAX_HEADER_CHARS
+    return value, len(text)
+
+
+def _cap_message_headers(message: Message) -> bool:
+    """Deckelt **alle** Kopfzeilen des geparsten MIME-Baums im Objekt selbst (S-1).
+
+    Der Deckel je gelesenem Wert (:func:`_raw_header_values`) schützt die Auswertung;
+    dieser hier schützt die Rück-Serialisierung in :func:`_raw_bytes`, die jede Kopfzeile
+    jedes Teils durch den Falter der Standardbibliothek schickt. Drei Schranken in
+    Dokumentreihenfolge: jeder Wert auf :data:`_MAX_HEADER_CHARS`, die Summe der Zeichen
+    auf :data:`_MAX_HEADER_CHARS_PER_MAIL`, die Zahl auf :data:`_MAX_HEADERS_PER_MAIL`.
+    Ist ein Gesamtbudget erschöpft, behält der laufende Teil die bis dahin gezählten
+    Kopfzeilen, und alle **weiteren Teile werden aus dem Baum entfernt** — die Mail ist
+    ab dort abgeschnitten, sichtbar über das Log, und alles Nachgelagerte (Hash,
+    Sanitizer) sieht denselben, konsistenten Baum. Für gewöhnliche Mails greift keine
+    Schranke: Das Objekt bleibt unberührt, die Serialisierung byteidentisch, der
+    `content_hash` stabil.
+
+    Bewusst iterativ (kein Rekursionsfehler bei tiefer Schachtelung — `build_raw_mail`
+    wirft nie, ADR-020 (e)) und linear in der Zahl der Kopfzeilen: Die Kopfzeilenliste
+    eines Teils wird als Ganzes ersetzt, nicht Eintrag für Eintrag gelöscht (`del
+    part[name]` läuft je Aufruf über alle Kopfzeilen und wäre bei vielen verschiedenen
+    Namen quadratisch).
+
+    Returns:
+        True, wenn irgendetwas gekürzt oder entfernt wurde.
+    """
+    chars_left = _MAX_HEADER_CHARS_PER_MAIL
+    headers_left = _MAX_HEADERS_PER_MAIL
+    changed = False
+    exhausted = False
+    kept_ids: set[int] = set()
+    multiparts: list[Message] = []
+    stack: list[Message] = [message]
+    while stack and not exhausted:
+        part = stack.pop()
+        kept_ids.add(id(part))
+        # `raw_items()` statt `items()`: die gespeicherten Werte selbst (kein Header-Objekt
+        # als Kopie), damit eine Ersetzung die Rohform behält.
+        items = list(part.raw_items())
+        kept: list[tuple[str, object]] = []
+        for name, value in items:
+            if headers_left <= 0 or chars_left <= 0:
+                exhausted = True
+                break
+            capped, length = _cap_header_value_with_length(value)
+            headers_left -= 1
+            chars_left -= length
+            kept.append((name, capped))
+        if len(kept) != len(items) or any(
+            new is not old for (_n, new), (_o, old) in zip(kept, items, strict=False)
+        ):
+            _replace_headers(part, kept)
+            changed = True
+        if part.is_multipart():
+            payload = part.get_payload()
+            if isinstance(payload, list):
+                multiparts.append(part)
+                stack.extend(child for child in reversed(payload) if isinstance(child, Message))
+    if exhausted or stack:
+        for part in multiparts:
+            payload = part.get_payload()
+            if not isinstance(payload, list):
+                continue
+            remaining = [child for child in payload if id(child) in kept_ids]
+            if len(remaining) != len(payload):
+                part.set_payload(remaining)
+                changed = True
+    return changed
+
+
+def _replace_headers(part: Message, headers: list[tuple[str, object]]) -> None:
+    """Ersetzt die komplette Kopfzeilenliste eines Teils in einem Zug (S-1).
+
+    `email.message.Message` hat keine öffentliche Operation dafür; `_headers` ist seit
+    Python 2 die Liste von ``(name, wert)``-Paaren, die `raw_items()`, `items()` und
+    der Generator lesen. `test_s1_kopfzeilen_ersetzen_ist_sichtbar` prüft, dass der
+    Generator und `get_all` das Ergebnis sehen — ändert sich das in einer künftigen
+    Standardbibliothek, fällt der Test.
+    """
+    part._headers = list(headers)  # type: ignore[attr-defined]
 
 
 def _header_values(msg: MailMessage, name: str) -> list[str]:
@@ -229,6 +338,18 @@ def _decode_mime_words(value: str) -> str:
         return str(make_header(decode_header(value)))
     except Exception:  # jede kaputte RFC-2047-Kodierung: Rohwert behalten
         return value
+
+
+def _decode_subject(value: object) -> str:
+    """Betreff dekodieren wie `imap_tools.MailMessage.subject`, aber auf dem gedeckelten Wert.
+
+    Formgleich mit imap-tools (`decode_header` je Teil, `decode_value` mit dem Charset des
+    Teils, `errors="ignore"`), damit sich für gewöhnliche Betreffs nichts ändert (S-1).
+    """
+    return "".join(
+        decode_value(text, charset)
+        for text, charset in decode_header(value)  # type: ignore[arg-type]
+    )
 
 
 def _header(msg: MailMessage, name: str) -> str | None:
@@ -304,9 +425,34 @@ _ENCODED_WORD_END = "?="
 #: jenseits davon ist kein Betriebsfall, sondern ein defekter oder bösartiger.
 _MAX_HEADER_CHARS = 4096
 
-#: Erste `<lokalteil@domain>`-Klammer eines Headers (R-9, zweiter Griff). Beide Teile
+#: Höchstzahl der Werte, die von **einem** Headernamen gelesen werden (S-1). Ein
+#: mehrfach vorkommender Header (`Authentication-Results` je Hop, versehentlich doppelte
+#: `To:`) bleibt damit vollständig; eine Mail aus einer Million winziger `To:`-Zeilen
+#: nicht. Wie `_MAX_HEADER_CHARS` bewusst kein Config-Feld.
+_MAX_HEADER_VALUES = 32
+
+#: Höchstzahl der Empfänger in `RawMail.to_addrs` (S-1). Weitere werden verworfen; das
+#: Feld dient der Anzeige und dem Vergleich, nicht der Zustellung.
+MAX_RECIPIENTS = 200
+
+#: Gesamtbudget an Kopfzeilen-**Zeichen** je Mail über alle MIME-Teile (S-1). Grund ist
+#: die Rück-Serialisierung in :func:`_raw_bytes`: `Message.as_bytes()` faltet jede
+#: Kopfzeile neu (`Header.encode`, rund 4 µs je Whitespace-Stück) — ein 20-MB-`name`-
+#: Parameter eines Teils kostete 13,5 s, und der Deckel je Wert allein hilft nicht, weil
+#: ein Angreifer ihn mit der Zahl der Kopfzeilen und Teile multipliziert. Gemessen:
+#: 256 KiB der dichtesten Form (`a a a …`) kosten 0,15 s. Reale Mails liegen weit
+#: darunter (Top-Level 2 bis 20 KB, ein Teil einige hundert Byte).
+_MAX_HEADER_CHARS_PER_MAIL = 256 * 1024
+
+#: Gesamtbudget an Kopfzeilen-**Zahl** je Mail über alle MIME-Teile (S-1): rund 50 µs
+#: Serialisierung je Kopfzeile, 250 000 Kopfzeilen à 80 Byte kosteten 13 s. 4096 sind
+#: acht je Teil bei voller Teilezahl (`sanitizer.MAX_MIME_PARTS` = 500); gemessen 0,42 s.
+_MAX_HEADERS_PER_MAIL = 4096
+
+#: `<lokalteil@domain>`-Klammer eines Headers (R-9, zweiter Griff). Beide Teile
 #: schliessen `@`, `<`, `>` und Whitespace aus — das Muster ist damit eindeutig und
-#: linear, es kann nicht zurücksetzen.
+#: linear, es kann nicht zurücksetzen. Seit S-2 wird es nur noch mit `match` an der
+#: **ersten** spitzen Klammer des kommentar- und quote-freien Texts angesetzt.
 _BRACKET_ADDRESS_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
 
 #: Stamm der Platzhalter, die kodierte Wörter beim Adress-Parsen vertreten (HC2-2-Rest).
@@ -360,13 +506,73 @@ def _unmask_encoded_words(text: str, words: dict[str, str]) -> str:
     return text
 
 
+def _outside_comments_and_quotes(text: str) -> tuple[str, list[int], bool]:
+    """Zeichen eines Headers **ausserhalb** von Kommentaren und Quoted Strings (S-2).
+
+    Linearer Scanner nach RFC 5322 §3.2.2 (Kommentare, verschachtelt, mit Quoted-Pair)
+    und §3.2.4 (Quoted Strings mit Quoted-Pair). Innerhalb eines Kommentars öffnet `(`
+    eine weitere Ebene, `\\x` schützt jedes Zeichen; innerhalb eines Quoted Strings zählt
+    nur `"` (und `\\x`). Ein schliessendes `)` ohne offenen Kommentar ist gewöhnlicher
+    Text — es kann nichts verbergen.
+
+    Returns:
+        ``(text_aussen, positionen, balanciert)`` — `positionen[i]` ist der Index des
+        `i`-ten Aussenzeichens im Original, `balanciert` ist False, wenn am Ende ein
+        Kommentar oder Quoted String offen ist (etwa weil der 4096-Zeichen-Deckel ihn
+        zerschnitten hat).
+    """
+    chars: list[str] = []
+    positions: list[int] = []
+    depth = 0
+    in_quote = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_quote = False
+            continue
+        if depth:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            continue
+        if char == '"':
+            in_quote = True
+            continue
+        if char == "(":
+            depth = 1
+            continue
+        chars.append(char)
+        positions.append(index)
+    return "".join(chars), positions, not in_quote and depth == 0
+
+
 def _first_address(text: str, *, placeholder_stem: str = "") -> tuple[str, str]:
     """Erste Angabe eines Adress-Headers als ``(name, adresse)`` (Rohwert-Parse).
 
     Ein Platzhalter im Adressteil bedeutet, dass dort ein kodiertes Wort stand — also ein
     Name, keine Adresse (HC2-2-Rest). Solche Angaben werden übersprungen; sie dürfen die
     Absender-Domain weder liefern noch löschen.
+
+    S-2: Ist der Header unbalanciert (offener Kommentar oder Quoted String — auch als
+    Folge des 4096-Zeichen-Deckels), gilt die Adresse als **unbekannt**, egal was
+    `getaddresses` daraus macht: Ein offener Kommentar kann eine beliebige
+    `<adresse>` tragen, und `getaddresses` liest ihn bei fehlender Klammer als Adressteil.
+    Unbekannt ist die sichere Richtung — der Sanitizer warnt dann (R-9-Regel), statt eine
+    fremde Domain zu zeigen.
     """
+    outside, positions, balanced = _outside_comments_and_quotes(text)
+    if not balanced:
+        return " ".join(text.split()), ""
     pairs = getaddresses([text])
     if not pairs:
         return "", ""
@@ -382,17 +588,22 @@ def _first_address(text: str, *, placeholder_stem: str = "") -> tuple[str, str]:
     # R-9: `getaddresses` verwirft den Adressteil komplett, sobald hinter der spitzen
     # Klammer noch ein Token steht — `<attacker@evil.example> MDENCWORD0` liefert
     # `[('', '')]`. Die Absender-Domain verschwände damit, und das Schutzziel von HC2-2
-    # nennt „löschen" ausdrücklich neben „ersetzen". Zweiter, konservativer Griff auf
-    # denselben (maskierten) Text: die **erste** `<lokalteil@domain>`-Klammer. Bewusst die
-    # erste und nicht die letzte — `email.policy.default` nimmt ebenfalls die erste
-    # Angabe, und die letzte zu nehmen hiesse, dass ein angehängtes `<info@bank.example>`
-    # die Domain doch wieder übernimmt.
-    bracketed = _BRACKET_ADDRESS_RE.search(text)
+    # nennt „löschen" ausdrücklich neben „ersetzen". Zweiter, konservativer Griff: die
+    # **erste** spitze Klammer des Texts **ausserhalb** von Kommentaren und Quoted Strings
+    # (S-2: Rückfälle lesen nie Kommentar- oder Quoted-String-Inhalt), und nur, wenn genau
+    # dort eine vollständige `<lokalteil@domain>`-Klammer steht — `<<x@bank.example>…>`
+    # liefert damit nichts. Bewusst die erste und nicht die letzte — `email.policy.default`
+    # nimmt ebenfalls die erste Angabe, und die letzte zu nehmen hiesse, dass ein
+    # angehängtes `<info@bank.example>` die Domain doch wieder übernimmt.
+    first_bracket = outside.find("<")
+    bracketed = (
+        _BRACKET_ADDRESS_RE.match(outside, first_bracket) if first_bracket >= 0 else None
+    )
     if bracketed is not None:
         address = bracketed.group(1)
         local, at_sign, domain = address.rpartition("@")
         if at_sign and local and domain.strip().strip("<>[]").rstrip("."):
-            name = text[: bracketed.start()]
+            name = text[: positions[first_bracket]]
             return " ".join(name.split()), address
     if candidates:
         return candidates[0]
@@ -441,27 +652,32 @@ def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
     masked, encoded_words, stem = _mask_encoded_words(raw_text)
     display, address = _first_address(masked, placeholder_stem=stem)
     if not encoded_words:
-        # Kein kodiertes Wort: Es gibt nichts zu reparieren, und jede Normalisierung des
-        # Rohwerts wäre nur eine weitere Fehlerquelle.
-        return raw_text, address
+        if not address or parseaddr(raw_text)[1] == address:
+            # Kein kodiertes Wort: Es gibt nichts zu reparieren, und jede Normalisierung
+            # des Rohwerts wäre nur eine weitere Fehlerquelle.
+            return raw_text, address
+        # S-2: Die Adresse steht fest, aber `parseaddr` liest sie aus dem Rohwert nicht
+        # heraus (Token oder Kommentar hinter der Klammer, R-9-Form). Der Sanitizer
+        # vergleicht `from_addr` und `reply_to` genau mit `parseaddr` — bliebe der Rohwert
+        # stehen, hielte er die Antwortadresse für unbekannt und schwiege. Deshalb die
+        # Anzeigeform so zusammensetzen, dass `parseaddr` nachweislich diese Adresse
+        # zurückgibt (Selbstprüfung in `_compose_display_address`).
+        return _compose_display_address(_clean_display_name(display), address), address
     display = _unmask_encoded_words(display, encoded_words)
     decoded = _decode_mime_words(display) if display else ""
     return _compose_display_address(_clean_display_name(decoded), address), address
 
 
 def _capped_raw_header(value: object) -> str:
-    """Rohwert eines Headers, auf :data:`_MAX_HEADER_CHARS` geschnitten (R-8, Schicht a).
+    """Rohwert eines anzeigenamentragenden Headers, entzerrt und gefaltet (R-8, Schicht a).
 
-    Der Schnitt liegt **vor** jeder Verarbeitung — auch vor der 8-Bit-Vorentzerrung, denn
-    die ruft `decode_header`, und das ist bei kaputten kodierten Wörtern quadratisch. Ein
-    Header jenseits der Obergrenze ist ohnehin defekt oder bösartig; sein Anfang genügt,
-    um Adresse und Anzeigename zu bestimmen, und ist das Einzige, was ein Mailprogramm
-    davon sinnvoll anzeigen würde.
+    Der Deckel auf :data:`_MAX_HEADER_CHARS` liegt seit S-1 in :func:`_raw_header_values`
+    — also **vor** jeder Verarbeitung, auch vor der 8-Bit-Vorentzerrung, die selbst
+    `decode_header` ruft (bei kaputten kodierten Wörtern quadratisch). Hier kommt nur
+    noch ein bereits gedeckelter Wert an; ein Header jenseits der Obergrenze ist ohnehin
+    defekt oder bösartig, sein Anfang genügt, um Adresse und Anzeigename zu bestimmen.
     """
-    text = str(value)
-    if len(text) > _MAX_HEADER_CHARS:
-        return _collapse(text[:_MAX_HEADER_CHARS])
-    return _collapse(_predecode_eight_bit(value))
+    return _collapse(_predecode_eight_bit(_cap_header_value(value)))
 
 
 def _domain_of(address: str) -> str:
@@ -567,22 +783,25 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         Die `RawMail` mit `dedupe_key` = Message-ID, sonst Fallback-Hash aus
         From + Date + Subject + Body-Präfix.
     """
+    try:
+        if _cap_message_headers(msg.obj):
+            # Kein Mail-Inhalt im Log (I5): nur die Tatsache.
+            logger.info("mail_headers_capped")
+    except Exception:  # pragma: no cover - defekte email.Message-Implementierungen
+        pass
     message_id = _header(msg, "Message-ID")
     from_addr, from_address = _address_header(msg, "From")
     date_str = _header(msg, "Date") or ""
 
     try:
         subject_values = _raw_header_values(msg, "Subject")
-        if subject_values and len(str(subject_values[0])) > _MAX_HEADER_CHARS:
-            # R-8: derselbe Deckel wie bei `From`/`Reply-To`. `msg.subject` ruft
-            # `decode_header` auf dem vollen Rohwert, und das ist bei kaputten kodierten
-            # Wörtern quadratisch (160 KiB Betreff = 8,6 s CPU). Sichtbar ändert der
-            # Schnitt nichts: Der Sanitizer kürzt den Betreff ohnehin auf 300 Zeichen.
-            subject_raw = _collapse(
-                _decode_mime_words(_collapse(str(subject_values[0]))[:_MAX_HEADER_CHARS])
-            )
-        else:
-            subject_raw = _collapse(msg.subject)
+        # R-8/S-1: nicht `msg.subject` — das liest den **vollen** Rohwert an der
+        # Obergrenze vorbei und ruft `decode_header` darauf (bei kaputten kodierten
+        # Wörtern quadratisch, 160 KiB Betreff = 8,6 s CPU). Hier läuft exakt der
+        # Dekodierweg von imap-tools (`decode_header` + `decode_value`), aber auf dem
+        # gedeckelten Wert. Sichtbar ändert der Deckel nichts: Der Sanitizer kürzt den
+        # Betreff ohnehin auf 300 Zeichen.
+        subject_raw = _collapse(_decode_subject(subject_values[0])) if subject_values else ""
     except Exception:  # kaputte RFC-2047-Kodierung im Betreff
         subject_raw = _header(msg, "Subject") or ""
 
@@ -590,11 +809,13 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         from_addr, date_str, subject_raw, _body_prefix(msg)
     )
 
+    # S-1: Die Werte sind in `_raw_header_values` bereits gedeckelt; die Empfängerzahl
+    # zusätzlich, damit `to_addrs` nie mehr als eine Handvoll Kilobyte trägt.
     to_addrs = [
         email_address
         for _name, email_address in getaddresses(_header_values(msg, "To"))
         if email_address
-    ]
+    ][:MAX_RECIPIENTS]
 
     return_path = _header(msg, "Return-Path")
     auth_results = _header_values(msg, "Authentication-Results")

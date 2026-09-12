@@ -150,6 +150,28 @@ docs/TESTRUNDE-2.md):
   über **alle** PDFs einer Mail; ist es aufgebraucht, gelten die übrigen Anhänge als nicht
   verarbeitet und werden in der Nachricht als solche genannt. Gemessen: drei PDF-Anhänge
   60 s → 30 s (ADR-029).
+- **Nachgezogen (fünfte Iteration):** Der Kopfzeilen-Deckel aus der vierten Iteration galt
+  nur für Absender, Antwortadresse und Betreff. Eine Mail mit einem riesigen `To:`-Header
+  (20 MB) hielt den Abruf 18 Sekunden an, und die interne Neu-Serialisierung der Mail
+  kostete bei sehr vielen oder sehr langen Kopfzeilen bis zu 14 Sekunden. Jetzt wird
+  **jede** gelesene Kopfzeile an einer einzigen Stelle auf 4096 Zeichen geschnitten, die
+  Kopfzeilen der ganzen Mail sind als Gesamtbudget gedeckelt, und `to_addrs` trägt
+  höchstens 200 Empfänger. Dieselben Mails kosten nun keine messbare Zeit; gewöhnliche
+  Mails bleiben byteidentisch (HC2-1, ADR-020).
+- **Nachgezogen (fünfte Iteration):** Die Reparatur aus der vierten Iteration konnte eine
+  Bank-Adresse aus einem Kommentar oder Anführungszeichen im Absender-Header als
+  Absender-Domain übernehmen und dabei beide Warnungen abschalten — vor allem, wenn der
+  4096-Zeichen-Schnitt einen Kommentar mitten durchtrennte. Kommentare und Anführungszeichen
+  werden jetzt vor der Suche entfernt (mit Verschachtelung und Escapes), ein
+  unvollständiger Header gilt als „Absender unbekannt" und löst die Rückweg-Warnung aus.
+  Ausserdem konnte eine Antwortadresse mit angehängtem Text die Warnung „abweichende
+  Antwortadresse" zum Schweigen bringen; ein vorhandener, aber unlesbarer `Reply-To` gilt
+  jetzt als Warnfall (HC2-2, ADR-020).
+- **Nachgezogen (fünfte Iteration):** Die teuerste zulässige Mail kostet nicht 2,7, sondern
+  3,6 bis 5,1 Sekunden CPU in der Sanitisierung — mehr als die Hälfte davon im MIME-Parser
+  der Standardbibliothek, den kein eigenes Budget erreicht. Die Zahl ist in der Dokumentation
+  korrigiert; an der Zusage von zehn Sekunden für den Befehlskanal ändert sich nichts
+  (HC2-1, ADR-084).
 
 ### Geändert
 - Alle nutzersichtbaren Texte sind englisch; Docstrings und `docs/` bleiben deutsch.

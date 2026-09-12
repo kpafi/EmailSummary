@@ -570,8 +570,9 @@ Alle Felder mit ihren Defaults:
 **Was die Zusage „höchstens 10 s" bedeutet.** Sie gilt der **Befehlslatenz im Wartepfad**
 (ADR-080): Ein `/digest` oder `/status` aus dem Chat wartet höchstens zehn Sekunden auf eine
 Reaktion. Sie ist keine Zusage über die Dauer eines Abrufzyklus. Die reine Sanitisierung der
-teuersten Mail, die alle Grenzen oben überhaupt zulassen, kostet gemessen rund 2,7 s
-(ADR-084-Nachtrag, vierte Iteration); eine PDF-lastige Mail kann den Zyklus zusätzlich bis
+teuersten Mail, die alle Grenzen oben überhaupt zulassen, kostet gemessen 3,6 bis 5,1 s CPU,
+davon rund die Hälfte der MIME-Parser der Standardbibliothek; Ende-zu-Ende mit Abruf-Parse
+und Roh-Serialisierung rund 8 s (ADR-084-Nachtrag, fünfte Iteration); eine PDF-lastige Mail kann den Zyklus zusätzlich bis
 zu `pdf_time_budget_seconds` verlängern, weil dort ein Fremdparser im Subprozess läuft
 (ADR-029-Nachtrag). Der Befehlskanal bleibt in beiden Fällen innerhalb seiner zehn Sekunden,
 weil er zwischen den Abschnitten der Wartezeit bedient wird.
