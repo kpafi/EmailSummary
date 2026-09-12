@@ -596,10 +596,10 @@ class MailSanitizer:
     def _from_display(
         self, raw: RawMail, links: LinkCollector, state: _WalkState
     ) -> str:
-        display, address = parseaddr(raw.from_addr)
+        display, address = _safe_parseaddr(raw.from_addr)
         if display:
             return self._sanitize_header(display, links, state, _MAX_DISPLAY_CHARS)
-        cleaned, removed = clean_text(address or raw.from_addr)
+        cleaned, removed = clean_text(address or raw.from_address or raw.from_addr)
         state.control_chars_removed += removed
         collapsed = " ".join(cleaned.split())
         return collapsed[:_MAX_DISPLAY_CHARS] or "(unknown sender)"
@@ -759,12 +759,30 @@ def _decode_text_part(part: Message) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _safe_parseaddr(text: str) -> tuple[str, str]:
+    """`parseaddr` ohne Ausnahme: ``("", "")``, wenn der Legacy-Parser scheitert (O-3)."""
+    try:
+        return parseaddr(text)
+    except Exception:
+        return "", ""
+
+
 def _reply_to_mismatch(raw: RawMail) -> bool:
-    """Reply-To weicht vom From ab (deterministisches Kritiker-Signal, F-CRIT-3)."""
+    """Reply-To weicht vom From ab (deterministisches Kritiker-Signal, F-CRIT-3).
+
+    Verglichen werden die Adressen, die der RFC-5322-Parser beim Ingest gelesen hat
+    (`from_address`, `reply_to_address`, O-3); `parseaddr` ist nur noch Rückfall für
+    RawMails ohne diese Felder. Der strikte `parseaddr` liest aus `"a["@evil.example`
+    nichts — zwei „Unbekannte" hätten die Warnung stumm geschaltet, obwohl das
+    Mailprogramm die Antwort an evil.example richtet.
+    """
     if not raw.reply_to:
         return False
-    reply = parseaddr(raw.reply_to)[1].strip().lower()
-    sender = parseaddr(raw.from_addr)[1].strip().lower()
+    reply_parsed = raw.reply_to_address
+    if reply_parsed is None:
+        reply_parsed = _safe_parseaddr(raw.reply_to)[1]
+    reply = reply_parsed.strip().lower()
+    sender = (raw.from_address or _safe_parseaddr(raw.from_addr)[1]).strip().lower()
     if not reply and not sender:
         # ADR-020 (b): zwei Unbekannte sind weder Übereinstimmung noch Mismatch-Beweis.
         return False

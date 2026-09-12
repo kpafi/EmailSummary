@@ -56,6 +56,12 @@ class RawMail(BaseModel):
     from_addr: str
     from_domain: str
     reply_to: str | None = None
+    #: Adresse (`addr_spec`) aus dem RFC-5322-Parser, leer wenn unbekannt (O-3). Der
+    #: Sanitizer vergleicht damit — nicht mit einem zweiten `parseaddr` auf `from_addr`,
+    #: das bei quotierten Lokalteilen (`"a["@…`) nichts liest und die Warnung stumm schaltete.
+    from_address: str = ""
+    #: Dasselbe für `Reply-To`: ``None`` = kein Header, ``""`` = vorhanden, aber unlesbar.
+    reply_to_address: str | None = None
     return_path_domain: str | None = None
     to_addrs: list[str] = Field(default_factory=list)
     subject_raw: str = ""

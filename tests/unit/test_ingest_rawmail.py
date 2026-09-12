@@ -1279,6 +1279,10 @@ _O3_FORMEN = [
     # Legacy-Parser (parseaddr/getaddresses) rekursiv: darf nur „unlesbar" ergeben
     b"g:" * 1000,
     b"(" * 1500 + b"g:" * 200,
+    # Quotierter Lokalteil mit '[' (dritter Skeptiker): der strikte parseaddr liest nichts
+    b'"a["@evil.example',
+    b'Bank <"a["@evil.example>',
+    b'"[]"@evil.example',
 ]
 
 
@@ -1456,3 +1460,52 @@ def test_o3_rekursiver_legacy_parser_ergibt_nur_unlesbar() -> None:
     raw = build_raw_mail(MailMessage.from_bytes(mail))  # darf nicht werfen (ADR-020 (e))
     assert raw.from_domain == ""
     assert raw.to_addrs == []
+
+
+def test_o3_quotierter_lokalteil_mit_klammer_haelt_die_reply_to_warnung() -> None:
+    """Dritter Skeptiker: `"a["@bank.example` liest `parseaddr` (3.13, strict) nicht — der
+    Sanitizer vergleicht deshalb die Adressen des RFC-Parsers aus dem Ingest."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    mail = (
+        b"Return-Path: <x@bank.example>\r\nMessage-ID: <br@y>\r\n"
+        b'From: "a["@bank.example\r\nReply-To: "a["@evil.example\r\n'
+        b"To: m@example.org\r\nSubject: Hi\r\nDate: Mon, 01 Sep 2026 10:00:00 +0200\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nHallo.\r\n"
+    )
+    raw = build_raw_mail(MailMessage.from_bytes(mail))
+    assert raw.from_domain == "bank.example"
+    assert raw.from_address == '"a["@bank.example'
+    assert raw.reply_to_address == '"a["@evil.example'
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    assert report.reply_to_mismatch
+    assert not report.return_path_mismatch
+
+
+def test_o3_reply_to_address_felder() -> None:
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(b"Hans <h@firma.example>")))
+    assert raw.from_address == "h@firma.example" and raw.reply_to_address is None
+    reply_mail = _o3_mail(b"Hans <h@firma.example>", field=b"Reply-To")
+    raw = build_raw_mail(MailMessage.from_bytes(reply_mail))
+    assert raw.reply_to_address == "h@firma.example"
+    unreadable = _o3_mail(b"=?utf-8?Q?<x@bank.example>?=", field=b"Reply-To")
+    raw = build_raw_mail(MailMessage.from_bytes(unreadable))
+    assert raw.reply_to == "(unreadable)" and raw.reply_to_address == ""
+
+
+def test_o3_outlook_form_zeigt_alle_namen() -> None:
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+
+    outlook = _o3_mail(b"Mueller, Hans, Peter <h@firma.example>")
+    raw = build_raw_mail(MailMessage.from_bytes(outlook))
+    assert raw.from_domain == "firma.example"
+    assert raw.from_addr.startswith("Mueller Hans Peter")

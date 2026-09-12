@@ -588,8 +588,11 @@ def _parse_address_header(raw_text: str) -> tuple[str, str, str, bool]:
         outlook_form = raw_text.count("@") == 1 and raw_text.count("<") <= 1
         if len(with_address) == 1 and outlook_form:
             chosen = with_address[0]
-            names = [entry.display_name for entry in addresses if entry.display_name]
-            display = " ".join(names[: addresses.index(chosen) + 1])
+            # Die Wörter vor der Adresse legt der Parser als Lokalteile ohne Domain ab
+            # (`Mueller` in `Mueller, Hans <h@…>`), nicht als Anzeigenamen — beides zählt.
+            upto = addresses[: addresses.index(chosen) + 1]
+            parts = [entry.display_name or entry.username or "" for entry in upto]
+            display = " ".join(part for part in parts if part)
         else:
             return display, "", "", True
     return display, chosen.addr_spec, chosen.domain, True
@@ -927,7 +930,8 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
     except Exception:  # pragma: no cover - defekte email.Message-Implementierungen
         pass
     message_id = _header(msg, "Message-ID")
-    from_addr, _from_address, from_domain = _address_header(msg, "From")
+    from_addr, from_address, from_domain = _address_header(msg, "From")
+    reply_to_display, reply_to_address, _reply_to_domain = _address_header(msg, "Reply-To")
     date_str = _header(msg, "Date") or ""
 
     try:
@@ -969,7 +973,9 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         from_addr=from_addr,
         # HC2-2: aus der **roh** geparsten Adresse, nie aus dem (dekodierten) Anzeigenamen.
         from_domain=from_domain.lower(),
-        reply_to=_address_header(msg, "Reply-To")[0] or None,
+        from_address=from_address,
+        reply_to=reply_to_display or None,
+        reply_to_address=reply_to_address if reply_to_display else None,
         return_path_domain=_return_path_domain(return_path),
         to_addrs=to_addrs,
         subject_raw=subject_raw,

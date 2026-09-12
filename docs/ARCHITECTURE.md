@@ -510,6 +510,8 @@ class RawMail(BaseModel, frozen=True):
     from_domain: str                # aus der roh geparsten Adresse, lowercase (nie aus dem
                                     # Anzeigenamen — HC2-2)
     reply_to: str | None
+    from_address: str               # addr_spec aus dem RFC-5322-Parser, "" = unbekannt (O-3)
+    reply_to_address: str | None    # dito für Reply-To; None = kein Header, "" = unlesbar
     return_path_domain: str | None
     to_addrs: list[str]           # höchstens MAX_RECIPIENTS (200)
     subject_raw: str                # undekodiert/dekodiert roh

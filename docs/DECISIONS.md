@@ -720,6 +720,16 @@ ein `@` und höchstens ein `<`, zählt die einzige Angabe mit Adresse — `<@evi
 <x@bank.example>` mit zwei `@` bleibt „unbekannt". Tests: sechs Quoting-Formen und zwei Rekursionsformen
 im Orakel-Test, elf gutartige Praxis-Header ohne Warnung.
 
+**Nachtrag (Release 0.2.0, 2026-09-12, O-3 vierter Griff):** Der dritte Skeptiker
+bestätigte die Domain-Regel über 12 000 Zufallsformen, fand aber ein Signalloch: Bei
+einem quotierten Lokalteil mit `[` (`"a["@evil.example`) liefert der RFC-Parser Adresse
+und Domain, der strikte `parseaddr` (Python 3.13) im Sanitizer liest aber nichts — zwei
+„Unbekannte" galten als kein Mismatch, die Reply-To-Warnung schwieg. `RawMail` trägt
+deshalb `from_address` und `reply_to_address` (die `addr_spec` des Parsers), und der
+Sanitizer vergleicht diese statt `from_addr`/`reply_to` erneut zu parsen; `parseaddr`
+bleibt Rückfall und läuft abgesichert. Grundsatz: Eine Adresse wird genau einmal gelesen —
+vom RFC-Parser beim Ingest — und danach nur noch weitergereicht.
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28
