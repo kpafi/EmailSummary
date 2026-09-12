@@ -1264,6 +1264,10 @@ _O3_FORMEN = [
     b"\\=?utf-8?Q?info@bank.example,?= <real@evil.example>",
     b"g:=?utf-8?Q?info@bank.example,?= <real@evil.example>;",
     b"=?utf-8?Q?a?==?utf-8?Q?info@bank.example,?= <real@evil.example>",
+    # 4096-Deckel mitten in der Adresse (o3_fuzz.py des Skeptikers): nie eine Scheindomain
+    b"A" * 4090 + b" =?utf-8?Q?<x@bank.example>?= <real@evil.example>",
+    b"a" * 4090 + b" =?utf-8?Q?x?= <x@bank.example>",
+    b"a" * 4080 + b" <real@evil.example>",
 ]
 
 

@@ -590,6 +590,12 @@ def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
     values = _raw_header_values(msg, name)
     if not values:
         return "", ""
+    if len(str(values[0])) >= _MAX_HEADER_CHARS:
+        # O-3: Ein Adress-Header am 4096-Zeichen-Deckel ist abgeschnitten (die Werte im
+        # Baum sind bereits gedeckelt, S-1). Aus dem Rest liest der Parser sonst eine
+        # Scheindomain wie `bank.examp`; kein echter `From` ist 4 KB lang. Unlesbar heisst:
+        # Domain unbekannt, Warnung feuert.
+        return _UNREADABLE_HEADER, ""
     raw_text = _capped_raw_header(values[0])
     if not raw_text:
         return "", ""
