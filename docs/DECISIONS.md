@@ -730,6 +730,16 @@ Sanitizer vergleicht diese statt `from_addr`/`reply_to` erneut zu parsen; `parse
 bleibt Rückfall und läuft abgesichert. Grundsatz: Eine Adresse wird genau einmal gelesen —
 vom RFC-Parser beim Ingest — und danach nur noch weitergereicht.
 
+**Nachtrag (Release 0.2.0, 2026-09-12, O-3 fünfter Griff):** Der vierte Skeptiker
+bestätigte die Regeln über 20 000 Formen ohne Regression und nannte drei vorbestehende
+Punkte: (1) `Reply-To: x@bank.example, y@evil.example` — nur die erste Adresse wurde
+verglichen, Mailprogramme antworten an alle; `RawMail.reply_to_addresses` trägt jetzt
+alle Adressen des Parsers, ein Mismatch entsteht, sobald eine abweicht. (2) Der
+Adress-Rückfall der Absenderanzeige übersprang Link-Scrub und Marker-Neutralisierung;
+Anzeigename und Adresse laufen jetzt durch denselben Pfad, und eine Anzeige beginnt nie
+mit `/` oder `:` (sonst fräste `From: //…` das Strukturpräfix an). (3) Die Outlook-Anzeige
+übernahm Lokalteile wie `https://evil.example/x` als Namen — nur schlichte Wörter zählen.
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28

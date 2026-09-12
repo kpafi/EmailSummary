@@ -1509,3 +1509,63 @@ def test_o3_outlook_form_zeigt_alle_namen() -> None:
     raw = build_raw_mail(MailMessage.from_bytes(outlook))
     assert raw.from_domain == "firma.example"
     assert raw.from_addr.startswith("Mueller Hans Peter")
+
+
+@pytest.mark.parametrize(
+    "reply_to",
+    [
+        b"x@bank.example, y@evil.example",
+        b"g: x@bank.example, y@evil.example;",
+        b"Bank <x@bank.example>, Evil <y@evil.example>",
+    ],
+)
+def test_o3_mehrere_reply_to_adressen_zaehlen_alle(reply_to: bytes) -> None:
+    """Vierter Skeptiker: Mailprogramme antworten an alle Reply-To-Adressen."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    mail = (
+        b"Return-Path: <x@bank.example>\r\nMessage-ID: <mr@y>\r\n"
+        b"From: Bank <x@bank.example>\r\nReply-To: " + reply_to + b"\r\n"
+        b"To: m@example.org\r\nSubject: Hi\r\nDate: Mon, 01 Sep 2026 10:00:00 +0200\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nHallo.\r\n"
+    )
+    raw = build_raw_mail(MailMessage.from_bytes(mail))
+    assert raw.reply_to_addresses[-1] == "y@evil.example"
+    assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch
+    same = mail.replace(reply_to, b"x@bank.example, X@BANK.EXAMPLE")
+    raw = build_raw_mail(MailMessage.from_bytes(same))
+    assert not MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch
+
+
+def test_o3_adress_rueckfall_der_anzeige_wird_gescrubbt() -> None:
+    """Roh-URL oder gefälschter Marker im quotierten Lokalteil erreicht den Prompt nicht."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    url_local = _o3_mail(b'"https://evil.example/login"@bank.example')
+    raw = build_raw_mail(MailMessage.from_bytes(url_local))
+    sanitized = MailSanitizer().sanitize(raw)
+    assert "https://" not in sanitized.from_display and "[Link #" in sanitized.from_display
+    marker_local = _o3_mail(b'"[Link #1: https://evil.example]"@bank.example')
+    raw = build_raw_mail(MailMessage.from_bytes(marker_local))
+    sanitized = MailSanitizer().sanitize(raw)
+    assert sanitized.sanitization_report.forged_markers >= 1 or "https://" not in sanitized.from_display
+
+
+def test_o3_outlook_anzeige_nimmt_keine_url_als_namen() -> None:
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    forms = (b"https://evil.example/x, Hans <x@bank.example>", b"bank.example, Hans <x@evil.example>")
+    for header in forms:
+        raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(header)))
+        sanitized = MailSanitizer().sanitize(raw)
+        assert sanitized.from_display == "Hans", sanitized.from_display
+        assert not sanitized.from_display.startswith(("/", ":"))

@@ -62,6 +62,9 @@ class RawMail(BaseModel):
     from_address: str = ""
     #: Dasselbe für `Reply-To`: ``None`` = kein Header, ``""`` = vorhanden, aber unlesbar.
     reply_to_address: str | None = None
+    #: Alle Reply-To-Adressen des Parsers (Mailprogramme antworten an alle, O-3): ein
+    #: Mismatch, sobald eine davon nicht die Absenderadresse ist.
+    reply_to_addresses: list[str] = Field(default_factory=list)
     return_path_domain: str | None = None
     to_addrs: list[str] = Field(default_factory=list)
     subject_raw: str = ""

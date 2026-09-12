@@ -597,12 +597,14 @@ class MailSanitizer:
         self, raw: RawMail, links: LinkCollector, state: _WalkState
     ) -> str:
         display, address = _safe_parseaddr(raw.from_addr)
-        if display:
-            return self._sanitize_header(display, links, state, _MAX_DISPLAY_CHARS)
-        cleaned, removed = clean_text(address or raw.from_address or raw.from_addr)
-        state.control_chars_removed += removed
-        collapsed = " ".join(cleaned.split())
-        return collapsed[:_MAX_DISPLAY_CHARS] or "(unknown sender)"
+        # O-3: Anzeigename und Adress-Rückfall laufen durch denselben Pfad (Steuerzeichen,
+        # gefälschte Marker, Link-Scrub, Tag-Reste) — sonst gelangte eine Roh-URL oder ein
+        # gefälschter `[Link #n:]`-Marker aus einem quotierten Lokalteil in den Prompt.
+        # Ein Anzeigename darf nicht mit `/` oder `:` beginnen: `From: //…` fräse sonst
+        # das Strukturpräfix der Zustellzeile an (Skeptiker O-3, vierter Durchgang).
+        text = display or address or raw.from_address or raw.from_addr
+        cleaned = self._sanitize_header(text, links, state, _MAX_DISPLAY_CHARS)
+        return cleaned.lstrip("/:. ") or "(unknown sender)"
 
     def _build_report(
         self,
@@ -778,22 +780,25 @@ def _reply_to_mismatch(raw: RawMail) -> bool:
     """
     if not raw.reply_to:
         return False
-    reply_parsed = raw.reply_to_address
-    if reply_parsed is None:
-        reply_parsed = _safe_parseaddr(raw.reply_to)[1]
-    reply = reply_parsed.strip().lower()
+    if raw.reply_to_address is None:  # RawMail ohne Parser-Felder: Rückfall
+        replies = [_safe_parseaddr(raw.reply_to)[1].strip().lower()]
+    else:
+        # Mailprogramme antworten an ALLE Reply-To-Adressen (O-3, vierter Skeptiker):
+        # `Reply-To: x@bank.example, y@evil.example` ist ein Mismatch, auch wenn die
+        # erste Adresse der Absender ist.
+        replies = [r.strip().lower() for r in (raw.reply_to_addresses or [raw.reply_to_address])]
     sender = (raw.from_address or _safe_parseaddr(raw.from_addr)[1]).strip().lower()
-    if not reply and not sender:
+    if not any(replies) and not sender:
         # ADR-020 (b): zwei Unbekannte sind weder Übereinstimmung noch Mismatch-Beweis.
         return False
-    if not reply or not sender:
+    if not sender or not all(replies):
         # R-9/S-2: **eine** Unbekannte neben einer Bekannten ist genau der Fall, für den
         # die Warnung gedacht ist — schweigen hiesse, dass ein Angreifer sie abschaltet,
         # indem er den `From` zerstört (R-9) oder den `Reply-To` so schreibt, dass er
         # vorhanden, aber für `parseaddr` unlesbar ist (S-2: offener Kommentar, Token
         # hinter der Klammer). Ein fehlender `Reply-To` bleibt oben kein Mismatch.
         return True
-    return reply != sender
+    return any(reply != sender for reply in replies)
 
 
 def _return_path_mismatch(raw: RawMail) -> bool:
