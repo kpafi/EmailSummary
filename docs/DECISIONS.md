@@ -679,6 +679,30 @@ lassen. Regel für alle vier: Das Werkzeug zeigt nie eine Domain, die das Mailpr
 nicht zeigt, und meldet nie „unbekannt" ohne Warnung — die 45 Header-Formen des
 Skeptikers sind als Test festgehalten.
 
+**Nachtrag (Release 0.2.0, 2026-09-12, O-3 zweiter Griff — ersetzt den vorigen Absatz):**
+Der Skeptiker hat den ersten Griff widerlegt: Die Token-Grenzen der Maske (Anfang,
+Whitespace, Klammern, Anführungszeichen) waren enger als die des Standard-Parsers, der
+kodierte Wörter auch nach `.`, `,`, `;`, `:`, `<` und `\` liest — dort ersetzte
+`Bank.=?utf-8?Q?info@bank.example,?= <real@evil.example>` die Domain wieder, ohne
+Warnung. Damit ist die Lehre aus fünf NF-1-Iterationen ausgesprochen: Jede eigene
+Nachbildung des Parsers ist an irgendeiner Stelle enger oder weiter als er, und genau dort
+zeigt das Werkzeug eine andere Absender-Domain als das Mailprogramm. Entscheidung: Der
+RFC-5322-Parser der Standardbibliothek (`email.headerregistry.HeaderRegistry`, der Parser
+von `email.policy.default`) liest Anzeigename und Adresse selbst (`_parse_address_header`);
+Maske (`_mask_encoded_words`), Klammer-Rückfall (`_first_address`) und Kommentar-Scanner
+(`_outside_comments_and_quotes`) sind entfernt. Bleiben: die erste Angabe zählt, Domains
+müssen hostname-förmig sein (`_HOSTNAME_RE`, Schreibweise wie im Header, `from_domain`
+normalisiert), ein unlesbarer Header wird `(unreadable)`, ein Name ohne Adresse darf sich
+nicht als Adresse lesen lassen, und ein Rohwert ohne Kodierung bleibt unverändert, wenn
+`parseaddr` dieselbe Adresse liest. Ein Parserfehler (auch `RecursionError` bei tief
+verschachtelten Kommentaren, der 4096-Zeichen-Deckel begrenzt ihn) ergibt „unlesbar", nie
+eine Ausnahme (ADR-020 (e)). Regel und Test: nie eine Domain, die das Mailprogramm nicht
+zeigt, nie „unbekannt" ohne Warnung — 45 Formen des fünften Skeptikers plus die sieben
+Regressionsformen des O-3-Skeptikers in From und Reply-To gegen `email.policy.default`;
+dazu ein Zeit- und Absturztest mit pathologischen Kopfzeilen. Abweichungen vom Orakel gibt
+es nur noch in die sichere Richtung (Domain-Literal, Endpunkt, rohe IDN ⇒ unbekannt mit
+Warnung).
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28

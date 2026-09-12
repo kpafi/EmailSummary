@@ -567,33 +567,6 @@ _KODIERTE_FORMEN = [
 ]
 
 
-@pytest.mark.parametrize("form", _KODIERTE_FORMEN)
-def test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder(form: bytes) -> None:
-    """Jedes Segment, das `decode_header` als kodiert liefert, ist maskiert unschädlich.
-
-    Orakel ist der Dekoder selbst (strikt grosszügiger als die Implementierung, Regel 5):
-    Was er als kodiertes Wort ausgibt, darf im maskierten Rohwert keine Adressgrenze mehr
-    setzen — kein `@`, `,`, `<`, `>`, `;`, `:` aus einem solchen Segment bleibt stehen.
-    """
-    from email.header import decode_header
-
-    from maildigest.ingest.imap_client import _mask_encoded_words
-
-    rohwert = form.decode("latin-1") + " <attacker@evil.example>"
-    kodiert = [
-        text.decode("latin-1") if isinstance(text, bytes) else text
-        for text, charset in decode_header(rohwert)
-        if charset is not None
-    ]
-    maskiert, woerter, _stem = _mask_encoded_words(" ".join(rohwert.split()))
-
-    if not kodiert:  # kaputte Form: der Dekoder sieht nichts Kodiertes, die Maske darf ruhen
-        return
-    assert woerter, f"kein kodiertes Wort maskiert, obwohl decode_header {kodiert} meldet"
-    kopf = maskiert.split("<attacker@evil.example>")[0]
-    assert not any(zeichen in kopf for zeichen in "@,<>;:"), kopf
-
-
 @pytest.mark.parametrize(
     "from_header",
     [
@@ -662,35 +635,6 @@ def test_backoff_is_monotonic() -> None:
 def _kaputte_kodierte_woerter(n: int) -> str:
     """`n` angefangene kodierte Wörter ohne jedes schliessende `?=` (der Repro)."""
     return "=?a?Q?xxxx" * n
-
-
-def test_r8_maskierung_ist_linear() -> None:
-    """Messreihe n/2n/4n/8n: die Maskierung wächst linear, nicht quadratisch.
-
-    Orakel ist das Wachstum selbst (strikt großzügiger als die Implementierung): Mit dem
-    alten Muster kostete jede Verdopplung den vierfachen Aufwand (0,077 / 0,266 / 0,491 /
-    1,940 s bei n = 1000 / 2000 / 4000 / 8000). Linear heißt hier: der Achtfache Umfang
-    kostet weniger als das Achtfache plus großzügige Reserve.
-    """
-    import time
-
-    from maildigest.ingest.imap_client import _mask_encoded_words
-
-    zeiten: dict[int, float] = {}
-    for n in (1000, 2000, 4000, 8000):
-        text = _kaputte_kodierte_woerter(n)
-        beginn = time.process_time()
-        maskiert, woerter, _stem = _mask_encoded_words(text)
-        zeiten[n] = time.process_time() - beginn
-        assert not woerter  # kein schliessendes ?= ⇒ nichts zu maskieren
-        assert maskiert == text
-
-    # Absolut: 8000 kaputte Wörter (80 KB) dürfen keine messbare Zeit kosten.
-    assert zeiten[8000] < 0.1, zeiten
-    # Relativ: quadratisch wäre Faktor 64 zwischen n und 8n. Faktor 16 lässt der
-    # Messungenauigkeit bei so kleinen Zeiten Luft und schliesst O(n²) sicher aus.
-    if zeiten[1000] > 0.001:
-        assert zeiten[8000] / zeiten[1000] < 16, zeiten
 
 
 def test_r8_riesiger_from_header_kostet_keine_zeit() -> None:
@@ -1050,7 +994,9 @@ def parseaddr_domain(value: str) -> str:
         b'"\\" <x@bank.example>" <real@evil.example> TOKEN',
         b"<real@evil.example> (<x@bank.example>) TOKEN",
         b"(<x@bank.example>) <real@evil.example>",
-        b"Real :) <real@evil.example>",
+        # `Real :) <real@evil.example>` gehört seit O-3 nicht mehr hierher: der Parser der
+        # Standardbibliothek liest die Gruppe `Real :` ohne gültiges Mitglied und nennt keine
+        # Adresse — das Werkzeug meldet dann „unbekannt" mit Warnung, wie das Mailprogramm.
     ],
 )
 def test_s2_balancierte_kommentare_und_quotes_bleiben_lesbar(from_rest: bytes) -> None:
@@ -1060,23 +1006,6 @@ def test_s2_balancierte_kommentare_und_quotes_bleiben_lesbar(from_rest: bytes) -
 
     assert raw.from_domain == "evil.example"
     assert MailSanitizer().sanitize(raw).sanitization_report.return_path_mismatch is True
-
-
-def test_s2_scanner_kennt_verschachtelung_escapes_und_offene_enden() -> None:
-    """Der lineare Scanner nach RFC 5322 §3.2.2/§3.2.4, direkt geprüft."""
-    from maildigest.ingest.imap_client import _outside_comments_and_quotes
-
-    assert _outside_comments_and_quotes("a (b (c) d) e")[0] == "a  e"
-    assert _outside_comments_and_quotes('a "b (c" d')[0] == "a  d"
-    assert _outside_comments_and_quotes("a (b \\) c) d")[0] == "a  d"
-    assert _outside_comments_and_quotes('a "b \\" c" d')[0] == "a  d"
-    assert _outside_comments_and_quotes("a ) b")[0] == "a ) b"  # Streuklammer: Text
-    assert _outside_comments_and_quotes("a (b")[2] is False
-    assert _outside_comments_and_quotes('a "b')[2] is False
-    assert _outside_comments_and_quotes("a (b (c) d")[2] is False
-    text, positionen, balanciert = _outside_comments_and_quotes("(x) <a@b>")
-    assert (text, balanciert) == (" <a@b>", True)
-    assert text[positionen.index(4)] == "<"
 
 
 def test_s2_token_hinter_der_klammer_loescht_die_antwortadresse_nicht() -> None:
@@ -1101,25 +1030,6 @@ def test_s2_reply_to_gleich_absender_mit_kommentar_ist_kein_mismatch() -> None:
     raw = build_raw_mail(make_message(mail))
 
     assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch is False
-
-
-def test_s2_scanner_ist_linear() -> None:
-    """Messreihe n/2n/4n/8n für den neuen Scanner im Hot Path (Regel der vierten Iteration)."""
-    import time
-
-    from maildigest.ingest.imap_client import _outside_comments_and_quotes
-
-    zeiten: dict[int, float] = {}
-    for n in (4096, 8192, 16384, 32768):
-        text = "(a" * (n // 2)  # lauter offene Kommentare: die tiefste Verschachtelung
-        beginn = time.process_time()
-        _, _, balanciert = _outside_comments_and_quotes(text)
-        zeiten[n] = time.process_time() - beginn
-        assert balanciert is False
-
-    assert zeiten[32768] < 0.1, zeiten
-    if zeiten[4096] > 0.001:
-        assert zeiten[32768] / zeiten[4096] < 16, zeiten
 
 
 # --- O-1: tiefe MIME-Verschachtelung --------------------------------------------------------
@@ -1347,6 +1257,13 @@ _O3_FORMEN = [
     b"(a)" * 1365 + b" <x@bank.example> <real@evil.example>",
     b"Bank =?utf-8?Q?Support?(?= <x@bank.example> ) <real@evil.example>",
     b"=?utf-8?Q?info@bank.example?,?= <attacker@evil.example>",
+    # Regression des ersten O-3-Griffs (Skeptiker): kodierte Wörter nach '.', ':', '<', '\\'
+    b"Bank.=?utf-8?Q?info@bank.example,?= <real@evil.example>",
+    b"Bank:=?utf-8?Q?info@bank.example,?= <real@evil.example>;",
+    b"<=?utf-8?Q?info@bank.example,?=> <real@evil.example>",
+    b"\\=?utf-8?Q?info@bank.example,?= <real@evil.example>",
+    b"g:=?utf-8?Q?info@bank.example,?= <real@evil.example>;",
+    b"=?utf-8?Q?a?==?utf-8?Q?info@bank.example,?= <real@evil.example>",
 ]
 
 
@@ -1376,31 +1293,6 @@ def test_o3_nie_eine_domain_die_das_mailprogramm_nicht_zeigt(header: bytes, fiel
     assert not (shown == "" and not warned), (shown, oracle, raw.from_addr, raw.reply_to)
 
 
-def test_o3_klammer_in_ungueltigem_kodierten_wort_bleibt_sichtbar() -> None:
-    """Der Befund selbst: `=?utf-8?Q?Support?(?=` ist kein kodiertes Wort, die Klammer
-    öffnet einen Kommentar — wie beim Parser der Mailprogramme."""
-    from imap_tools import MailMessage
-
-    from maildigest.ingest.imap_client import _mask_encoded_words, build_raw_mail
-    from maildigest.sanitize import MailSanitizer
-
-    masked, words, _stem = _mask_encoded_words("Bank =?utf-8?Q?Support?(?= <x@bank.example> )")
-    assert not words and "(" in masked
-    header = b"Bank =?utf-8?Q?Support?(?= <x@bank.example> ) <real@evil.example>"
-    raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(header)))
-    assert raw.from_domain == "evil.example"
-    assert MailSanitizer().sanitize(raw).sanitization_report.return_path_mismatch
-
-
-def test_o3_kodiertes_wort_nur_an_token_grenze() -> None:
-    from maildigest.ingest.imap_client import _mask_encoded_words
-
-    assert _mask_encoded_words("x=?utf-8?Q?a?= <a@b.example>")[1] == {}
-    assert len(_mask_encoded_words("=?utf-8?Q?a?= <a@b.example>")[1]) == 1
-    assert len(_mask_encoded_words("(=?utf-8?Q?a?=) <a@b.example>")[1]) == 1
-    assert len(_mask_encoded_words('"x"=?utf-8?Q?a?= <a@b.example>')[1]) == 1
-
-
 def test_o3_erste_angabe_entscheidet_und_domain_muss_hostname_sein() -> None:
     from imap_tools import MailMessage
 
@@ -1423,3 +1315,66 @@ def test_o3_unlesbarer_reply_to_loest_die_warnung_aus() -> None:
     raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(header, field=b"Reply-To")))
     assert raw.reply_to == "(unreadable)"
     assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch
+
+
+def test_o3_klammer_in_ungueltigem_kodierten_wort_bleibt_sichtbar() -> None:
+    """Der Befund selbst: `=?utf-8?Q?Support?(?=` ist für den Parser kein kodiertes Wort,
+    die Klammer öffnet einen Kommentar — das Werkzeug sieht es wie das Mailprogramm."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    header = b"Bank =?utf-8?Q?Support?(?= <x@bank.example> ) <real@evil.example>"
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(header)))
+    assert raw.from_domain == "evil.example"
+    assert MailSanitizer().sanitize(raw).sanitization_report.return_path_mismatch
+
+
+def test_o3_reply_to_warnung_bei_kodiertem_wort_nach_doppelpunkt() -> None:
+    """Regression des ersten O-3-Griffs (Skeptiker B5): das Mailprogramm antwortet an
+    real@evil.example, also muss reply_to_mismatch feuern."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    mail = (
+        b"Return-Path: <info@bank.example>\r\nMessage-ID: <b5@y>\r\n"
+        b"From: <=?utf-8?Q?info@bank.example>\r\n"
+        b"Reply-To: g:=?utf-8?Q?info@bank.example,?= <real@evil.example>;\r\n"
+        b"To: m@example.org\r\nSubject: Hi\r\nDate: Mon, 01 Sep 2026 10:00:00 +0200\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nHallo.\r\n"
+    )
+    raw = build_raw_mail(MailMessage.from_bytes(mail))
+    assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        b"(" * 3000 + b"<x@bank.example>",
+        b"()" * 2000 + b"<real@evil.example>",
+        b"=?utf-8?Q?x?= " * 300 + b"<real@evil.example>",
+        b"?" * 4000 + b" <real@evil.example>",
+        b'"' * 4000 + b" <real@evil.example>",
+        b"<" * 4000 + b"real@evil.example>",
+        b"\\" * 4000 + b" <real@evil.example>",
+        b"a@" * 2000 + b"b.example",
+    ],
+)
+def test_o3_parser_wirft_nie_und_bleibt_schnell(header: bytes) -> None:
+    """Pathologische Kopfzeilen: der Parser der Standardbibliothek darf weder werfen noch
+    messbar Zeit kosten — sonst wäre er der nächste DoS-Einstieg (T10, R-8)."""
+    import time
+
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+
+    for field in (b"From", b"Reply-To"):
+        mail = _o3_mail(header, field=field)
+        start = time.process_time()
+        raw = build_raw_mail(MailMessage.from_bytes(mail))
+        assert time.process_time() - start < 0.5
+        assert raw.from_domain in ("", "evil.example", "bank.example", "b.example")

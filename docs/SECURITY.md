@@ -127,15 +127,17 @@ zu sein.
   Baum erst danach, der Parse trägt die Kosten); Byte- und Elementschranke sind ein
   Restbudget **je Mail**, und höchstens vier `text/html`-Teile werden überhaupt konvertiert
   (ADR-084-Nachtrag). Derselbe Deckel gilt für den Divergenzcheck (ADR-067).
-- **Absender-Anzeigename (ADR-020 Nachträge):** Adresse und `from_domain` werden aus dem
-  **rohen** `From`/`Reply-To`-Wert geparst; RFC-2047 wird nur auf den Namensteil angewandt,
-  der danach von `<`, `>`, `,`, `;`, `:`, `"`, `\` befreit wird. Ein Anzeigename kann die
-  Absender-Domain damit weder ersetzen noch löschen, und die deterministischen Indikatoren
-  (`reply_to_mismatch`, `return_path_mismatch`) bleiben wirksam (HC2-2). Kodierte Wörter
-  werden vor dem Adress-Parse maskiert; die Maske folgt der Form von `email.header.ecre` und
-  ist damit nie enger als der Dekoder, der danach läuft (ADR-020-Nachtrag, dritte Iteration),
-  sucht das Ende eines kodierten Wortes aber mit `str.find` statt mit einem `.*?` — sonst ist
-  sie quadratisch in der Zahl kaputter Wörter (R-8). Der **rohe** Wert **jedes** gelesenen
+- **Absender-Anzeigename (ADR-020 Nachträge):** Anzeigename, Adresse und `from_domain`
+  liest seit O-3 der RFC-5322-Parser der Standardbibliothek (`email.headerregistry`, der
+  Parser von `email.policy.default`) aus dem **rohen** `From`/`Reply-To`-Wert — derselbe
+  Parser, den Mailprogramme benutzen. Das Werkzeug zeigt damit nie eine Absender-Domain,
+  die das Mailprogramm nicht zeigt, und meldet nie „unbekannt" ohne Warnung; die
+  deterministischen Indikatoren (`reply_to_mismatch`, `return_path_mismatch`) bleiben
+  wirksam (HC2-2). Nur die erste Angabe zählt, eine Domain muss hostname-förmig sein, ein
+  vorhandener, aber unlesbarer Header bleibt als `(unreadable)` sichtbar, und der
+  dekodierte Name wird von `<`, `>`, `,`, `;`, `:`, `"`, `\` befreit. Jede eigene
+  Nachbildung des Parsers (Maske für kodierte Wörter, Klammer-Rückfall, Kommentar-Scanner)
+  war an einer Stelle enger oder weiter als er — sie ist entfernt. Der **rohe** Wert **jedes** gelesenen
   Headers wird an einer einzigen Stelle (`_raw_header_values`) auf 4096 Zeichen geschnitten
   — nicht nur `From`/`Reply-To`/`Subject`, auch `To`, `Cc`, `Message-ID`, `Date`,
   `Return-Path`, `Authentication-Results` (S-1; ein 20-MB-`To` kostete vorher 18,5 s), und

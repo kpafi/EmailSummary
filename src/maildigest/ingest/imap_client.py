@@ -59,6 +59,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.header import decode_header, make_header
+from email.headerregistry import AddressHeader, HeaderRegistry
 from email.message import Message
 from email.parser import BytesHeaderParser
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
@@ -462,28 +463,6 @@ def _clean_display_name(name: str) -> str:
     return " ".join(name.translate(_DISPLAY_NAME_SPECIALS).split())
 
 
-#: **Kopf** eines RFC-2047-Wortes (`=?charset?B?` / `=?charset?Q?`) im rohen Headerwert.
-#:
-#: Formgleich mit dem Kopf von `email.header.ecre` — dem Muster des Dekoders, der **nach**
-#: der Maskierung läuft (NF-1, dritte Iteration, R-4). Die Maske darf nie enger sein als
-#: der Dekoder: Ein leerer Charset (`=??Q?info@bank.example,?=`) oder ein Sprach-Tag
-#: (`=?utf-8*de?Q?…?=`) genügte sonst, um an der Maske vorbei wieder Adresssyntax in den
-#: Anzeigenamen zu schmuggeln. Deshalb `[^?]*` für den Charset.
-#:
-#: Das **Ende** (`?=`) sucht :func:`_mask_encoded_words` mit `str.find`, nicht mit einem
-#: `.*?` im selben Muster (NF-1, vierte Iteration, R-8): `.*?` darf über `?` hinweglaufen,
-#: und in einem Header ohne schliessendes `?=` scannte damit jede der n Startstellen den
-#: ganzen Resttext — O(n²) (gemessen: 156-KiB-`From` = 18,2 s CPU, vorher 0,002 s). Der
-#: Scanner liefert dieselben Segmente wie `ecre` (erstes `?=` nach dem Kopf, non-greedy),
-#: braucht aber nur einen Durchlauf über den Text.
-#: Ein kodiertes Wort, wie es der RFC-5322-Parser der Standardbibliothek
-#: (`email.headerregistry`, das Orakel der Mailprogramme) tatsächlich liest (O-3):
-#: nur an einer Token-Grenze (Anfang, Whitespace, `(`, `)`, `"`), und im kodierten Teil
-#: kein weiteres `?` — der Parser schneidet am ersten `?=` ab und verwirft ein Wort mit
-#: mehr als zwei inneren `?` als Klartext. Alles andere ist für ihn Text, in dem eine
-#: Klammer einen Kommentar öffnet; die Maske darf es deshalb nicht verstecken.
-_ENCODED_WORD_RE = re.compile(r'(?<![^\s()"])=\?[^?]*\?[BbQq]\?[^?]*\?=')
-
 #: Abschluss eines RFC-2047-Wortes.
 
 #: Obergrenze für den **rohen** Wert eines anzeigenamentragenden Headers, angewandt vor
@@ -531,176 +510,55 @@ _HEADER_FETCH_PARTS = (
 #: schliessen `@`, `<`, `>` und Whitespace aus — das Muster ist damit eindeutig und
 #: linear, es kann nicht zurücksetzen. Seit S-2 wird es nur noch mit `match` an der
 #: **ersten** spitzen Klammer des kommentar- und quote-freien Texts angesetzt.
-_BRACKET_ADDRESS_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
-
-#: Stamm der Platzhalter, die kodierte Wörter beim Adress-Parsen vertreten (HC2-2-Rest).
-#: Nur `[A-Za-z0-9]` — damit ist ein Platzhalter für `getaddresses` reiner Text und kann
-#: keine Adressgrenze (`@`, `<`, `>`, `,`, `;`, `:`) erzeugen.
-_PLACEHOLDER_STEM = "MDENCWORD"
-
-
-def _mask_encoded_words(raw_text: str) -> tuple[str, dict[str, str], str]:
-    """Ersetzt jedes RFC-2047-Wort durch einen adressneutralen Platzhalter (HC2-2-Rest).
-
-    Der Rohwert-Parse allein genügt nicht: Die Q-Kodierung darf `@`, `<`, `>` und `,`
-    **literal** führen, und `getaddresses` liest die Kodierungssyntax dann als
-    Adresssyntax — `=?utf-8?Q?info@bank.example,?= <attacker@evil.example>` zerfällt in
-    zwei Angaben, von denen die erste (der Anzeigename!) die Absender-Domain bestimmt.
-    Maskiert ist ein kodiertes Wort ein einzelnes Wort ohne Sonderzeichen; die
-    Adressgrenzen sind danach genau die, die der Header wirklich setzt.
-
-    Returns:
-        ``(maskierter Text, {platzhalter: kodiertes Wort}, Platzhalter-Stamm)``.
-    """
-    stem = _PLACEHOLDER_STEM
-    while stem in raw_text:  # der Header führt den Stamm selbst: eindeutig machen
-        stem += "X"
-    words: dict[str, str] = {}
-    pieces: list[str] = []
-    position = 0
-    # O-3: ein einziger linearer Durchlauf über genau die Wortform des Standard-Parsers.
-    # Ein Kandidat mit `?` im kodierten Teil (`=?utf-8?Q?Support?(?=`) ist kein Wort —
-    # weder für den Parser noch für die Maske; seine Klammer bleibt sichtbar. Jede
-    # Zeichenklasse endet an einem `?`, der Durchlauf bleibt damit linear (R-8).
-    for match in _ENCODED_WORD_RE.finditer(raw_text):
-        token = f"{stem}{len(words)}"
-        words[token] = match.group(0)
-        pieces.append(raw_text[position : match.start()])
-        pieces.append(token)
-        position = match.end()
-    pieces.append(raw_text[position:])
-    return "".join(pieces), words, stem
-
-
-def _unmask_encoded_words(text: str, words: dict[str, str]) -> str:
-    """Setzt die kodierten Wörter in einem **Namensteil** wieder ein (HC2-2-Rest)."""
-    for token, word in words.items():
-        text = text.replace(token, word)
-    return text
-
-
-def _outside_comments_and_quotes(text: str) -> tuple[str, list[int], bool]:
-    """Zeichen eines Headers **ausserhalb** von Kommentaren und Quoted Strings (S-2).
-
-    Linearer Scanner nach RFC 5322 §3.2.2 (Kommentare, verschachtelt, mit Quoted-Pair)
-    und §3.2.4 (Quoted Strings mit Quoted-Pair). Innerhalb eines Kommentars öffnet `(`
-    eine weitere Ebene, `\\x` schützt jedes Zeichen; innerhalb eines Quoted Strings zählt
-    nur `"` (und `\\x`). Ein schliessendes `)` ohne offenen Kommentar ist gewöhnlicher
-    Text — es kann nichts verbergen.
-
-    Returns:
-        ``(text_aussen, positionen, balanciert)`` — `positionen[i]` ist der Index des
-        `i`-ten Aussenzeichens im Original, `balanciert` ist False, wenn am Ende ein
-        Kommentar oder Quoted String offen ist (etwa weil der 4096-Zeichen-Deckel ihn
-        zerschnitten hat).
-    """
-    chars: list[str] = []
-    positions: list[int] = []
-    depth = 0
-    in_quote = False
-    escaped = False
-    for index, char in enumerate(text):
-        if in_quote:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_quote = False
-            continue
-        if depth:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == "(":
-                depth += 1
-            elif char == ")":
-                depth -= 1
-            continue
-        if char == '"':
-            in_quote = True
-            continue
-        if char == "(":
-            depth = 1
-            continue
-        chars.append(char)
-        positions.append(index)
-    return "".join(chars), positions, not in_quote and depth == 0
-
-
-def _first_address(text: str, *, placeholder_stem: str = "") -> tuple[str, str]:
-    """Erste Angabe eines Adress-Headers als ``(name, adresse)`` (Rohwert-Parse).
-
-    Ein Platzhalter im Adressteil bedeutet, dass dort ein kodiertes Wort stand — also ein
-    Name, keine Adresse (HC2-2-Rest). Solche Angaben werden übersprungen; sie dürfen die
-    Absender-Domain weder liefern noch löschen.
-
-    S-2: Ist der Header unbalanciert (offener Kommentar oder Quoted String — auch als
-    Folge des 4096-Zeichen-Deckels), gilt die Adresse als **unbekannt**, egal was
-    `getaddresses` daraus macht: Ein offener Kommentar kann eine beliebige
-    `<adresse>` tragen, und `getaddresses` liest ihn bei fehlender Klammer als Adressteil.
-    Unbekannt ist die sichere Richtung — der Sanitizer warnt dann (R-9-Regel), statt eine
-    fremde Domain zu zeigen.
-    """
-    outside, positions, balanced = _outside_comments_and_quotes(text)
-    if not balanced:
-        return " ".join(text.split()), ""
-    pairs = getaddresses([text])
-    if not pairs:
-        return "", ""
-    candidates = [
-        (name, address)
-        for name, address in pairs
-        if not (placeholder_stem and placeholder_stem in address)
-    ]
-    if candidates:
-        # O-3: Die **erste** Angabe entscheidet — wie bei `email.policy.default`. Ist sie
-        # keine vollständige `lokalteil@domain` mit hostname-förmiger Domain, rücken
-        # spätere Angaben nicht nach (sonst bestimmte `<@evil.example>, <x@bank.example>`
-        # die Domain über die zweite); es bleibt nur der R-9-Rückfall auf die erste
-        # spitze Klammer, der bei einer unvollständigen ersten Klammer nichts liefert.
-        name, address = candidates[0]
-        local, at_sign, _domain = address.rpartition("@")
-        if at_sign and local and _domain_of(address):
-            return name, address
-    # R-9: `getaddresses` verwirft den Adressteil komplett, sobald hinter der spitzen
-    # Klammer noch ein Token steht — `<attacker@evil.example> MDENCWORD0` liefert
-    # `[('', '')]`. Die Absender-Domain verschwände damit, und das Schutzziel von HC2-2
-    # nennt „löschen" ausdrücklich neben „ersetzen". Zweiter, konservativer Griff: die
-    # **erste** spitze Klammer des Texts **ausserhalb** von Kommentaren und Quoted Strings
-    # (S-2: Rückfälle lesen nie Kommentar- oder Quoted-String-Inhalt), und nur, wenn genau
-    # dort eine vollständige `<lokalteil@domain>`-Klammer steht — `<<x@bank.example>…>`
-    # liefert damit nichts. Bewusst die erste und nicht die letzte — `email.policy.default`
-    # nimmt ebenfalls die erste Angabe, und die letzte zu nehmen hiesse, dass ein
-    # angehängtes `<info@bank.example>` die Domain doch wieder übernimmt.
-    first_bracket = outside.find("<")
-    bracketed = (
-        _BRACKET_ADDRESS_RE.match(outside, first_bracket) if first_bracket >= 0 else None
-    )
-    if bracketed is not None:
-        address = bracketed.group(1)
-        local, at_sign, _domain = address.rpartition("@")
-        if at_sign and local and _domain_of(address):
-            name = text[: positions[first_bracket]]
-            return " ".join(name.split()), address
-    # Keine brauchbare Adresse: alles ist Name (O-3: auch eine unvollständige erste
-    # Angabe zählt nicht als Adresse). Der Aufrufer macht daraus `(unreadable)`, wenn
-    # sich der Name selbst als Adresse lesen liesse.
-    return " ".join(text.split()), ""
-
 
 #: Anzeigeform eines vorhandenen, aber unlesbaren Adress-Headers (O-3). Ein Kommentar,
 #: damit `parseaddr` daraus nie eine Adresse liest.
 _UNREADABLE_HEADER = "(unreadable)"
 
+#: Der RFC-5322-Parser der Standardbibliothek — derselbe, den `email.policy.default` und
+#: damit die Mailprogramme benutzen. Er ist seit O-3 die **einzige** Instanz, die aus einem
+#: Adress-Header Anzeigename und Adresse liest: Jede Nachbildung (Maske für kodierte
+#: Wörter, Klammer-Rückfall, Kommentar-Scanner — NF-1, Iterationen 2 bis 5) war an einer
+#: Stelle enger oder weiter als er, und genau dort zeigte das Werkzeug eine andere
+#: Absender-Domain als das Mailprogramm. Wer den Parser selbst befragt, sieht, was der
+#: Nutzer sieht — und kann davon höchstens in die sichere Richtung abweichen.
+_HEADER_REGISTRY = HeaderRegistry()
+
+
+def _parse_address_header(raw_text: str) -> tuple[str, str, bool]:
+    """Erste Angabe eines Adress-Headers: ``(anzeigename, adresse, lesbar)``.
+
+    `lesbar = False`, wenn der Parser die Kopfzeile nicht verarbeiten kann (auch ein
+    `RecursionError` bei tief verschachtelten Kommentaren) — der Aufrufer führt den Header
+    dann als `(unreadable)`. Die Adresse ist nur gesetzt, wenn die erste Angabe einen
+    Lokalteil **und** eine hostname-förmige Domain trägt (:data:`_HOSTNAME_RE`); alles
+    andere ist „unbekannt", und der Sanitizer warnt (R-9). Gruppen zählen über ihre
+    Mitglieder, wie bei `email.policy.default`.
+    """
+    try:
+        header = _HEADER_REGISTRY("from", raw_text)
+        if not isinstance(header, AddressHeader):  # pragma: no cover - Registry-Vertrag
+            return "", "", False
+        addresses = header.addresses
+    except Exception:  # defekte Kopfzeile: fail-closed, nie werfen (ADR-020 (e))
+        return "", "", False
+    if not addresses:
+        return " ".join(raw_text.split()), "", True
+    first = addresses[0]
+    display = first.display_name or ""
+    local, domain = first.username or "", first.domain or ""
+    if not local or not _HOSTNAME_RE.fullmatch(domain.lower()):
+        return display, "", True
+    # Schreibweise der Domain bleibt wie im Header (`from_domain` normalisiert selbst).
+    return display, f"{local}@{domain}", True
+
 
 def _compose_display_address(name: str, address: str) -> str:
     """Baut ``Name <adresse>`` so, dass `parseaddr` genau diese beiden Teile zurückgibt.
 
-    Der Name kommt aus der RFC-2047-Dekodierung und ist damit angreiferkontrolliert; ohne
-    Selbstprüfung könnte er die Adresse erneut verschieben (HC2-2). Geprüft wird deshalb
-    gegen den Parser selbst: erst unquotiert (das ist die Form, die heutige Tests und der
+    Der Name kommt aus dem Parser und ist damit angreiferkontrolliert; ohne Selbstprüfung
+    könnte er die Adresse erneut verschieben (HC2-2). Geprüft wird deshalb gegen
+    `parseaddr` selbst: erst unquotiert (das ist die Form, die heutige Tests und der
     Korpus sehen), sonst quotiert, sonst bleibt nur die nackte Adresse.
     """
     if not address:
@@ -722,13 +580,12 @@ def _compose_display_address(name: str, address: str) -> str:
 def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
     """Anzeigenamentragender Header (`From`, `Reply-To`) → ``(anzeigeform, adresse)``.
 
-    Reihenfolge ist hier sicherheitsrelevant (HC2-2, Regression aus HC-23): Zuerst wird die
-    Adresse aus dem **rohen** Headerwert gelesen, erst danach der Namensteil dekodiert. Ein
-    kodierter Anzeigename wie ``=?utf-8?B?<'Bank <info@bank.example>,'>?=`` schleust sonst
-    eine zweite Adresse in die Liste, die als erste steht und die Absender-Domain bestimmt.
-
-    Enthält der Name keine Kodierung, wird der Rohwert unverändert übernommen — es gibt
-    dann nichts zu reparieren, und jede Normalisierung wäre nur eine weitere Fehlerquelle.
+    Seit O-3 liest der RFC-5322-Parser der Standardbibliothek die erste Angabe
+    (:func:`_parse_address_header`); er dekodiert kodierte Wörter im Anzeigenamen selbst
+    (HC-23) und entscheidet über Kommentare, Quoted Strings, Gruppen und Routen genau wie
+    das Mailprogramm des Nutzers (HC2-2: „ersetzen" und „löschen" der Absender-Domain).
+    Trägt der Rohwert keine Kodierung und liest `parseaddr` dieselbe Adresse, bleibt er
+    unverändert — es gibt dann nichts zu reparieren.
     """
     values = _raw_header_values(msg, name)
     if not values:
@@ -736,27 +593,12 @@ def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
     raw_text = _capped_raw_header(values[0])
     if not raw_text:
         return "", ""
-    masked, encoded_words, stem = _mask_encoded_words(raw_text)
-    display, address = _first_address(masked, placeholder_stem=stem)
-    if not encoded_words and address and parseaddr(raw_text)[1] == address:
-        # Kein kodiertes Wort: Es gibt nichts zu reparieren, und jede Normalisierung
-        # des Rohwerts wäre nur eine weitere Fehlerquelle.
+    display, address, readable = _parse_address_header(raw_text)
+    if not readable:
+        return _UNREADABLE_HEADER, ""
+    if "=?" not in raw_text and parseaddr(raw_text)[1] == address:
         return raw_text, address
-    if not encoded_words and not address:
-        # O-3: Ohne Adresse darf der Rohwert nur bleiben, wenn auch `parseaddr` keine
-        # darin liest — der Sanitizer vergleicht `from_addr` und `reply_to` genau damit.
-        final = "" if parseaddr(raw_text)[1] else raw_text
-    else:
-        # S-2: Die Adresse steht fest, aber `parseaddr` liest sie aus dem Rohwert nicht
-        # heraus (Token oder Kommentar hinter der Klammer, R-9-Form) — oder der Name
-        # trägt kodierte Wörter. Die Anzeigeform wird so zusammengesetzt, dass
-        # `parseaddr` nachweislich diese Adresse zurückgibt (Selbstprüfung in
-        # `_compose_display_address`).
-        name = display
-        if encoded_words:
-            unmasked = _unmask_encoded_words(display, encoded_words)
-            name = _decode_mime_words(unmasked) if display else ""
-        final = _compose_display_address(_clean_display_name(name), address)
+    final = _compose_display_address(_clean_display_name(display), address)
     if not address and not final:
         # O-3: Der Header ist da, liefert aber weder Adresse noch einen Namen, der nicht
         # selbst wie eine Adresse aussieht. Ein leerer Rückgabewert hiesse für den
