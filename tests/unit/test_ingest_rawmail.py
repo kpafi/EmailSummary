@@ -1268,6 +1268,17 @@ _O3_FORMEN = [
     b"A" * 4090 + b" =?utf-8?Q?<x@bank.example>?= <real@evil.example>",
     b"a" * 4090 + b" =?utf-8?Q?x?= <x@bank.example>",
     b"a" * 4080 + b" <real@evil.example>",
+    # Quotierter Lokalteil mit Komma (Skeptiker O-3, zweiter Durchgang): der zweite Parse
+    # der unquotierten Adresse trennte am Komma und las bank.example
+    b'"x@bank.example,"@evil.example',
+    b'Bank <"x@bank.example,"@evil.example>',
+    b'"<x@bank.example>,"@evil.example',
+    b'"x\\@bank.example,"@evil.example',
+    b'"g:x@bank.example,"@evil.example',
+    b'"x@bank.example, "@evil.example',
+    # Legacy-Parser (parseaddr/getaddresses) rekursiv: darf nur „unlesbar" ergeben
+    b"g:" * 1000,
+    b"(" * 1500 + b"g:" * 200,
 ]
 
 
@@ -1365,6 +1376,9 @@ def test_o3_reply_to_warnung_bei_kodiertem_wort_nach_doppelpunkt() -> None:
         b"<" * 4000 + b"real@evil.example>",
         b"\\" * 4000 + b" <real@evil.example>",
         b"a@" * 2000 + b"b.example",
+        b"g:" * 1000,
+        b"," * 2040 + b" <real@evil.example>",
+        b"<" + b"." * 2030 + b"@evil.example>",
     ],
 )
 def test_o3_parser_wirft_nie_und_bleibt_schnell(header: bytes) -> None:
@@ -1382,3 +1396,63 @@ def test_o3_parser_wirft_nie_und_bleibt_schnell(header: bytes) -> None:
         raw = build_raw_mail(MailMessage.from_bytes(mail))
         assert time.process_time() - start < 0.5
         assert raw.from_domain in ("", "evil.example", "bank.example", "b.example")
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        b"Mueller, Hans <hans.mueller@firma.example>",
+        b'"Mueller, Hans" <hans.mueller@firma.example>',
+        b"=?utf-8?Q?M=C3=BCller=2C_Hans?= <hans.mueller@firma.example>",
+        b"=?utf-8?B?TcO8bGxlciwgSGFucw==?= <hans.mueller@firma.example>",
+        b"Hans M\xc3\xbcller (Firma) <hans.mueller@firma.example>",
+        b"<hans.mueller@firma.example>",
+        b"hans.mueller@firma.example",
+        b'"Firma GmbH" <NoReply@Firma.Example>',
+        b"Hans Mueller via Liste <liste@firma.example>",
+        b"hans+news@firma.example",
+        b"Hans <hans.mueller@firma.example> (Vertrieb)",
+    ],
+)
+def test_o3_gutartige_header_ohne_fehlalarm(header: bytes) -> None:
+    """Praxisnahe From-Zeilen (Outlook, Gmail, Thunderbird, Listen): richtige Domain, keine
+    Warnung — Warnmüdigkeit ist Teil des Schutzziels."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    mail = (
+        b"Return-Path: <bounce@firma.example>\r\nMessage-ID: <ok@y>\r\n"
+        b"From: " + header + b"\r\nReply-To: " + header + b"\r\n"
+        b"To: m@example.org\r\nSubject: Hi\r\nDate: Mon, 01 Sep 2026 10:00:00 +0200\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHallo.\r\n"
+    )
+    raw = build_raw_mail(MailMessage.from_bytes(mail))
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    assert raw.from_domain == "firma.example"
+    assert not report.return_path_mismatch
+    assert not report.reply_to_mismatch
+
+
+def test_o3_quotierter_lokalteil_mit_komma_bestimmt_die_domain_richtig() -> None:
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(b'"x@bank.example,"@evil.example')))
+    assert raw.from_domain == "evil.example"
+    assert MailSanitizer().sanitize(raw).sanitization_report.return_path_mismatch
+
+
+def test_o3_rekursiver_legacy_parser_ergibt_nur_unlesbar() -> None:
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+
+    mail = _o3_mail(b"g:" * 1000)
+    mail = mail.replace(b"To: m@example.org", b"To: " + b"g:" * 1000)
+    raw = build_raw_mail(MailMessage.from_bytes(mail))  # darf nicht werfen (ADR-020 (e))
+    assert raw.from_domain == ""
+    assert raw.to_addrs == []

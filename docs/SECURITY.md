@@ -137,7 +137,11 @@ zu sein.
   vorhandener, aber unlesbarer Header bleibt als `(unreadable)` sichtbar, und der
   dekodierte Name wird von `<`, `>`, `,`, `;`, `:`, `"`, `\` befreit. Jede eigene
   Nachbildung des Parsers (Maske für kodierte Wörter, Klammer-Rückfall, Kommentar-Scanner)
-  war an einer Stelle enger oder weiter als er — sie ist entfernt. Der **rohe** Wert **jedes** gelesenen
+  war an einer Stelle enger oder weiter als er — sie ist entfernt. Adresse und Domain kommen
+  quotiert bzw. direkt vom Parser (nie aus einem zweiten Parse der Adresszeichenkette), die
+  Legacy-Parser `parseaddr`/`getaddresses` laufen auf Rohwerten nur abgesichert, und ein
+  Adress-Header am 4096-Zeichen-Deckel gilt als unlesbar (darunter kostet der Parser im
+  ungünstigsten Fall rund 80 ms je Header, deterministisch begrenzt). Der **rohe** Wert **jedes** gelesenen
   Headers wird an einer einzigen Stelle (`_raw_header_values`) auf 4096 Zeichen geschnitten
   — nicht nur `From`/`Reply-To`/`Subject`, auch `To`, `Cc`, `Message-ID`, `Date`,
   `Return-Path`, `Authentication-Results` (S-1; ein 20-MB-`To` kostete vorher 18,5 s), und

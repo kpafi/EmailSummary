@@ -703,6 +703,23 @@ dazu ein Zeit- und Absturztest mit pathologischen Kopfzeilen. Abweichungen vom O
 es nur noch in die sichere Richtung (Domain-Literal, Endpunkt, rohe IDN ⇒ unbekannt mit
 Warnung).
 
+**Nachtrag (Release 0.2.0, 2026-09-12, O-3 dritter Griff):** Der zweite Skeptiker fand im
+Parser-Umbau noch vier Punkte. (1) Ein quotierter Lokalteil mit Komma
+(`"x@bank.example,"@evil.example`) wurde unquotiert als Adresse weitergegeben; der zweite
+Parse in `_domain_of` trennte am Komma und las `bank.example`. Jetzt liefert der Parser
+`addr_spec` (quotiert) **und** die Domain direkt; `from_domain` entsteht nie mehr aus
+einem zweiten Parse. (2) `parseaddr`/`getaddresses` sind rekursiv (`g:` × 1000 in 2 KB)
+und liefen ungeschützt auf Rohwerten — `build_raw_mail` warf entgegen (e). Sie laufen
+nur noch über `_safe_parseaddr`/`_safe_getaddresses`; ein Fehler ergibt „unlesbar" bzw.
+keine Empfänger. (3) Der RFC-5322-Parser ist auf 4 KB aus lauter Kommas oder Punkten
+superlinear (66–82 ms je Header) — deterministisch begrenzt durch den 4096-Deckel und
+deshalb hingenommen; ein engerer Deckel hätte lange, aber gutartige Anzeigenamen als
+unlesbar gewertet. (4) Outlooks unquotierte Form `Mueller, Hans <h@firma.example>` war ein
+Fehlalarm (der Parser liest „Mueller" als Lokalteil ohne Domain): Trägt der Rohwert genau
+ein `@` und höchstens ein `<`, zählt die einzige Angabe mit Adresse — `<@evil.example>,
+<x@bank.example>` mit zwei `@` bleibt „unbekannt". Tests: sechs Quoting-Formen und zwei Rekursionsformen
+im Orakel-Test, elf gutartige Praxis-Header ohne Warnung.
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28

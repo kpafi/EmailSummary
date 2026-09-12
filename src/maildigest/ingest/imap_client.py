@@ -59,7 +59,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.header import decode_header, make_header
-from email.headerregistry import AddressHeader, HeaderRegistry
+from email.headerregistry import Address, AddressHeader, HeaderRegistry
 from email.message import Message
 from email.parser import BytesHeaderParser
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
@@ -515,6 +515,26 @@ _HEADER_FETCH_PARTS = (
 #: damit `parseaddr` daraus nie eine Adresse liest.
 _UNREADABLE_HEADER = "(unreadable)"
 
+def _safe_parseaddr(text: str) -> tuple[str, str] | None:
+    """`parseaddr` ohne Ausnahme: ``None``, wenn der Legacy-Parser scheitert.
+
+    `email.utils.parseaddr`/`getaddresses` sind rekursiv (`g:` mal 1000 in 2 KB reicht für
+    einen `RecursionError`) — auf angreiferkontrollierten Rohwerten laufen sie deshalb nur
+    noch hier abgesichert (O-3, dritter Griff; ADR-020 (e): `build_raw_mail` wirft nie).
+    """
+    try:
+        return parseaddr(text)
+    except Exception:
+        return None
+
+
+def _safe_getaddresses(values: list[str]) -> list[tuple[str, str]]:
+    """`getaddresses` ohne Ausnahme: leere Liste, wenn der Legacy-Parser scheitert."""
+    try:
+        return getaddresses(values)
+    except Exception:
+        return []
+
 #: Der RFC-5322-Parser der Standardbibliothek — derselbe, den `email.policy.default` und
 #: damit die Mailprogramme benutzen. Er ist seit O-3 die **einzige** Instanz, die aus einem
 #: Adress-Header Anzeigename und Adresse liest: Jede Nachbildung (Maske für kodierte
@@ -525,32 +545,54 @@ _UNREADABLE_HEADER = "(unreadable)"
 _HEADER_REGISTRY = HeaderRegistry()
 
 
-def _parse_address_header(raw_text: str) -> tuple[str, str, bool]:
-    """Erste Angabe eines Adress-Headers: ``(anzeigename, adresse, lesbar)``.
+def _parse_address_header(raw_text: str) -> tuple[str, str, str, bool]:
+    """Erste Angabe eines Adress-Headers: ``(anzeigename, adresse, domain, lesbar)``.
 
     `lesbar = False`, wenn der Parser die Kopfzeile nicht verarbeiten kann (auch ein
     `RecursionError` bei tief verschachtelten Kommentaren) — der Aufrufer führt den Header
-    dann als `(unreadable)`. Die Adresse ist nur gesetzt, wenn die erste Angabe einen
+    dann als `(unreadable)`. Adresse und Domain sind nur gesetzt, wenn die Angabe einen
     Lokalteil **und** eine hostname-förmige Domain trägt (:data:`_HOSTNAME_RE`); alles
     andere ist „unbekannt", und der Sanitizer warnt (R-9). Gruppen zählen über ihre
     Mitglieder, wie bei `email.policy.default`.
+
+    Die Adresse ist `addr_spec` des Parsers — **quotiert**, wo der Lokalteil es verlangt
+    (`"x@bank.example,"@evil.example`); die Domain kommt direkt vom Parser, nie aus einem
+    zweiten Parse der Adresszeichenkette (dort trennte `getaddresses` am Komma im Lokalteil
+    und las `bank.example`, Skeptiker O-3, zweiter Durchgang).
+
+    Outlook-Form: `Mueller, Hans <h@firma.example>` liest der Parser als zwei Angaben, die
+    erste ohne Adresse — Mailprogramme zeigen trotzdem die eine Adresse, eine Warnung wäre
+    ein Fehlalarm. Deshalb zählt die einzige Angabe mit Adresse, wenn der **Rohwert** genau
+    ein `@` und höchstens ein `<` trägt: Dann kann keine zweite Adresse und kein
+    Adressfragment (`<@evil.example>, <x@bank.example>`) im Spiel sein.
     """
     try:
         header = _HEADER_REGISTRY("from", raw_text)
         if not isinstance(header, AddressHeader):  # pragma: no cover - Registry-Vertrag
-            return "", "", False
-        addresses = header.addresses
+            return "", "", "", False
+        addresses = list(header.addresses)
     except Exception:  # defekte Kopfzeile: fail-closed, nie werfen (ADR-020 (e))
-        return "", "", False
+        return "", "", "", False
     if not addresses:
-        return " ".join(raw_text.split()), "", True
-    first = addresses[0]
-    display = first.display_name or ""
-    local, domain = first.username or "", first.domain or ""
-    if not local or not _HOSTNAME_RE.fullmatch(domain.lower()):
-        return display, "", True
-    # Schreibweise der Domain bleibt wie im Header (`from_domain` normalisiert selbst).
-    return display, f"{local}@{domain}", True
+        return " ".join(raw_text.split()), "", "", True
+
+    def usable(entry: Address) -> bool:
+        return bool(entry.username) and bool(
+            _HOSTNAME_RE.fullmatch((entry.domain or "").lower())
+        )
+
+    chosen = addresses[0]
+    display = chosen.display_name or ""
+    if not usable(chosen):
+        with_address = [entry for entry in addresses if usable(entry)]
+        outlook_form = raw_text.count("@") == 1 and raw_text.count("<") <= 1
+        if len(with_address) == 1 and outlook_form:
+            chosen = with_address[0]
+            names = [entry.display_name for entry in addresses if entry.display_name]
+            display = " ".join(names[: addresses.index(chosen) + 1])
+        else:
+            return display, "", "", True
+    return display, chosen.addr_spec, chosen.domain, True
 
 
 def _compose_display_address(name: str, address: str) -> str:
@@ -565,19 +607,20 @@ def _compose_display_address(name: str, address: str) -> str:
         # O-3: Ohne Adresse darf die Anzeigeform nicht selbst wie eine aussehen —
         # `parseaddr` (Sanitizer, `_reply_to_mismatch`) läse sonst `x@bank.example` aus
         # dem dekodierten Namen `=?utf-8?Q?<x@bank.example>?=` als Adresse.
-        return "" if parseaddr(name)[1] else name
+        parsed = _safe_parseaddr(name)
+        return name if parsed is not None and not parsed[1] else ""
     if not name:
         return address
     plain = f"{name} <{address}>"
-    if parseaddr(plain) == (name, address):
+    if _safe_parseaddr(plain) == (name, address):
         return plain
     quoted = f'"{name}" <{address}>'
-    if parseaddr(quoted) == (name, address):
+    if _safe_parseaddr(quoted) == (name, address):
         return quoted
     return address
 
 
-def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
+def _address_header(msg: MailMessage, name: str) -> tuple[str, str, str]:
     """Anzeigenamentragender Header (`From`, `Reply-To`) → ``(anzeigeform, adresse)``.
 
     Seit O-3 liest der RFC-5322-Parser der Standardbibliothek die erste Angabe
@@ -589,28 +632,31 @@ def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
     """
     values = _raw_header_values(msg, name)
     if not values:
-        return "", ""
+        return "", "", ""
     if len(str(values[0])) >= _MAX_HEADER_CHARS:
         # O-3: Ein Adress-Header am 4096-Zeichen-Deckel ist abgeschnitten (die Werte im
         # Baum sind bereits gedeckelt, S-1). Aus dem Rest liest der Parser sonst eine
-        # Scheindomain wie `bank.examp`; kein echter `From` ist 4 KB lang. Unlesbar heisst:
-        # Domain unbekannt, Warnung feuert.
-        return _UNREADABLE_HEADER, ""
+        # Scheindomain wie `bank.examp`; kein echter `From` ist 4 KB lang. Unlesbar
+        # heisst: Domain unbekannt, Warnung feuert. Unterhalb des Deckels kostet der
+        # RFC-5322-Parser im ungünstigsten Fall (4 KB aus Kommas oder Punkten) rund 80 ms
+        # je Header — deterministisch begrenzt, deshalb hingenommen (Skeptiker O-3).
+        return _UNREADABLE_HEADER, "", ""
     raw_text = _capped_raw_header(values[0])
     if not raw_text:
-        return "", ""
-    display, address, readable = _parse_address_header(raw_text)
+        return "", "", ""
+    display, address, domain, readable = _parse_address_header(raw_text)
     if not readable:
-        return _UNREADABLE_HEADER, ""
-    if "=?" not in raw_text and parseaddr(raw_text)[1] == address:
-        return raw_text, address
+        return _UNREADABLE_HEADER, "", ""
+    parsed_raw = _safe_parseaddr(raw_text)
+    if "=?" not in raw_text and parsed_raw is not None and parsed_raw[1] == address:
+        return raw_text, address, domain
     final = _compose_display_address(_clean_display_name(display), address)
     if not address and not final:
         # O-3: Der Header ist da, liefert aber weder Adresse noch einen Namen, der nicht
         # selbst wie eine Adresse aussieht. Ein leerer Rückgabewert hiesse für den
         # Sanitizer „kein Header" — und ein fehlender Reply-To löst keine Warnung aus.
-        return _UNREADABLE_HEADER, ""
-    return final, address
+        return _UNREADABLE_HEADER, "", ""
+    return final, address, domain
 
 
 def _capped_raw_header(value: object) -> str:
@@ -637,7 +683,7 @@ def _domain_of(address: str) -> str:
     Leerstring, wenn keine Domain erkennbar ist — der Sanitizer/Kritiker behandelt das als
     "Absender-Domain unbekannt" (docs/ARCHITECTURE.md §3: `from_domain` ist Pflichtfeld).
     """
-    candidates = getaddresses([address.replace("\r", " ").replace("\n", " ")])
+    candidates = _safe_getaddresses([address.replace("\r", " ").replace("\n", " ")])
     for _name, email_address in candidates:
         local, at_sign, domain = email_address.rpartition("@")
         if not at_sign or not local:
@@ -881,7 +927,7 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
     except Exception:  # pragma: no cover - defekte email.Message-Implementierungen
         pass
     message_id = _header(msg, "Message-ID")
-    from_addr, from_address = _address_header(msg, "From")
+    from_addr, _from_address, from_domain = _address_header(msg, "From")
     date_str = _header(msg, "Date") or ""
 
     try:
@@ -904,7 +950,7 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
     # zusätzlich, damit `to_addrs` nie mehr als eine Handvoll Kilobyte trägt.
     to_addrs = [
         email_address
-        for _name, email_address in getaddresses(_header_values(msg, "To"))
+        for _name, email_address in _safe_getaddresses(_header_values(msg, "To"))
         if email_address
     ][:MAX_RECIPIENTS]
 
@@ -922,7 +968,7 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         dedupe_key=dedupe_key,
         from_addr=from_addr,
         # HC2-2: aus der **roh** geparsten Adresse, nie aus dem (dekodierten) Anzeigenamen.
-        from_domain=_domain_of(from_address),
+        from_domain=from_domain.lower(),
         reply_to=_address_header(msg, "Reply-To")[0] or None,
         return_path_domain=_return_path_domain(return_path),
         to_addrs=to_addrs,
