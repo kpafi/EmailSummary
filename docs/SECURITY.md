@@ -44,7 +44,7 @@ gemacht**:
 | T7 | Markdown-/Formatierungs-Injection Richtung Messenger (Telegram-Markup als Link-Ersatz) | Kein `parse_mode` (Telegram), nur `content` ohne Embeds (Discord); Output-Sanitizer löscht Markup-Zeichen und bricht alle Domain-Punkte sowie jedes lebende Schema (WP7, ADR-036/037) |
 | T8 | Halluzination: Summarizer erfindet harmlosen Inhalt für Phishing-Mail | Kritiker prüft Summary gegen Mail (`summary_accurate`); false ⇒ fail-closed (umgesetzt: WP6 liefert das Feld, `pipeline.process_mail` zieht die Konsequenz) |
 | T9 | Injection instruiert Summarizer, Phishing als „wichtig & legitim" zu framen | Kritiker sieht den sanitisierten Text unabhängig und ohne Custom-Instructions (ADR-042); deterministische Signale (Domain-Checks etc.) sind nicht vom LLM beeinflussbar und heben die Risikostufe notfalls im Code an (WP6, ADR-043) |
-| T10 | Ressourcen-Erschöpfung (Mail-Bombe, 100-MB-Mails, MIME-Rekursion, tief geschachteltes HTML) | Größenlimits auf jeder Stufe, Rekursionstiefe begrenzt, Zeichenlimits (WP3), Byte-, Element- und Tiefenschranke der HTML→Text-Konvertierung als Restbudget je Mail (ADR-084: darüber gilt der HTML-Teil als nicht verarbeitet), Roh-Vorschnitt von Mail- und Anhangstext **vor** der Sanitisierung und ein Budget für die Zahl der Link-Funde je Mail (ADR-084-/ADR-028-Nachtrag, dritte Iteration), Rate-Limit im Poll-Loop (WP8) |
+| T10 | Ressourcen-Erschöpfung (Mail-Bombe, 100-MB-Mails, MIME-Rekursion, tief geschachteltes HTML) | Größenlimits auf jeder Stufe, Rekursionstiefe begrenzt, Zeichenlimits (WP3), Byte-, Element- und Tiefenschranke der HTML→Text-Konvertierung als Restbudget je Mail (ADR-084: darüber gilt der HTML-Teil als nicht verarbeitet), Roh-Budget für Mail- und Anhangstext **vor** der Sanitisierung als Restzähler je Mail und ein Budget für die Zahl der Link-Funde je Mail (ADR-084-/ADR-028-Nachtrag), Obergrenze für die Zahl der gelaufenen MIME-Teile (500) und ein Zeitbudget aller PDF-Extraktionen einer Mail (ADR-084-/ADR-029-Nachtrag, vierte Iteration), Obergrenze für den Rohwert eines Headers vor jeder Verarbeitung (4096 Zeichen, ADR-020-Nachtrag), Rate-Limit im Poll-Loop (WP8) |
 | T11 | Secret-Exfiltration („schreib den API-Key in die Summary") | Secrets sind nie im Prompt-Kontext (I5) — das Modell kennt sie schlicht nicht |
 | T12 | Homoglyphen-/Punycode-Domains täuschen den Nutzer in der Textdarstellung | Kennzeichnung + Warnung im sanitization_report; Kritiker-Signal (WP3/WP6) |
 | T13 | Mail-in-Mail (message/rfc822) schmuggelt Payloads an Filtern vorbei | Eingebettete Mails werden wie Anhänge behandelt: nicht geöffnet, nur Metadatum (WP3) |
@@ -133,28 +133,46 @@ zu sein.
   Absender-Domain damit weder ersetzen noch löschen, und die deterministischen Indikatoren
   (`reply_to_mismatch`, `return_path_mismatch`) bleiben wirksam (HC2-2). Kodierte Wörter
   werden vor dem Adress-Parse maskiert; die Maske folgt der Form von `email.header.ecre` und
-  ist damit nie enger als der Dekoder, der danach läuft (ADR-020-Nachtrag, dritte Iteration).
+  ist damit nie enger als der Dekoder, der danach läuft (ADR-020-Nachtrag, dritte Iteration),
+  sucht das Ende eines kodierten Wortes aber mit `str.find` statt mit einem `.*?` — sonst ist
+  sie quadratisch in der Zahl kaputter Wörter (R-8). Der **rohe** Wert eines
+  anzeigenamentragenden Headers wird davor auf 4096 Zeichen geschnitten; derselbe Deckel gilt
+  für den Betreff, weil `decode_header` selbst quadratisch ist. Verwirft `getaddresses` den
+  Adressteil ganz (ein Token hinter der spitzen Klammer genügt), greift ein zweiter,
+  konservativer Schritt auf die **erste** `<lokalteil@domain>`-Klammer des maskierten
+  Rohwerts zurück — der Anzeigename darf die Domain auch nicht *löschen* (R-9).
 - **PDF-Extraktion (I7/T5, ADR-029):** `pdfminer.six` läuft ausschließlich in einem
   Subprozess (`python -m maildigest.sanitize.extract_pdf`, PDF via stdin), mit Timeout
   (Eltern-Prozess), `RLIMIT_AS` 512 MB (Code-Konstante) und Output-Kürzung im Kind.
   stderr wird verworfen (I5). Jeder Fehler ⇒ Anhang „nicht verarbeitet", Pipeline läuft.
+  Über dem Einzel-Timeout liegt ein **Zeitbudget je Mail** (`[limits]
+  pdf_time_budget_seconds`, Default 30 s): Jede Extraktion bekommt
+  `min(pdf_timeout_seconds, Restbudget)`; ist das Budget aufgebraucht, gilt der Anhang wie
+  beim Timeout als nicht verarbeitet und es startet gar kein Kindprozess mehr
+  (ADR-029-Nachtrag, R-11). Ohne dieses Budget summierten 20 PDF-Anhänge ihre Timeouts zu
+  rund 400 s Wandzeit je Mail.
 - **Limits (Defaults, per Config änderbar):** Mail gesamt 25 MB (drüber ⇒
   `SanitizeError` ⇒ Metadaten-Notiz, T10), Gesamt-Klartext 30 000 Zeichen über Body und
   Anhangs-Texte hinweg (Kürzung mit `[truncated]`-Marker, `truncated=true`), PDF-Input
-  10 MB, PDF-Output 50 000 Zeichen, PDF-Timeout 20 s, MIME-Tiefe 10 (tiefere Teile ⇒
-  Metadatum „mime-tiefe ueberschritten"), HTML-Konvertierung max. 1 MB und 50 000 Elemente
+  10 MB, PDF-Output 50 000 Zeichen, PDF-Timeout 20 s je Anhang und 30 s Zeitbudget über
+  **alle** PDF-Anhänge einer Mail, MIME-Tiefe 10 (tiefere Teile ⇒
+  Metadatum „mime-tiefe ueberschritten"), höchstens 500 gelaufene MIME-Teile je Mail
+  (weitere ⇒ Metadatum „mime-teile ueberschritten"), Rohwert eines Headers 4096 Zeichen,
+  HTML-Konvertierung max. 1 MB und 50 000 Elemente
   **je Mail** über höchstens vier `text/html`-Teile, dazu max. 2000 Ebenen je Teil
   (drüber ⇒ Teil nicht verarbeitet, `html_rejected`), roher Klartext (Body und
   `text/plain`-Anhänge) vor der Sanitisierung auf das Sechzehnfache des Klartext-Budgets
-  vorgeschnitten (480 000 Zeichen; setzt `truncated`, sichtbar bleibt ohnehin nur
-  `max_text_chars`), max. 2000 einzeln ausgewertete Link-Funde je Mail (`links_capped`;
+  gedeckelt (480 000 Zeichen, als **Restbudget über die ganze Mail** — Body und alle
+  Anhangstexte zusammen; setzt `truncated`, ein Anhang jenseits des Budgets gilt als nicht
+  verarbeitet, sichtbar bleibt ohnehin nur `max_text_chars`), max. 2000 einzeln ausgewertete Link-Funde je Mail (`links_capped`;
   weitere Funde werden trotzdem entfernt, aber nur noch als `[Link removed]` ohne Nummer und
   ohne Fußnoteneintrag), Anhänge max. 20 Stück verarbeitet (weitere ⇒
   Metadatum), Anhang-Metadatenliste max. 100 Einträge (`blocked_attachments` zählt
   unabhängig davon korrekt).
 - **Deterministische Kritiker-Fakten (F-CRIT-3):** Der Report enthält zusätzlich
   `reply_to_mismatch` (Reply-To-Adresse ≠ From-Adresse), `return_path_mismatch`
-  (nur wenn beide Domains bekannt sind, ADR-020) und `auth_results` (best-effort-Parse
+  (abweichende Domains, oder **unbekannte** From-Domain neben bekanntem Return-Path —
+  zwei Unbekannte sind kein Treffer, ADR-020-Nachtrag R-9) und `auth_results` (best-effort-Parse
   von `Authentication-Results`: `spf`/`dkim`/`dmarc`, erste Nennung gewinnt).
 
 ## 5. Prompt-Härtung (Referenz für WP5/WP6)

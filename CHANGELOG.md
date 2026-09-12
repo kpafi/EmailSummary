@@ -125,6 +125,31 @@ docs/TESTRUNDE-2.md):
   Anzeigenamen war mit einem einzigen fehlenden Zeichen wieder möglich (`=??Q?…?=` ohne
   Zeichensatz). Die Erkennung kodierter Wörter folgt jetzt genau der Form, die auch der
   Dekodierer der Standardbibliothek verwendet (HC2-2, ADR-020).
+- **Nachgezogen (vierte Iteration):** Die Korrektur an der Absender-Erkennung aus der
+  dritten Iteration hatte sich selbst eine Blockade eingehandelt: Eine Mail mit einem
+  kaputten, sehr langen Absender-Header hielt den Abruf minutenlang an (156 KB Header =
+  18 Sekunden), und zwar schon beim Einlesen, vor jeder Grössenprüfung. Kopfzeilen werden
+  jetzt vor jeder Verarbeitung auf 4096 Zeichen geschnitten, und die Erkennung kodierter
+  Wörter läuft in einem einzigen Durchgang — dieselbe Mail kostet nun keine messbare Zeit.
+  Derselbe Deckel schützt den Betreff (HC2-2, ADR-020).
+- **Nachgezogen (vierte Iteration):** Ein kodiertes Wort **hinter** der Absenderadresse
+  liess Adresse und Domain ganz verschwinden — die Nachricht zeigte „(unknown sender)", und
+  die Warnungen zu abweichender Antwortadresse und abweichendem Rückweg verstummten dabei.
+  Die Adresse wird jetzt notfalls aus der ersten spitzen Klammer des Headers gelesen, und
+  eine **unbekannte** Absender-Domain neben einem bekannten Rückweg gilt ab sofort als
+  Warnfall statt als Ruhefall (HC2-2, ADR-020).
+- **Nachgezogen (vierte Iteration):** Eine einzige Mail konnte den Abruf weiterhin rund
+  zehn Sekunden blockieren: Die Vorabkürzung des Klartexts galt je Textstück, sodass zwanzig
+  Anhänge sie einfach vervielfachten, und für die Zahl der MIME-Teile gab es gar keine
+  Grenze. Beides ist jetzt ein Budget der ganzen Mail (höchstens 500 Teile; weitere werden
+  gezählt, nicht gelesen). Die teuerste überhaupt mögliche Mail kostet damit 2,7 statt
+  9,2 Sekunden (HC2-1, ADR-084).
+- **Nachgezogen (vierte Iteration):** Das Zeitlimit der PDF-Auswertung galt je Anhang —
+  zwanzig PDF-Anhänge hätten den Abruf rund 400 Sekunden angehalten, weit über der
+  Abrufperiode. Neu ist `[limits] pdf_time_budget_seconds` (Vorgabe 30 s) als Zeitbudget
+  über **alle** PDFs einer Mail; ist es aufgebraucht, gelten die übrigen Anhänge als nicht
+  verarbeitet und werden in der Nachricht als solche genannt. Gemessen: drei PDF-Anhänge
+  60 s → 30 s (ADR-029).
 
 ### Geändert
 - Alle nutzersichtbaren Texte sind englisch; Docstrings und `docs/` bleiben deutsch.

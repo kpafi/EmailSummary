@@ -584,6 +584,10 @@ nachgezogen. Die übrigen Pakete NF-2 … NF-7 aus jener Restliste sind offen.
 | R-5 (dritte Iteration) `LinkCollector.scrub` quadratisch in der Zahl der Funde; kein Link-Budget | hoch (DoS) | **gefixt** | `test_sanitize_links.py::TestR5LinkBudget` (5), `test_output_composer.py::test_r5_*` (2) | ADR-028 (N), ADR-084 (N) |
 | R-6 (dritte Iteration) Klartext-Pfad ohne Budget (bis 25 MB durch alle Pässe) | mittel | **gefixt** | `test_sanitize_mail.py::test_r6_*` (3) | ADR-084 (N) |
 | R-7 (dritte Iteration) Messkorrektur der teuersten Mail; Zusage „rund 2 s" zu knapp | mittel | **gefixt** (Zusage korrigiert) | `test_sanitize_mail.py::test_hc2_1_teuerste_mail_unter_den_neuen_grenzen` (neu vermessen), `::test_r7_gesamt_worst_case_bleibt_weit_unter_der_zusage` | ADR-084 (N) |
+| R-8 (vierte Iteration) Regression aus R-4: `_ENCODED_WORD_RE` mit `.*?` quadratisch; keine Kopfzeilen-Obergrenze | hoch (DoS im Ingest) | **gefixt** | `test_ingest_rawmail.py::test_r8_maskierung_ist_linear`, `::test_r8_riesiger_from_header_kostet_keine_zeit`, `::test_r8_riesiger_betreff_kostet_keine_zeit`, `::test_r8_gewoehnlicher_header_bleibt_unveraendert` | ADR-020 (N, vierte Iteration) |
+| R-9 (vierte Iteration) Kodiertes Wort hinter der Adresse löscht Absenderadresse und Domain; beide Rückweg-Warnungen verstummen | mittel | **gefixt** | `test_ingest_rawmail.py::test_r9_angehaengtes_kodiertes_wort_loescht_die_domain_nicht` (4 Formen), `::test_r9_zweiter_griff_nimmt_die_erste_klammer` | ADR-020 (N, vierte Iteration) |
+| R-10 (vierte Iteration) Klartext-Vorschnitt je Textstück statt je Mail; Teilezahl ohne Schranke | hoch (9,2–10,2 s CPU je Mail) | **gefixt** | `test_sanitize_mail.py::TestR10SchrankenDesAnhangsPfads` (6) | ADR-084 (N, dritter Nachtrag) |
+| R-11 (vierte Iteration) `pdf_timeout_seconds` gilt je Anhang; 20 PDFs ≈ 400 s Wandzeit | hoch (DoS über die Poll-Periode) | **gefixt** | `test_sanitize_mail.py::TestR11PdfZeitbudget` (2), `test_spec_cli.py::test_alle_config_felder_stehen_in_der_referenz` (Feldsatz) | ADR-029 (N, vierte Iteration) |
 
 „(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11**. Fett gesetzte ADRs sind neu.
 
@@ -632,6 +636,34 @@ trägt jeder Teil ein Viertel des Deckels, alle vier werden geparst — gemessen
 die Zusage lautet jetzt „etwa 2–3 s je nach Maschinenlast" statt „rund 2 s". Die
 Gesamt-Worst-Case-Mail (HTML-Budget, Klartext-Vorschnitt und Link-Budget gleichzeitig voll)
 kostet 1,0 s.
+
+**Vierte Iteration (2026-09-12).** Der Skeptiker der dritten Iteration bestätigte wieder
+alle bisherigen Repros als tot und belegte vier neue Punkte (oben als R-8 bis R-11). Neue
+Regel dieser Iteration: **Jede neue oder geänderte Regex und jede Schleife im Hot Path
+bekommt eine Messreihe (n, 2n, 4n)** — R-8 war genau der Fall, den die dritte Iteration ohne
+Messreihe eingebaut hatte. R-8 ist eine Regression aus dem R-4-Fix: Das zu
+`email.header.ecre` formgleiche `.*?` darf über `?` hinweglaufen, und ohne schliessendes
+`?=` scannt jede Startstelle den ganzen Resttext. Messreihe `_mask_encoded_words` auf
+kaputten Wörtern, n = 25 000 / 50 000 / 100 000 / 200 000: vorher 21,4 s / 80,7 s / Abbruch,
+nachher 0,000 / 0,000 / 0,001 / 0,001 s; mit gültigen Wörtern 0,012 / 0,028 / 0,057 /
+0,119 s (linear). Ende-zu-Ende: 156-KiB-`From` im Ingest 18,2 s → 0,00 s, 160-KiB-`Subject`
+8,6 s → 0,00 s. Damit der Zeittest nicht bloss die neue Kopfzeilen-Obergrenze bestätigt,
+prüft `test_r8_maskierung_ist_linear` die Kennlinie **ohne** Obergrenze (achtfacher Umfang,
+höchstens sechzehnfache Zeit — quadratisch wäre vierundsechzigfach), und der Leitsatz „nie
+enger als der Dekoder" bleibt mit dem unveränderten Orakeltest
+`test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder` abgesichert. Für R-9 ist das Orakel
+weiterhin die Adresse im Rohheader beziehungsweise `email.policy.default`; alle vier Formen
+liefern vor dem Fix `from_domain=''`, `(unknown sender)` und beide Warnungen auf `False`.
+R-10 und R-11 sind Zeitaussagen und wurden vorher wie nachher an denselben Skripten gemessen
+(`sk3_max.py`, `sk3_parts.py`, `sk3_pdf.py`): Gesamt-Worst-Case-Mail 21,45 MB 9,22 s →
+2,70 s, 200 000 MIME-Teile 3,69 s → 1,81 s, drei PDF-Anhänge 60,1 s → 30,1 s Wandzeit,
+zwanzig PDF-Anhänge rechnerisch ~400 s → 30,3 s. Messreihen dazu: 20 Textanhänge à 480 000
+Zeichen (n/2n/4n = 5/10/20) vorher 1,64 / 2,53 / 5,44 s, nachher 0,28 / 0,46 / 0,49 s;
+MIME-Teile 2000/4000/8000 vorher 0,03 / 0,06 / 0,12 s, nachher 0,02 / 0,04 / 0,10 s (dort
+dominiert das Parsen, das keine Schranke abwenden kann). Für R-11 misst der Unit-Test nicht
+die Wanduhr, sondern die **vergebenen Zeitlimits** (`[20,0; 10,0]` statt dreimal 20,0) und
+die Zahl der Aufrufe — deterministisch und in Millisekunden, mit einer Uhr-Attrappe statt
+echter Kindprozesse.
 
 **Offene Frage aus HC2-1 beantwortet.** „Greift der Runner eine solche Mail nach einem
 Neustart erneut auf (Dauer-DoS)?" — Nein. `poll_once` reserviert den Dedupe-Key mit

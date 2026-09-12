@@ -149,11 +149,16 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   **Restbudget einer ganzen Mail** (`HtmlBudget`, ein Objekt je `sanitize()`-Lauf, geteilt
   von Body-Pfad und Divergenzcheck), und höchstens `MAX_HTML_PARTS` (4) `text/html`-Teile
   werden überhaupt konvertiert; weitere gelten als nicht konvertiert (`html_rejected`).
-- **Schranken des Klartext- und Link-Pfads (ADR-084-/ADR-028-Nachtrag, NF-1 dritte
-  Iteration):** Roher Body- und Anhangstext wird auf `_RAW_TEXT_FACTOR` (16) mal
-  `[limits] max_text_chars` Zeichen vorgeschnitten, **bevor** `clean_text`, die
-  Marker-Neutralisierung und der Link-Scrub laufen (und vor dem Divergenzcheck); der
-  Vorschnitt setzt `truncated`, sichtbar bleibt ohnehin nur `max_text_chars`. Der Link-Scrub
+- **Schranken des Klartext- und Link-Pfads (ADR-084-/ADR-028-Nachtrag, NF-1 dritte und
+  vierte Iteration):** Roher Body- und Anhangstext läuft gegen ein **Restbudget der ganzen
+  Mail** von `_RAW_TEXT_FACTOR` (16) mal `[limits] max_text_chars` Zeichen — ein Objekt je
+  `sanitize()`-Lauf, geteilt von Body und allen Anhangstexten, Vorbild `HtmlBudget`. Das
+  Budget wird abgebucht, **bevor** `clean_text`, die Marker-Neutralisierung und der
+  Link-Scrub laufen (und vor dem Divergenzcheck); es setzt `truncated`, und ein Anhangstext,
+  für den nichts mehr übrig ist, läuft gar nicht mehr durch die teuren Pässe und gilt als
+  nicht verarbeitet. Daneben steht `sanitizer.MAX_MIME_PARTS` (500): Teile jenseits davon
+  werden nicht betreten, sondern als ein Metadatum `(mime-teile ueberschritten)` gezählt —
+  sonst multipliziert die blosse Teilezahl jede andere Schranke. Der Link-Scrub
   ist linear in der Zahl der Funde (eine einzige Rück-Ersetzung über das Platzhalter-Muster)
   und hat mit `links.MAX_LINKS_PER_MAIL` (2000) ein eigenes Budget je Mail: Weitere Funde
   werden entfernt (I3 gilt ausnahmslos), erscheinen aber nur noch als `[Link removed]` und
@@ -704,6 +709,7 @@ max_text_chars = 30000
 pdf_max_input_bytes = 10485760     # 10 MB
 pdf_max_output_chars = 50000
 pdf_timeout_seconds = 20
+pdf_time_budget_seconds = 30      # Zeitbudget aller PDF-Extraktionen einer Mail (ADR-029)
 max_mime_depth = 10
 max_attachments_processed = 20
 max_html_elements = 50000          # Elementbudget der HTML-Konvertierung je Mail (ADR-084)

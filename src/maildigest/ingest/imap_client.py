@@ -276,16 +276,38 @@ def _clean_display_name(name: str) -> str:
     return " ".join(name.translate(_DISPLAY_NAME_SPECIALS).split())
 
 
-#: RFC-2047-Wort (`=?charset?B?…?=` / `=?charset?Q?…?=`) im rohen Headerwert.
+#: **Kopf** eines RFC-2047-Wortes (`=?charset?B?` / `=?charset?Q?`) im rohen Headerwert.
 #:
-#: Formgleich mit `email.header.ecre` — dem Muster des Dekoders, der **nach** der
-#: Maskierung läuft (NF-1, dritte Iteration, R-4). Die Maske darf nie enger sein als der
-#: Dekoder: Ein leerer Charset (`=??Q?info@bank.example,?=`) oder ein Sprach-Tag
+#: Formgleich mit dem Kopf von `email.header.ecre` — dem Muster des Dekoders, der **nach**
+#: der Maskierung läuft (NF-1, dritte Iteration, R-4). Die Maske darf nie enger sein als
+#: der Dekoder: Ein leerer Charset (`=??Q?info@bank.example,?=`) oder ein Sprach-Tag
 #: (`=?utf-8*de?Q?…?=`) genügte sonst, um an der Maske vorbei wieder Adresssyntax in den
-#: Anzeigenamen zu schmuggeln. Deshalb `[^?]*` für den Charset und `.*?` (non-greedy, wie
-#: `ecre`) für den kodierten Teil — ein `?` im Inneren gehört dann zum kodierten Wort,
-#: genau wie `decode_header` es liest.
-_ENCODED_WORD_RE = re.compile(r"=\?[^?]*\?[BbQq]\?.*?\?=")
+#: Anzeigenamen zu schmuggeln. Deshalb `[^?]*` für den Charset.
+#:
+#: Das **Ende** (`?=`) sucht :func:`_mask_encoded_words` mit `str.find`, nicht mit einem
+#: `.*?` im selben Muster (NF-1, vierte Iteration, R-8): `.*?` darf über `?` hinweglaufen,
+#: und in einem Header ohne schliessendes `?=` scannte damit jede der n Startstellen den
+#: ganzen Resttext — O(n²) (gemessen: 156-KiB-`From` = 18,2 s CPU, vorher 0,002 s). Der
+#: Scanner liefert dieselben Segmente wie `ecre` (erstes `?=` nach dem Kopf, non-greedy),
+#: braucht aber nur einen Durchlauf über den Text.
+_ENCODED_WORD_START_RE = re.compile(r"=\?[^?]*\?[BbQq]\?")
+
+#: Abschluss eines RFC-2047-Wortes.
+_ENCODED_WORD_END = "?="
+
+#: Obergrenze für den **rohen** Wert eines anzeigenamentragenden Headers, angewandt vor
+#: jeder Verarbeitung (R-8, Schicht a). RFC 5322 §2.1.1 erlaubt 998 Zeichen je Zeile;
+#: gefaltete Adress-Header realer Mail liegen weit darunter, 4096 Zeichen sind also
+#: grosszügig. Der Deckel ist die Schicht, die **jede** Kopfzeilen-Verarbeitung deckt —
+#: auch `decode_header` selbst, das bei kaputten kodierten Wörtern quadratisch ist
+#: (gemessen: 160-KiB-`Subject` = 8,6 s CPU). Er ist bewusst kein Config-Feld: Ein Header
+#: jenseits davon ist kein Betriebsfall, sondern ein defekter oder bösartiger.
+_MAX_HEADER_CHARS = 4096
+
+#: Erste `<lokalteil@domain>`-Klammer eines Headers (R-9, zweiter Griff). Beide Teile
+#: schliessen `@`, `<`, `>` und Whitespace aus — das Muster ist damit eindeutig und
+#: linear, es kann nicht zurücksetzen.
+_BRACKET_ADDRESS_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
 
 #: Stamm der Platzhalter, die kodierte Wörter beim Adress-Parsen vertreten (HC2-2-Rest).
 #: Nur `[A-Za-z0-9]` — damit ist ein Platzhalter für `getaddresses` reiner Text und kann
@@ -310,13 +332,25 @@ def _mask_encoded_words(raw_text: str) -> tuple[str, dict[str, str], str]:
     while stem in raw_text:  # der Header führt den Stamm selbst: eindeutig machen
         stem += "X"
     words: dict[str, str] = {}
-
-    def _replace(match: re.Match[str]) -> str:
+    pieces: list[str] = []
+    position = 0
+    while True:
+        head = _ENCODED_WORD_START_RE.search(raw_text, position)
+        if head is None:
+            break
+        end = raw_text.find(_ENCODED_WORD_END, head.end())
+        if end < 0:
+            # Kein schliessendes `?=` mehr — und für jede spätere Startstelle erst recht
+            # nicht (sie liegt weiter rechts). Abbrechen statt weitersuchen: genau das
+            # macht den Durchlauf linear (R-8).
+            break
         token = f"{stem}{len(words)}"
-        words[token] = match.group(0)
-        return token
-
-    return _ENCODED_WORD_RE.sub(_replace, raw_text), words, stem
+        words[token] = raw_text[head.start() : end + len(_ENCODED_WORD_END)]
+        pieces.append(raw_text[position : head.start()])
+        pieces.append(token)
+        position = end + len(_ENCODED_WORD_END)
+    pieces.append(raw_text[position:])
+    return "".join(pieces), words, stem
 
 
 def _unmask_encoded_words(text: str, words: dict[str, str]) -> str:
@@ -345,6 +379,21 @@ def _first_address(text: str, *, placeholder_stem: str = "") -> tuple[str, str]:
         local, at_sign, domain = address.rpartition("@")
         if at_sign and local and domain.strip().strip("<>[]").rstrip("."):
             return name, address
+    # R-9: `getaddresses` verwirft den Adressteil komplett, sobald hinter der spitzen
+    # Klammer noch ein Token steht — `<attacker@evil.example> MDENCWORD0` liefert
+    # `[('', '')]`. Die Absender-Domain verschwände damit, und das Schutzziel von HC2-2
+    # nennt „löschen" ausdrücklich neben „ersetzen". Zweiter, konservativer Griff auf
+    # denselben (maskierten) Text: die **erste** `<lokalteil@domain>`-Klammer. Bewusst die
+    # erste und nicht die letzte — `email.policy.default` nimmt ebenfalls die erste
+    # Angabe, und die letzte zu nehmen hiesse, dass ein angehängtes `<info@bank.example>`
+    # die Domain doch wieder übernimmt.
+    bracketed = _BRACKET_ADDRESS_RE.search(text)
+    if bracketed is not None:
+        address = bracketed.group(1)
+        local, at_sign, domain = address.rpartition("@")
+        if at_sign and local and domain.strip().strip("<>[]").rstrip("."):
+            name = text[: bracketed.start()]
+            return " ".join(name.split()), address
     if candidates:
         return candidates[0]
     # Nur Platzhalter: Der Header trägt gar keine Adresse, alles davon ist Name.
@@ -386,7 +435,7 @@ def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
     values = _raw_header_values(msg, name)
     if not values:
         return "", ""
-    raw_text = _collapse(_predecode_eight_bit(values[0]))
+    raw_text = _capped_raw_header(values[0])
     if not raw_text:
         return "", ""
     masked, encoded_words, stem = _mask_encoded_words(raw_text)
@@ -398,6 +447,21 @@ def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
     display = _unmask_encoded_words(display, encoded_words)
     decoded = _decode_mime_words(display) if display else ""
     return _compose_display_address(_clean_display_name(decoded), address), address
+
+
+def _capped_raw_header(value: object) -> str:
+    """Rohwert eines Headers, auf :data:`_MAX_HEADER_CHARS` geschnitten (R-8, Schicht a).
+
+    Der Schnitt liegt **vor** jeder Verarbeitung — auch vor der 8-Bit-Vorentzerrung, denn
+    die ruft `decode_header`, und das ist bei kaputten kodierten Wörtern quadratisch. Ein
+    Header jenseits der Obergrenze ist ohnehin defekt oder bösartig; sein Anfang genügt,
+    um Adresse und Anzeigename zu bestimmen, und ist das Einzige, was ein Mailprogramm
+    davon sinnvoll anzeigen würde.
+    """
+    text = str(value)
+    if len(text) > _MAX_HEADER_CHARS:
+        return _collapse(text[:_MAX_HEADER_CHARS])
+    return _collapse(_predecode_eight_bit(value))
 
 
 def _domain_of(address: str) -> str:
@@ -508,7 +572,17 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
     date_str = _header(msg, "Date") or ""
 
     try:
-        subject_raw = _collapse(msg.subject)
+        subject_values = _raw_header_values(msg, "Subject")
+        if subject_values and len(str(subject_values[0])) > _MAX_HEADER_CHARS:
+            # R-8: derselbe Deckel wie bei `From`/`Reply-To`. `msg.subject` ruft
+            # `decode_header` auf dem vollen Rohwert, und das ist bei kaputten kodierten
+            # Wörtern quadratisch (160 KiB Betreff = 8,6 s CPU). Sichtbar ändert der
+            # Schnitt nichts: Der Sanitizer kürzt den Betreff ohnehin auf 300 Zeichen.
+            subject_raw = _collapse(
+                _decode_mime_words(_collapse(str(subject_values[0]))[:_MAX_HEADER_CHARS])
+            )
+        else:
+            subject_raw = _collapse(msg.subject)
     except Exception:  # kaputte RFC-2047-Kodierung im Betreff
         subject_raw = _header(msg, "Subject") or ""
 

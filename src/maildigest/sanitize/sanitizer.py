@@ -20,6 +20,7 @@ from __future__ import annotations
 import email
 import email.policy
 import re
+import time
 from dataclasses import dataclass, field
 from email.message import Message
 from email.utils import parseaddr
@@ -45,6 +46,7 @@ from maildigest.sanitize.unicode_clean import clean_text, is_mixed_script_domain
 __all__ = [
     "ENCRYPTED_CONTENT_TYPES",
     "FORGED_MARKER_TOKEN",
+    "MAX_MIME_PARTS",
     "MailSanitizer",
     "SanitizeError",
 ]
@@ -90,6 +92,20 @@ _TRUNCATION_MARKER = "[truncated]"
 #: dessen, was eine reale Mail trägt (gemessen: 21-MB-Klartext 4,2 s → unter 0,2 s).
 _RAW_TEXT_FACTOR = 16
 
+#: Obergrenze der MIME-Teile, die überhaupt gelaufen werden (R-10).
+#:
+#: Modulkonstante wie `html_to_text.MAX_HTML_PARTS`: keine Betriebsgrösse, sondern eine
+#: Struktur-Plausibilität. Eine reale Mail trägt eine Handvoll Teile; `max_attachments_
+#: processed` (20) und `_MAX_ATTACHMENT_ENTRIES` (100) liegen weit darunter. Ohne diese
+#: Schranke multipliziert die blosse *Zahl* der Teile jede andere Schranke — 200 000
+#: winzige `text/plain`-Teile in einer 10,8-MB-Mail kosteten allein im Baumlauf 1,7 s.
+#: Teile jenseits der Schranke werden nicht betreten; dass es sie gab, sagt ein einzelnes
+#: Anhangs-Metadatum.
+MAX_MIME_PARTS = 500
+
+#: Name des Metadatums für die Teile jenseits von :data:`MAX_MIME_PARTS`.
+_TOO_MANY_PARTS_NAME = "(mime-teile ueberschritten)"
+
 #: HTML-Tag-artige Sequenzen, die auch in *Klartext*-Teilen neutralisiert werden.
 #: Akzeptanzkriterium WP3: kein Output-Feld enthält ein HTML-Tag — auch nicht, wenn ein
 #: Angreifer `<script>` wörtlich in einen text/plain-Body schreibt. Über-Entfernung
@@ -127,6 +143,35 @@ class SanitizeError(Exception):
 
 
 @dataclass
+class _RawTextBudget:
+    """Restbudget an **rohen** Zeichen für die teuren Textpässe einer Mail (R-10).
+
+    Vorbild ist :class:`~maildigest.sanitize.html_to_text.HtmlBudget`: ein Objekt je
+    `sanitize()`-Lauf, geteilt von Body und **allen** Anhangstexten. Die dritte Iteration
+    schnitt jedes Textstück einzeln auf `_RAW_TEXT_FACTOR * max_text_chars` — 20
+    verarbeitete Anhänge multiplizierten das auf 9,6 Mio. Zeichen, obwohl `_take_budget`
+    schon nach dem ersten Anhang nichts mehr durchliess. Verbraucht ist jetzt verbraucht.
+    """
+
+    remaining: int
+
+    def take(self, text: str) -> tuple[str, bool]:
+        """Gibt so viel rohen Text heraus, wie das Budget der Mail noch hergibt.
+
+        Returns:
+            ``(text, wurde_geschnitten)``. Ist das Budget erschöpft, ist der Text leer —
+            der Aufrufer lässt ihn dann gar nicht erst durch `clean_text`, die
+            Marker-Neutralisierung und den Link-Scrub laufen.
+        """
+        if len(text) <= self.remaining:
+            self.remaining -= len(text)
+            return text, False
+        cut = text[: max(self.remaining, 0)]
+        self.remaining = 0
+        return cut, True
+
+
+@dataclass
 class _WalkState:
     """Veränderlicher Zustand eines Sanitize-Durchlaufs (ein Objekt pro Mail)."""
 
@@ -146,6 +191,17 @@ class _WalkState:
     #: Restbudget der HTML-Konvertierung für **diese** Mail (ADR-084-Nachtrag, HC2-1).
     #: Wird in `sanitize()` aus den Limits gesetzt; der Default hier ist nur Rückfall.
     html_budget: HtmlBudget = field(default_factory=HtmlBudget)
+    #: Restbudget an rohem Klartext für **diese** Mail (R-10). Wird in `sanitize()` aus
+    #: den Limits gesetzt; der Default hier ist nur Rückfall.
+    raw_budget: _RawTextBudget = field(
+        default_factory=lambda: _RawTextBudget(30_000 * _RAW_TEXT_FACTOR)
+    )
+    #: Zahl der betretenen MIME-Teile (Schranke :data:`MAX_MIME_PARTS`, R-10).
+    parts_seen: int = 0
+    #: Teile jenseits der Schranke — nur gezählt, nie betreten.
+    parts_skipped: int = 0
+    #: Bereits verbrauchte Wandzeit aller PDF-Extraktionen dieser Mail (R-11).
+    pdf_seconds_used: float = 0.0
 
 
 class MailSanitizer:
@@ -187,9 +243,19 @@ class MailSanitizer:
             html_budget=HtmlBudget(
                 elements=self._limits.max_html_elements,
                 byte_budget=self._limits.max_html_bytes,
-            )
+            ),
+            raw_budget=_RawTextBudget(self._limits.max_text_chars * _RAW_TEXT_FACTOR),
         )
         self._walk(message, 0, state)
+        if state.parts_skipped:
+            # R-10: sichtbar statt still — dieselbe Politik wie beim Tiefenlimit (ADR-030).
+            self._add_attachment_meta(
+                state,
+                filename=_TOO_MANY_PARTS_NAME,
+                declared="multipart/mixed",
+                kind="unknown",
+                size=0,
+            )
 
         # Body: text/plain bevorzugt; sonst text/html → Text (SECURITY §4).
         if state.body_plain:
@@ -199,7 +265,7 @@ class MailSanitizer:
             # wird damit genau der Klartext, der auch zusammengefasst wird; fehlt dem
             # Vergleich ein abgeschnittener Teil, meldet der Check eher Divergenz als
             # weniger — die fail-safe Richtung (ADR-036).
-            body_raw, precut = _precut_raw_text(body_raw, self._limits.max_text_chars)
+            body_raw, precut = state.raw_budget.take(body_raw)
             state.truncated = state.truncated or precut
             # CT-15: Der Nutzer sieht in seinem Mailprogramm den HTML-Teil. Weicht der
             # inhaltlich ab, wird das vermerkt — sonst beschreibt die Zusammenfassung
@@ -220,15 +286,12 @@ class MailSanitizer:
                 state.control_chars_removed += removed
                 state.hidden_removed += hidden
                 converted.append(text)
-            body_raw = "\n\n".join(converted)
+            # R-6/R-10: Das Rohtext-Budget läuft über die GANZE Mail. Im Klartext-Zweig ist
+            # es oben schon abgebucht (vor dem Divergenzcheck), hier für den HTML-Zweig.
+            body_raw, precut = state.raw_budget.take("\n\n".join(converted))
+            state.truncated = state.truncated or precut
         else:
             body_raw = ""
-
-        # R-6: Vorschnitt VOR clean_text/Neutralisierung/Scrub — sonst trägt der teure Teil
-        # der Kette bis zu `max_mail_bytes` an Zeichen, obwohl davon nur `max_text_chars`
-        # überleben. Der Vorschnitt kann `truncated` setzen; sichtbar gekürzt wird ohnehin.
-        body_raw, precut = _precut_raw_text(body_raw, self._limits.max_text_chars)
-        state.truncated = state.truncated or precut
 
         body_clean, removed = clean_text(body_raw)
         state.control_chars_removed += removed
@@ -245,11 +308,21 @@ class MailSanitizer:
         for info in state.attachments:
             raw_text = state.attachment_texts.get(info.filename_sanitized)
             if info.processed and raw_text is not None:
-                # Derselbe Vorschnitt wie beim Body (R-6): Ein text/plain-Anhang unterliegt
-                # keiner eigenen Grössenschranke; PDF-Text ist über `pdf_max_output_chars`
-                # bereits gedeckelt, der Vorschnitt greift dort also nie.
-                raw_text, precut = _precut_raw_text(raw_text, self._limits.max_text_chars)
+                # Dasselbe Rohtext-Budget wie beim Body, als Restzähler über die ganze Mail
+                # (R-10). Ein text/plain-Anhang unterliegt keiner eigenen Grössenschranke,
+                # und `max_attachments_processed` (20) multiplizierte einen Vorschnitt je
+                # Stück auf ein Vielfaches; PDF-Text ist über `pdf_max_output_chars`
+                # ohnehin gedeckelt.
+                had_text = bool(raw_text)
+                raw_text, precut = state.raw_budget.take(raw_text)
                 state.truncated = state.truncated or precut
+                if had_text and not raw_text:
+                    # Budget erschöpft: Dieser Anhang läuft gar nicht mehr durch die teuren
+                    # Pässe und gilt — sichtbar — als nicht verarbeitet.
+                    attachments.append(
+                        info.model_copy(update={"processed": False, "extracted_chars": 0})
+                    )
+                    continue
                 cleaned, removed = clean_text(raw_text)
                 state.control_chars_removed += removed
                 unforged, forged = neutralize_forged_markers(cleaned)
@@ -346,7 +419,14 @@ class MailSanitizer:
     # --- MIME-Baum -------------------------------------------------------------------------
 
     def _walk(self, part: Message, depth: int, state: _WalkState) -> None:
-        """Läuft den MIME-Baum manuell (Tiefenlimit, message/rfc822 wird nie betreten)."""
+        """Läuft den MIME-Baum manuell (Tiefen- und Teilezahl-Limit, message/rfc822 nie)."""
+        state.parts_seen += 1
+        if state.parts_seen > MAX_MIME_PARTS:
+            # R-10: Die blosse Zahl der Teile darf keine Schranke multiplizieren. Jenseits
+            # der Obergrenze wird nichts mehr betreten — auch kein Teilbaum; gezählt wird,
+            # dass es sie gab (ein Metadatum am Ende von `sanitize()`).
+            state.parts_skipped += 1
+            return
         if depth > self._limits.max_mime_depth:
             self._add_attachment_meta(
                 state,
@@ -428,12 +508,25 @@ class MailSanitizer:
         if kind == "text":
             text = _decode_text_part(part)
         elif kind == "pdf":
+            # R-11: `pdf_timeout_seconds` gilt je Anhang; 20 PDFs summierten sich damit auf
+            # ~400 s Wandzeit je Mail — weit über `poll_interval_seconds`. Darüber liegt
+            # jetzt ein Zeitbudget für die ganze Mail (ADR-029-Nachtrag).
+            remaining = float(self._limits.pdf_time_budget_seconds) - state.pdf_seconds_used
+            if remaining <= 0:
+                # Budget aufgebraucht: Es startet gar kein Kindprozess mehr; der Anhang
+                # gilt wie beim Timeout als nicht verarbeitet (fail-safe, I6).
+                self._add_attachment_meta(
+                    state, filename=filename, declared=declared, kind=kind, size=len(data)
+                )
+                return
+            started = time.monotonic()
             text = extract_pdf_text(
                 data,
-                timeout_seconds=float(self._limits.pdf_timeout_seconds),
+                timeout_seconds=min(float(self._limits.pdf_timeout_seconds), remaining),
                 max_input_bytes=self._limits.pdf_max_input_bytes,
                 max_output_chars=self._limits.pdf_max_output_chars,
             )
+            state.pdf_seconds_used += time.monotonic() - started
 
         if text is None:
             self._add_attachment_meta(
@@ -578,22 +671,6 @@ def _content_words(text: str) -> set[str]:
     return set(_RE_CONTENT_WORD.findall(without_markers.casefold()))
 
 
-def _precut_raw_text(text: str, max_text_chars: int) -> tuple[str, bool]:
-    """Schneidet rohen Text auf ein grosszügiges Vielfaches des Endbudgets zu (R-6).
-
-    Läuft **vor** `clean_text`, `neutralize_forged_markers` und `LinkCollector.scrub`.
-    Alles, was hier wegfällt, hätte `_take_budget` danach ohnehin verworfen — nur eben
-    erst, nachdem jeder Pass es angefasst hat.
-
-    Returns:
-        ``(text, wurde_geschnitten)``.
-    """
-    limit = max_text_chars * _RAW_TEXT_FACTOR
-    if len(text) <= limit:
-        return text, False
-    return text[:limit], True
-
-
 def _take_budget(text: str, budget: int) -> tuple[str, int, bool]:
     """Wendet das verbleibende Gesamt-Klartext-Budget an (SECURITY §4, T10)."""
     if len(text) <= budget:
@@ -679,8 +756,15 @@ def _reply_to_mismatch(raw: RawMail) -> bool:
     if not raw.reply_to:
         return False
     reply = parseaddr(raw.reply_to)[1].strip().lower()
+    if not reply:
+        return False
     sender = parseaddr(raw.from_addr)[1].strip().lower()
-    return bool(reply) and bool(sender) and reply != sender
+    if not sender:
+        # R-9: Eine **unbekannte** Absender-Adresse neben einer bekannten Antwortadresse ist
+        # genau der Fall, für den die Warnung gedacht ist — schweigen hiesse, dass ein
+        # Angreifer die Warnung durch Zerstören des `From` abschalten kann.
+        return True
+    return reply != sender
 
 
 def _return_path_mismatch(raw: RawMail) -> bool:
@@ -689,8 +773,12 @@ def _return_path_mismatch(raw: RawMail) -> bool:
     Leere/unbekannte Werte sind nie ein Treffer (ADR-020: zwei Unbekannte sind keine
     Übereinstimmung, aber auch kein Mismatch-Beweis).
     """
-    if not raw.return_path_domain or not raw.from_domain:
+    if not raw.return_path_domain:
         return False
+    if not raw.from_domain:
+        # R-9: unbekannte Absender-Domain + bekannter Rückweg ⇒ Warnfall. ADR-020 (b) bleibt
+        # für den Fall gültig, dass **beide** Seiten unbekannt sind: dann kein Treffer.
+        return True
     return raw.return_path_domain.lower() != raw.from_domain.lower()
 
 

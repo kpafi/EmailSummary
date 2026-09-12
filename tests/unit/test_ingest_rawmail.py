@@ -645,3 +645,130 @@ def test_backoff_is_monotonic() -> None:
     delays = [backoff_delay(n) for n in range(1, 30)]
     assert delays == sorted(delays)
     assert max(delays) <= MAX_BACKOFF_SECONDS
+
+
+# --- NF-1, vierte Iteration: R-8 (Kopfzeilen-Obergrenze, lineare Maske) und R-9 ----------
+#
+# R-8 war eine Regression aus der dritten Iteration: das zu `email.header.ecre` formgleiche
+# `.*?` darf über `?` hinweglaufen. Fehlt das schliessende `?=`, scannte jede der n
+# Startstellen den ganzen Resttext — ein 156-KiB-`From` kostete 18,2 s CPU (vorher 0,002 s).
+# Zwei Schichten: eine Obergrenze für den Rohwert **vor** jeder Verarbeitung und ein
+# Scanner, der das Ende mit `str.find` sucht statt mit `.*?`.
+
+
+def _kaputte_kodierte_woerter(n: int) -> str:
+    """`n` angefangene kodierte Wörter ohne jedes schliessende `?=` (der Repro)."""
+    return "=?a?Q?xxxx" * n
+
+
+def test_r8_maskierung_ist_linear() -> None:
+    """Messreihe n/2n/4n/8n: die Maskierung wächst linear, nicht quadratisch.
+
+    Orakel ist das Wachstum selbst (strikt großzügiger als die Implementierung): Mit dem
+    alten Muster kostete jede Verdopplung den vierfachen Aufwand (0,077 / 0,266 / 0,491 /
+    1,940 s bei n = 1000 / 2000 / 4000 / 8000). Linear heißt hier: der Achtfache Umfang
+    kostet weniger als das Achtfache plus großzügige Reserve.
+    """
+    import time
+
+    from maildigest.ingest.imap_client import _mask_encoded_words
+
+    zeiten: dict[int, float] = {}
+    for n in (1000, 2000, 4000, 8000):
+        text = _kaputte_kodierte_woerter(n)
+        beginn = time.process_time()
+        maskiert, woerter, _stem = _mask_encoded_words(text)
+        zeiten[n] = time.process_time() - beginn
+        assert not woerter  # kein schliessendes ?= ⇒ nichts zu maskieren
+        assert maskiert == text
+
+    # Absolut: 8000 kaputte Wörter (80 KB) dürfen keine messbare Zeit kosten.
+    assert zeiten[8000] < 0.1, zeiten
+    # Relativ: quadratisch wäre Faktor 64 zwischen n und 8n. Faktor 16 lässt der
+    # Messungenauigkeit bei so kleinen Zeiten Luft und schliesst O(n²) sicher aus.
+    if zeiten[1000] > 0.001:
+        assert zeiten[8000] / zeiten[1000] < 16, zeiten
+
+
+def test_r8_riesiger_from_header_kostet_keine_zeit() -> None:
+    """Der Repro des Skeptikers: 156-KiB-`From` im Ingest (vorher 18,2 s CPU)."""
+    import time
+
+    kopf = _kaputte_kodierte_woerter(16_000)
+    mail = _attack_mail(f"From: {kopf} <attacker@evil.example>".encode())
+
+    beginn = time.process_time()
+    raw = build_raw_mail(make_message(mail))
+    dauer = time.process_time() - beginn
+
+    assert dauer < 0.5, dauer
+    # Der Deckel schneidet den Rohwert; eine Domain bleibt danach nicht übrig, und genau
+    # das ist die fail-safe Richtung: unbekannte Domain neben `Return-Path` ⇒ Warnung.
+    assert raw.from_domain == ""
+    assert MailSanitizer().sanitize(raw).sanitization_report.return_path_mismatch is True
+
+
+def test_r8_riesiger_betreff_kostet_keine_zeit() -> None:
+    """Dieselbe Obergrenze für den Betreff: `decode_header` ist dort ebenso quadratisch."""
+    import time
+
+    kopf = _kaputte_kodierte_woerter(16_000)
+    mail = (
+        b"From: <a@b.example>\r\nSubject: "
+        + kopf.encode()
+        + b"\r\nDate: Tue, 01 Sep 2026 10:00:00 +0200\r\n"
+        b'Content-Type: text/plain; charset="utf-8"\r\n\r\nHallo.\r\n'
+    )
+
+    beginn = time.process_time()
+    raw = build_raw_mail(make_message(mail))
+    dauer = time.process_time() - beginn
+
+    assert dauer < 0.5, dauer  # vor dem Deckel: 8,6 s
+    assert len(raw.subject_raw) <= 4096
+
+
+def test_r8_gewoehnlicher_header_bleibt_unveraendert() -> None:
+    """Gegenprobe: Unter der Obergrenze ändert sich nichts — auch nicht an der Maske."""
+    raw = build_raw_mail(make_message(FULL_MAIL, size=len(FULL_MAIL)))
+
+    assert raw.from_addr == '"Stadtwerke X" <rechnung@Stadtwerke-X.DE>'
+    assert raw.from_domain == "stadtwerke-x.de"
+    assert raw.subject_raw == "Rechnung Maerz"
+
+
+#: R-9: ein kodiertes Wort **hinter** der Adresse liess `getaddresses` den Adressteil ganz
+#: verwerfen (`[('', '')]`) — Absenderadresse und Domain verschwanden, `(unknown sender)`,
+#: und beide Rückweg-Warnungen verstummten.
+_LOESCH_FORMEN = [
+    b'=??Q?a?= <attacker@evil.example> =??Q?info@bank.example?=',
+    b"<attacker@evil.example> =??Q?info@bank.example?=",
+    b"<attacker@evil.example> =?utf-8?Q?info@bank.example?=",
+    b"=?utf-8?Q?Bank?= <attacker@evil.example> =?utf-8?Q?x?=",
+]
+
+
+@pytest.mark.parametrize("from_rest", _LOESCH_FORMEN)
+def test_r9_angehaengtes_kodiertes_wort_loescht_die_domain_nicht(from_rest: bytes) -> None:
+    """Das Schutzziel nennt „löschen" neben „ersetzen" — beides muss scheitern."""
+    mail = _attack_mail(
+        b"From: " + from_rest,
+        reply_to=b"Reply-To: <collect@evil2.example>\r\n",
+    )
+    raw = build_raw_mail(make_message(mail))
+
+    assert raw.from_domain == "evil.example"
+    assert "attacker@evil.example" in raw.from_addr
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    assert report.return_path_mismatch is True
+    assert report.reply_to_mismatch is True
+
+
+def test_r9_zweiter_griff_nimmt_die_erste_klammer() -> None:
+    """Bewusst die erste `<…@…>`-Klammer — die letzte liesse die Domain doch fälschen."""
+    mail = _attack_mail(
+        b"From: <attacker@evil.example> <info@bank.example> =?utf-8?Q?x?="
+    )
+    raw = build_raw_mail(make_message(mail))
+
+    assert raw.from_domain == "evil.example"

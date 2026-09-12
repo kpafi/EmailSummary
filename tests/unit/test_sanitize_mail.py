@@ -666,3 +666,227 @@ class TestHc21SchrankenDerHtmlKonvertierung:
         assert time.perf_counter() - start < 1.0
         assert mail.sanitization_report.html_rejected is True
         assert "Guten Tag, Ihre Rechnung." in mail.body_text
+
+
+class TestR10SchrankenDesAnhangsPfads:
+    """NF-1, vierte Iteration: Rohtext-Budget je Mail und Schranke der MIME-Teilezahl.
+
+    Die dritte Iteration schnitt rohen Text je **Textstück** vor. `max_attachments_
+    processed` (20) multiplizierte das auf 9,6 Mio. Zeichen, obwohl `_take_budget` schon
+    nach dem ersten Anhang nichts mehr durchliess; dazu kam die unbegrenzte Teilezahl. Die
+    teuerste Mail innerhalb **aller** Schranken kostete damit 9,2 bis 10,2 s CPU — die
+    10-s-Zusage aus SPEC-CLI §5/ADR-080 war gerissen.
+    """
+
+    @staticmethod
+    def _mail_mit_anhaengen(anzahl: int, text: str) -> bytes:
+        teile = "".join(
+            "--B\r\nContent-Type: text/plain; charset=utf-8\r\n"
+            f'Content-Disposition: attachment; filename="a{n}.txt"\r\n\r\n{text}\r\n'
+            for n in range(anzahl)
+        )
+        return (
+            'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+            "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nGuten Tag.\r\n"
+            f"{teile}--B--\r\n"
+        ).encode()
+
+    def test_r10_rohtext_budget_gilt_ueber_die_ganze_mail(self) -> None:
+        """Messreihe n/2n/4n Anhänge à 480 000 Zeichen: die Zeit wächst **nicht** mit n.
+
+        Genau das war der Befund: Jeder weitere Anhang lief voll durch `clean_text`, die
+        Marker-Neutralisierung und den Link-Scrub, obwohl sein Ergebnis danach verworfen
+        wurde. Mit dem Restzähler über die ganze Mail läuft nur der erste Anhang wirklich
+        durch; alle weiteren kosten nichts mehr.
+        """
+        text = "http://x.example/a " * 25_263  # rund 480 000 Zeichen
+        zeiten: dict[int, float] = {}
+        for anzahl in (5, 10, 20):
+            mime = self._mail_mit_anhaengen(anzahl, text)
+            start = time.process_time()
+            mail = MailSanitizer().sanitize(make_raw(mime))
+            zeiten[anzahl] = time.process_time() - start
+            assert mail.sanitization_report.truncated is True
+
+        assert zeiten[20] < 2.0, zeiten
+        # Linear in n wäre Faktor 4 zwischen 5 und 20 Anhängen; konstant ist das Ziel.
+        assert zeiten[20] < zeiten[5] * 2.5 + 0.5, zeiten
+
+    def test_r10_anhang_jenseits_des_budgets_gilt_als_nicht_verarbeitet(self) -> None:
+        """Sichtbar statt still: Was nicht mehr gelaufen ist, steht als unverarbeitet da."""
+        text = "x" * 500_000  # mehr als das Rohtext-Budget (16 × 30 000)
+        mail = MailSanitizer().sanitize(make_raw(self._mail_mit_anhaengen(3, text)))
+
+        verarbeitet = [info for info in mail.attachments if info.processed]
+        assert len(verarbeitet) == 1
+        assert mail.sanitization_report.blocked_attachments == 2
+        assert mail.sanitization_report.truncated is True
+        assert set(mail.attachment_texts) == {info.filename_sanitized for info in verarbeitet}
+
+    def test_r10_gewoehnliche_anhaenge_bleiben_alle_verarbeitet(self) -> None:
+        """Gegenprobe: 20 reale Anhänge liegen um Grössenordnungen unter dem Budget."""
+        mime = self._mail_mit_anhaengen(20, "Kurzer Anhangstext.")
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        assert sum(1 for info in mail.attachments if info.processed) == 20
+        assert len(mail.attachment_texts) == 20
+
+    def test_r10_teilezahl_ist_gedeckelt(self) -> None:
+        """Jenseits von `MAX_MIME_PARTS` wird kein Teil mehr betreten — aber gezählt."""
+        from maildigest.sanitize.sanitizer import MAX_MIME_PARTS
+
+        teile = "".join(
+            f"--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nTeil {n}\r\n"
+            for n in range(MAX_MIME_PARTS + 200)
+        )
+        mime = (
+            f'Content-Type: multipart/mixed; boundary="B"\r\n\r\n{teile}--B--\r\n'
+        ).encode()
+        mail = MailSanitizer().sanitize(make_raw(mime))
+
+        assert "Teil 0" in mail.body_text
+        assert f"Teil {MAX_MIME_PARTS + 100}" not in mail.body_text
+        namen = [info.filename_sanitized for info in mail.attachments]
+        assert "(mime-teile ueberschritten)" in namen
+
+    def test_r10_teilezahl_messreihe(self) -> None:
+        """Messreihe n/2n/4n Teile: jenseits der Schranke wächst nur noch das Parsen."""
+        zeiten: dict[int, float] = {}
+        for anzahl in (2_000, 4_000, 8_000):
+            teile = "".join(
+                "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nx\r\n"
+                for _ in range(anzahl)
+            )
+            mime = (
+                f'Content-Type: multipart/mixed; boundary="B"\r\n\r\n{teile}--B--\r\n'
+            ).encode()
+            start = time.process_time()
+            MailSanitizer().sanitize(make_raw(mime))
+            zeiten[anzahl] = time.process_time() - start
+
+        assert zeiten[8_000] < 1.0, zeiten
+
+    def test_r10_gesamt_worst_case_bleibt_unter_der_zusage(self) -> None:
+        """Alle Budgets zugleich voll — jetzt **mit** Anhangspfad und Teilezahl.
+
+        Die Nachbildung des Skeptiker-Repros (sk3_max.py, dort 21,45 MB und 9,2–10,2 s
+        CPU) in kleinerem Zuschnitt: HTML-Budget voll (vier Teile über den ganzen
+        Byte-Deckel), Anhangs-Budget voll (20 Textanhänge à 480 000 Zeichen voller URLs),
+        Teilezahl über `MAX_MIME_PARTS`.
+        """
+        from maildigest.sanitize.sanitizer import MAX_MIME_PARTS
+
+        deckel = LimitsConfig().max_html_bytes
+        html = "<p>" * (deckel // 4 // 3)
+        anhang = "http://x.example/a " * 25_263
+        mime = (
+            'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+            + "".join(
+                f"--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{html}\r\n"
+                for _ in range(4)
+            )
+            + "".join(
+                "--B\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                f'Content-Disposition: attachment; filename="a{n}.txt"\r\n\r\n{anhang}\r\n'
+                for n in range(20)
+            )
+            + "".join(
+                "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nx\r\n"
+                for _ in range(MAX_MIME_PARTS + 100)
+            )
+            + "--B--\r\n"
+        ).encode()
+        assert len(mime) < LimitsConfig().max_mail_bytes
+
+        start = time.process_time()
+        mail = MailSanitizer().sanitize(make_raw(mime))
+        dauer = time.process_time() - start
+
+        assert dauer < 6.0, f"Gesamt-Worst-Case dauerte {dauer:.1f} s"
+        report = mail.sanitization_report
+        assert report.html_rejected is True
+        assert report.links_capped is True
+        assert report.truncated is True
+        assert "<" not in mail.body_text
+
+
+class TestR11PdfZeitbudget:
+    """NF-1, vierte Iteration: `pdf_timeout_seconds` gilt je Anhang — das Budget je Mail.
+
+    Drei PDF-Anhänge kosteten gemessen 60,1 s Wandzeit, zwanzig rund 400 s — weit über
+    `poll_interval_seconds` (120). Jede Extraktion bekommt jetzt
+    `min(pdf_timeout_seconds, Restbudget)`; ist das Budget aufgebraucht, startet kein
+    Kindprozess mehr (ADR-029-Nachtrag).
+    """
+
+    MAGIC = b"%PDF-1.4\r\n" + b"0" * 200
+
+    @classmethod
+    def _pdf_mail(cls, anzahl: int) -> bytes:
+        teile = "".join(
+            "--B\r\nContent-Type: application/pdf\r\n"
+            f'Content-Disposition: attachment; filename="r{n}.pdf"\r\n\r\n'
+            + cls.MAGIC.decode("latin-1")
+            + "\r\n"
+            for n in range(anzahl)
+        )
+        return (
+            'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+            "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nGuten Tag.\r\n"
+            f"{teile}--B--\r\n"
+        ).encode("latin-1")
+
+    def test_r11_zeitbudget_gilt_ueber_alle_pdf_anhaenge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Messreihe n/2n/4n PDF-Anhänge: die Summe der Zeitlimits bleibt das Budget.
+
+        Der Ersatz für `extract_pdf_text` verbraucht genau sein Zeitlimit (wie ein PDF,
+        das in den Timeout läuft) — ohne echten Kindprozess, damit der Test nicht Minuten
+        dauert. Geprüft wird, welche Zeitlimits vergeben wurden und wie viele Aufrufe es
+        überhaupt gab.
+        """
+        from maildigest.sanitize import sanitizer as sanitizer_modul
+
+        limits = LimitsConfig(pdf_timeout_seconds=20, pdf_time_budget_seconds=30)
+
+        def _lauf(anzahl: int) -> tuple[list[float], int]:
+            vergeben: list[float] = []
+            uhr = {"jetzt": 1000.0}
+
+            def _fake(data: bytes, *, timeout_seconds: float, **rest: object) -> None:
+                vergeben.append(timeout_seconds)
+                uhr["jetzt"] += timeout_seconds  # der Anhang läuft in sein Limit
+                return None
+
+            monkeypatch.setattr(sanitizer_modul, "extract_pdf_text", _fake)
+            monkeypatch.setattr(sanitizer_modul.time, "monotonic", lambda: uhr["jetzt"])
+
+            mail = MailSanitizer(limits).sanitize(make_raw(self._pdf_mail(anzahl)))
+            assert all(not info.processed for info in mail.attachments)
+            return vergeben, mail.sanitization_report.blocked_attachments
+
+        for anzahl in (3, 6, 12):
+            vergeben, geblockt = _lauf(anzahl)
+            assert vergeben == [20.0, 10.0], (anzahl, vergeben)
+            assert sum(vergeben) == limits.pdf_time_budget_seconds
+            assert len(vergeben) < anzahl  # jenseits des Budgets startet nichts mehr
+            assert geblockt == anzahl
+
+    def test_r11_einzelner_anhang_behaelt_sein_zeitlimit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Gegenprobe: Unterhalb des Budgets ändert sich am Einzel-Timeout nichts."""
+        from maildigest.sanitize import sanitizer as sanitizer_modul
+
+        vergeben: list[float] = []
+
+        def _fake(data: bytes, *, timeout_seconds: float, **rest: object) -> str:
+            vergeben.append(timeout_seconds)
+            return "Rechnungstext aus dem PDF."
+
+        monkeypatch.setattr(sanitizer_modul, "extract_pdf_text", _fake)
+        mail = MailSanitizer().sanitize(make_raw(self._pdf_mail(1)))
+
+        assert vergeben == [float(LimitsConfig().pdf_timeout_seconds)]
+        assert any(info.processed for info in mail.attachments)
+        assert "Rechnungstext aus dem PDF." in "".join(mail.attachment_texts.values())

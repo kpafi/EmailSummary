@@ -203,6 +203,12 @@ class LimitsConfig(_Section):
     pdf_max_input_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
     pdf_max_output_chars: int = Field(default=50_000, ge=1)
     pdf_timeout_seconds: int = Field(default=20, ge=1)
+    #: Zeitbudget **aller** PDF-Extraktionen einer Mail (ADR-029-Nachtrag, R-11).
+    #: `pdf_timeout_seconds` gilt je Anhang und multiplizierte sich mit deren Zahl;
+    #: dieses Budget deckelt die Summe. Jede Extraktion bekommt
+    #: `min(pdf_timeout_seconds, Restbudget)`; ist es aufgebraucht, gilt der Anhang wie
+    #: beim Timeout als nicht verarbeitet, ohne dass ein Kindprozess startet.
+    pdf_time_budget_seconds: int = Field(default=30, ge=1)
     max_mime_depth: int = Field(default=10, ge=1)
     #: Elementzahl eines HTML-Teils, ab der er als nicht verarbeitbar gilt (ADR-084, HC2-1).
     #: Die Tiefengrenze dazu ist eine Modulkonstante (`html_to_text.MAX_HTML_DEPTH`).

@@ -557,14 +557,24 @@ Alle Felder mit ihren Defaults:
 | `[messenger.signal] enabled` | `true`/`false` | `false` | Signal-Adapter freischalten |
 | `[messenger.signal] signal_cli_socket` | Pfad | `""` | Socket von `signal-cli --daemon` |
 | `[limits] max_mail_bytes` | ≥ 1 | `26214400` | Größte verarbeitete Mail (25 MB); darüber nur Metadaten-Notiz |
-| `[limits] max_text_chars` | ≥ 1 | `30000` | Klartext-Budget über Body und Anhänge. Roher Mail- und Anhangstext wird schon **vor** der Sanitisierung auf das Sechzehnfache dieses Werts vorgeschnitten (ADR-084-Nachtrag); sichtbar ist nur dieses Budget |
+| `[limits] max_text_chars` | ≥ 1 | `30000` | Klartext-Budget über Body und Anhänge. Roher Mail- und Anhangstext wird schon **vor** der Sanitisierung gedeckelt: das Sechzehnfache dieses Werts, als **Restbudget über die ganze Mail** (Body und alle Anhangstexte zusammen, ADR-084-Nachtrag). Ist es erschöpft, läuft ein weiterer Anhangstext gar nicht mehr durch die Sanitisierung und der Anhang gilt als nicht verarbeitet; sichtbar ist ohnehin nur dieses Budget |
 | `[limits] pdf_max_input_bytes` | ≥ 1 | `10485760` | Größtes verarbeitetes PDF (10 MB) |
 | `[limits] pdf_max_output_chars` | ≥ 1 | `50000` | Textausbeute je PDF |
-| `[limits] pdf_timeout_seconds` | ≥ 1 | `20` | Zeitlimit der PDF-Extraktion |
+| `[limits] pdf_timeout_seconds` | ≥ 1 | `20` | Zeitlimit **einer** PDF-Extraktion |
+| `[limits] pdf_time_budget_seconds` | ≥ 1 | `30` | Zeitbudget **aller** PDF-Extraktionen einer Mail (ADR-029-Nachtrag). Jede Extraktion bekommt `min(pdf_timeout_seconds, Restbudget)`; ist das Budget aufgebraucht, gilt der Anhang wie beim Timeout als nicht verarbeitet und es startet kein Kindprozess mehr. Ohne dieses Budget hielten 20 PDF-Anhänge den Abruf rund 400 s an |
 | `[limits] max_mime_depth` | ≥ 1 | `10` | Maximale MIME-Verschachtelung |
 | `[limits] max_attachments_processed` | ≥ 0 | `20` | Inhaltlich verarbeitete Anhänge je Mail |
 | `[limits] max_html_elements` | ≥ 1 | `50000` | Elemente der HTML-Konvertierung, als **Restbudget je Mail** über alle HTML-Teile; darüber wird der Teil nicht konvertiert (ADR-084). Höher stellen verlängert die Konvertierung linear — die Zusage „höchstens 10 s" gilt für die Vorgabe |
 | `[limits] max_html_bytes` | ≥ 1024 | `1048576` | Bytebudget der HTML-Konvertierung je Mail (1 MB), geprüft **vor** dem Parsen; zusammen mit höchstens vier konvertierten `text/html`-Teilen deckelt es die Konvertierungszeit einer Mail auf etwa zwei bis drei Sekunden je nach Maschinenlast — deutlich unter der Zusage „höchstens 10 s" (ADR-084-Nachtrag). Echte Newsletter liegen weit darunter; ein grösserer Wert verlängert die Konvertierung überproportional |
+
+**Was die Zusage „höchstens 10 s" bedeutet.** Sie gilt der **Befehlslatenz im Wartepfad**
+(ADR-080): Ein `/digest` oder `/status` aus dem Chat wartet höchstens zehn Sekunden auf eine
+Reaktion. Sie ist keine Zusage über die Dauer eines Abrufzyklus. Die reine Sanitisierung der
+teuersten Mail, die alle Grenzen oben überhaupt zulassen, kostet gemessen rund 2,7 s
+(ADR-084-Nachtrag, vierte Iteration); eine PDF-lastige Mail kann den Zyklus zusätzlich bis
+zu `pdf_time_budget_seconds` verlängern, weil dort ein Fremdparser im Subprozess läuft
+(ADR-029-Nachtrag). Der Befehlskanal bleibt in beiden Fällen innerhalb seiner zehn Sekunden,
+weil er zwischen den Abschnitten der Wartezeit bedient wird.
 
 **Umgebungsvariablen**
 

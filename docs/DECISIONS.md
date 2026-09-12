@@ -436,6 +436,57 @@
   ohne schliessendes `?=`) gilt, dass kein Segment, das `decode_header` als kodiert liefert,
   im maskierten Rohwert noch `@`, `,`, `<`, `>`, `;` oder `:` zeigt.
 
+- **Nachtrag (Nachfixrunde NF-1, vierte Iteration, 2026-09-12, R-8 und R-9):** Zwei
+  Korrekturen am selben Pfad.
+  **(1) R-8, Regression aus der dritten Iteration.** Die Maske formgleich mit
+  `email.header.ecre` zu machen war richtig — das `.*?` daraus zu übernehmen nicht: Es darf
+  über `?` hinweglaufen, und fehlt das schliessende `?=`, scannt jede der n Startstellen
+  den ganzen Resttext. `_mask_encoded_words` wurde damit quadratisch (gemessen auf dem
+  Repro `"=?a?Q?xxxx" * n`: 0,077 / 0,266 / 0,491 / 1,940 / 7,778 / 33,7 s für
+  n = 1000 … 32 000; ein 156-KiB-`From` kostete im Ingest 18,2 s CPU statt 0,002 s). Der
+  Pfad liegt in `build_raw_mail`, also **vor** jeder Grössenschranke des Sanitizers.
+  Verbindlich ist ab jetzt zusätzlich: **erst deckeln, dann scannen — und linear scannen.**
+  (a) Der **rohe** Wert eines anzeigenamentragenden Headers wird vor jeder Verarbeitung auf
+  `_MAX_HEADER_CHARS` (4096 Zeichen) geschnitten. RFC 5322 §2.1.1 erlaubt 998 Zeichen je
+  Zeile; reale Adress-Header liegen weit darunter. Der Schnitt liegt vor der
+  8-Bit-Vorentzerrung, denn auch die ruft `decode_header`. Derselbe Deckel gilt für den
+  **Betreff**: `decode_header` ist selbst quadratisch (160-KiB-Betreff = 8,6 s CPU), und
+  sichtbar ändert der Schnitt dort nichts, weil der Sanitizer den Betreff ohnehin auf 300
+  Zeichen kürzt. Bewusst kein Config-Feld: Ein Header jenseits davon ist kein Betriebsfall.
+  (b) Die Maske sucht den Kopf `=?charset?B|Q?` weiterhin mit einem Muster (`[^?]*` für den
+  Charset, damit sie nicht enger ist als der Dekoder), das **Ende** aber mit
+  `str.find("?=")` ab dem Kopf-Ende. Findet sich keines, bricht der Durchlauf ab — für jede
+  spätere Startstelle gäbe es erst recht keines. Das liefert exakt die Segmente von `ecre`
+  (erstes `?=` nach dem Kopf, non-greedy) in einem einzigen Durchlauf. Messreihe danach
+  (`_mask_encoded_words`, kaputte Wörter): n = 25 000 / 50 000 / 100 000 / 200 000 ⇒ 0,000 /
+  0,000 / 0,001 / 0,001 s (vorher 21,4 / 80,7 s / Abbruch); mit **gültigen** Wörtern 0,012 /
+  0,028 / 0,057 / 0,119 s — sauber linear. Der Leitsatz der dritten Iteration bleibt
+  unberührt: Die Maske darf nie enger sein als der Dekoder; Orakel ist weiterhin
+  `decode_header` selbst (`test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder`).
+  **(2) R-9, die Löschrichtung des Schutzziels.** `getaddresses` verwirft den Adressteil
+  **ganz**, sobald hinter der spitzen Klammer noch ein Token steht:
+  `From: <attacker@evil.example> =?utf-8?Q?info@bank.example?=` ergibt maskiert
+  `<attacker@evil.example> MDENCWORD0` und daraus `[('', '')]`. `from_addr` und
+  `from_domain` waren leer, die Nachricht zeigte `(unknown sender)`, und
+  `return_path_mismatch` wie `reply_to_mismatch` fielen still auf `False` — obwohl
+  `Return-Path` auf `bank.example` und `Reply-To` auf `evil2.example` zeigten. Das ist nicht
+  durch NF-1 entstanden, fällt aber wörtlich unter „ein Anzeigename kann die
+  Absender-Domain weder ersetzen **noch löschen**". Zwei Griffe:
+  (a) Liefert der Rohwert-Parse keine Angabe mit `lokalteil@domain`, greift ein zweiter,
+  konservativer Schritt auf die **erste** `<lokalteil@domain>`-Klammer des maskierten
+  Rohwerts zurück. Bewusst die erste und nicht die letzte (der Auftrag liess beides offen):
+  `email.policy.default` — die Zweitmeinung, die der Auftrag als Alternative nennt — nimmt
+  ebenfalls die erste Angabe, und die letzte zu nehmen hiesse, dass ein angehängtes
+  `<info@bank.example>` die Domain doch wieder übernimmt. Erst wenn auch das leer bleibt,
+  bleibt `from_domain` leer.
+  (b) Unabhängig davon wird Punkt (b) dieses ADR präzisiert: „zwei Unbekannte sind keine
+  Übereinstimmung" heisst nicht, dass **eine** Unbekannte schweigen muss.
+  `return_path_mismatch` ist jetzt `True`, wenn die Return-Path-Domain bekannt und die
+  From-Domain unbekannt ist; `reply_to_mismatch` analog bei bekannter Antwortadresse und
+  unbekannter Absenderadresse. Sind beide Seiten unbekannt, bleibt es wie bisher bei
+  `False`. Begründung: Sonst schaltet ein Angreifer die Warnung ab, indem er den `From`
+  zerstört, statt ihn zu fälschen — die teurere Richtung des Fehlers ist hier die stille.
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28
@@ -681,6 +732,33 @@
 - Konsequenzen: Pro PDF fallen ~100-300 ms Interpreter-Start an — bei einem
   Mail-Digest irrelevant. Auf Nicht-POSIX-Plattformen ohne `resource`-Modul bleibt nur
   Timeout+Größenlimit (best effort, im Code als solches markiert).
+
+- **Nachtrag (Nachfixrunde NF-1, vierte Iteration, 2026-09-12, R-11):** Der Timeout war
+  richtig gedacht, aber falsch aggregiert: `subprocess.run(timeout=…)` begrenzt **eine**
+  Extraktion, und `[limits] max_attachments_processed` erlaubt 20 verarbeitete Anhänge. Drei
+  PDF-Anhänge, die je in den Timeout laufen, kosteten gemessen 60,1 s Wandzeit, zwanzig
+  rund 400 s — bei einer Mail von 12,8 MB aus lauter regulären PDFs (jedes unter
+  `pdf_max_input_bytes`) und damit weit über `poll_interval_seconds` (120). Das Schutzziel
+  „keine Mail hält den Dienst über die Poll-Periode hinaus an" war direkt verletzt.
+  Entscheidung: ein **Zeitbudget je Mail** über alle PDF-Extraktionen, neues Feld
+  `[limits] pdf_time_budget_seconds` (Default 30 s). Jede Extraktion bekommt
+  `min(pdf_timeout_seconds, Restbudget)`; verbraucht wird die gemessene Wandzeit. Ist das
+  Budget aufgebraucht, gilt der Anhang wie beim Timeout als **nicht verarbeitet**, und es
+  startet gar kein Kindprozess mehr — fail-safe wie jeder andere Fehler dieser Stufe (I6).
+  Warum ein Config-Feld und keine Modulkonstante (anders als `RLIMIT_AS`): Der Wert ist eine
+  **Betriebsgrösse** wie `pdf_timeout_seconds` selbst — wer PDF-lastige Postfächer abruft
+  und den Einzel-Timeout hochsetzt, muss auch die Summe hochsetzen können; `RLIMIT_AS`
+  schützt dagegen den Host und geht den Nutzer nichts an. Der Default 30 s ist so gewählt,
+  dass zwei Extraktionen im vollen Einzel-Timeout hineinpassen (20 + 10) und eine
+  PDF-lastige Mail den Zyklus um höchstens ein Viertel der Poll-Periode verlängert.
+  Gemessen (Repro des Skeptikers, 3000-seitiges PDF, 474 KB): 3 Anhänge 60,1 s → 30,1 s;
+  20 Anhänge rechnerisch ~400 s → 30,3 s; alle nicht extrahierten Anhänge erscheinen als
+  unverarbeitet in der Nachricht. Gewöhnliche PDF-Mails (Korpus `03_attachment_pdf_ok.eml`)
+  sind unverändert — sie brauchen Bruchteile einer Sekunde und sehen das Budget nie.
+  **Was die 10-s-Zusage bedeutet** (SPEC-CLI §5/ADR-080): Sie ist die Zusage über die
+  **Befehlslatenz im Wartepfad** — wie lange ein `/digest` oder `/status` aus dem Chat auf
+  eine Reaktion wartet —, nicht über die Dauer eines Abrufzyklus. Eine PDF-lastige Mail
+  kann den Zyklus bis zum PDF-Zeitbudget verlängern; das ist beabsichtigt und begrenzt.
 
 ## ADR-030: MIME-Baum-Politik — rfc822 nie betreten, Tiefenlimit als Metadatum, Body-Aggregation
 - Status: accepted
@@ -2590,3 +2668,45 @@ ihre *Erkennung* zu eng.
   Klartext-Vorschnitt voll, Link-Budget voll: 20 MB URL-Klartext + vier HTML-Teile über das
   ganze Byte-Budget) kostet **1,0 s**; teuerster Einzelfall bleibt die reine HTML-Mail mit
   2,3 bis 2,6 s. Beides liegt unter dem Zielwert von 3 s und weit unter der 10-s-Zusage.
+
+- **Nachtrag (Nachfixrunde NF-1, vierte Iteration, 2026-09-12, R-10):** Auch der zweite
+  Nachtrag hat das falsche Ganze gemessen. Der Roh-Vorschnitt für Klartext galt je
+  **Textstück**; `[limits] max_attachments_processed` (20) multiplizierte ihn auf
+  20 × 480 000 = 9,6 Mio. Zeichen, obwohl `_take_budget` schon nach dem ersten Anhang
+  nichts mehr durchliess — jeder weitere Anhang lief vollständig durch `clean_text`, die
+  Marker-Neutralisierung und den Link-Scrub, nur damit sein Ergebnis verworfen wurde. Dazu
+  kam die unbegrenzte **Teilezahl**: Ausserhalb des HTML-Pfads gab es kein Analogon zu
+  `MAX_HTML_PARTS`. Der Skeptiker der dritten Iteration hat beides in einer einzigen Mail
+  von 21,45 MB (unter `max_mail_bytes`) zusammengebracht — 4 HTML-Teile über das ganze
+  Byte-Budget, 20 Textanhänge à 480 000 Zeichen voller URLs, 200 000 winzige
+  `text/plain`-Teile — und **9,2 bis 10,2 s CPU** gemessen: die 10-s-Zusage gerissen, die
+  3-s-Marke des Auftrags mehr als verdreifacht. Die im zweiten Nachtrag genannten
+  „1,0 s" für den Gesamt-Worst-Case massen nur Body und HTML. Zwei Entscheidungen:
+  1. **Roh-Budget je Mail statt je Textstück.** `_RawTextBudget` ist ein Restzähler über
+     die **ganze** Mail (Body und alle Anhangstexte zusammen, `_RAW_TEXT_FACTOR` ×
+     `max_text_chars` = 480 000 Zeichen) — genau die Bauform von `HtmlBudget`. Ist er
+     erschöpft, läuft ein weiterer Anhangstext gar nicht mehr durch die teuren Pässe; der
+     Anhang gilt dann als **nicht verarbeitet** (`processed=False`, zählt in
+     `blocked_attachments`, sichtbar in der Nachricht) und `truncated` steht ohnehin. Die
+     Reihenfolge — Body zuerst, Anhänge danach — entspricht der von `max_text_chars`, das
+     schon immer als Restbudget durch `sanitize()` gereicht wurde. Weiterhin kein eigenes
+     Config-Feld (Begründung unverändert aus dem zweiten Nachtrag).
+  2. **Teilezahl:** `sanitizer.MAX_MIME_PARTS` (500, Modulkonstante wie `MAX_HTML_PARTS`).
+     Teile jenseits davon werden nicht betreten — auch kein Teilbaum —, sondern als ein
+     Metadatum `(mime-teile ueberschritten)` gezählt; dieselbe „sichtbar statt still"-Politik
+     wie beim Tiefenlimit (ADR-030 (b)). 500 liegt zwei Grössenordnungen über
+     `max_attachments_processed` (20) und `_MAX_ATTACHMENT_ENTRIES` (100); der Korpusfall
+     `20_many_attachments.eml` sieht die Schranke nie. Konsequenz: Eine Mail mit mehr als
+     500 Teilen verliert den Inhalt der weiteren Teile — sichtbar, nicht still.
+  **Messreihen (dieselbe Maschine, `time.process_time`, alt = Stand `649a9b8`).**
+  Anhänge à 480 000 Zeichen voller URLs, n/2n/4n: alt 1,64 / 2,53 / 5,44 s → neu 0,28 /
+  0,46 / 0,49 s (die Zeit hängt jetzt nicht mehr an n). MIME-Teile 2000 / 4000 / 8000: alt
+  0,03 / 0,06 / 0,12 s → neu 0,02 / 0,04 / 0,10 s (dort dominiert das Parsen, das keine
+  Schranke abwenden kann); bei 200 000 Teilen 3,69 → 1,81 s.
+  **Gesamt-Worst-Case neu gemessen** (ohne PDF-Kindprozesse, die R-11 getrennt deckelt) —
+  alle Budgets zugleich voll: HTML-Budget (4 Teile über den ganzen Byte-Deckel),
+  Klartext-Budget, Link-Budget, Anhangs-Budget (20 Anhänge) und Teilezahl (200 000 Teile),
+  Mail 21,45 MB: **9,22 s → 2,70 s.** Teuerster Einzelfall bleibt die reine HTML-Mail mit
+  2,4 s (unverändert, R-7). Damit hält der Sanitize-Pfad die 3-s-Marke des Auftrags und
+  liegt weit unter der 10-s-Zusage aus SPEC-CLI §5/ADR-080. Die Wandzeit einer PDF-lastigen
+  Mail steht daneben und wird vom PDF-Zeitbudget begrenzt (ADR-029-Nachtrag, R-11).
