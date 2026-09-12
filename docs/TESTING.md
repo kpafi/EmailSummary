@@ -728,9 +728,11 @@ Die Nachfixrunde wurde nach fünf Iterationen auf Nutzerentscheid beendet. Die b
 Release-Blocker HC2-1 und HC2-2 sind in ihrer gemeldeten Form seit der ersten Iteration
 behoben und über alle fünf Skeptiker-Läufe stabil geblieben (alle Repro-Skripte der
 Iterationen 1–5 laufen auf `a2feda2` ohne Rückfall in die gefährliche Richtung). Der letzte
-Skeptiker hat fünf Punkte belegt, die **nicht** bearbeitet wurden; sie stehen hier, damit
-sie nicht nur im Workflow-Journal liegen. Die Repro-Skripte (`sk5_*.py`) liegen im
-Scratchpad der Sitzung, nicht im Repo.
+Skeptiker hat fünf Punkte belegt, die zunächst **nicht** bearbeitet wurden; sie stehen hier,
+damit sie nicht nur im Workflow-Journal liegen. Vor Release 0.2.0 wurden O-1 (zwei
+Iterationen mit Skeptiker) und O-3 (direkt, mit dem Skeptiker-Fuzz als Regressionstest)
+geschlossen; O-6 bis O-8 sind Nebenbefunde des O-1-Skeptikers. Die Repro-Skripte
+(`sk5_*.py` … `sk7_*.py`) liegen im Scratchpad der Sitzung, nicht im Repo.
 
 | Nr. | Severity | Befund | Herkunft | Fix-Richtung |
 |-----|----------|--------|----------|--------------|

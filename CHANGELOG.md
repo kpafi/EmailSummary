@@ -4,7 +4,13 @@ Alle nennenswerten Änderungen an MailDigest. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die Versionsnummern folgen
 [Semantic Versioning](https://semver.org/lang/de/).
 
-## [Unveröffentlicht]
+## [0.2.0] — 2026-09-12
+
+Erstes öffentliches Release. Seit 0.1.0 ist MailDigest erstmals gegen echte Gegenstellen
+gelaufen (ein Spiegelpostfach bei web.de, ein Modell über OpenRouter, ein Telegram-Bot) und
+hat zwei dokumentierte Prüfrunden durchlaufen (docs/TESTRUNDE-HOT-COLD.md und
+docs/TESTRUNDE-2.md, Abnahme in docs/ABNAHME-FIXRUNDE.md). Was offen blieb, steht in
+docs/TESTING.md §7 und unten unter „Bekannte Grenzen".
 
 ### Funktionen
 - **Betrieb ohne Sprachmodell** als Standard (`[llm] provider = "none"`, ADR-076):
@@ -238,11 +244,15 @@ docs/TESTRUNDE-2.md):
 ### Bekannte Grenzen
 - Die Aussage „keine Antworten aus dem Messenger heraus" aus 0.1.0 gilt eingeschränkt
   weiter: kein Dialog, keine Aktionen — außer der festen Befehlsliste oben.
-- Nach der Nachfixrunde offen (docs/TESTING.md §7, O-1 … O-5): Eine Mail mit über 250
-  verschachtelten MIME-Ebenen lässt `build_raw_mail` mit `RecursionError` scheitern und
-  stoppt den Abruf, bis die Mail aus dem Spiegelpostfach entfernt ist (O-1). Eine Mail aus
-  Millionen leerer MIME-Teile kostet bis zu rund 35 s je Zyklus (O-2). Ein regelwidrig
-  kodiertes Wort im Absendernamen kann die angezeigte Absender-Domain noch verfälschen (O-3).
+- Offene Befunde aus den Prüfrunden (docs/TESTING.md §7, Tabelle „Offen nach Ende der
+  Nachfixrunde"): Eine Mail aus Millionen leerer MIME-Teile kostet bis zu rund 35 s je
+  Abrufzyklus, weil der Parser der Standardbibliothek vor jeder Schranke läuft (O-2). Der
+  Platzhalter einer unparsbaren Mail kann eine spätere echte Mail mit gleicher Message-ID
+  als Duplikat unterdrücken (O-6). Antwortet der Server auf den Abruf einer einzelnen Mail
+  dauerhaft mit `NO`, blockiert diese Mail den Abruf (O-7). Dazu drei niedrige Punkte
+  (O-4, O-5, O-8) und die Nachfix-Pakete NF-2 bis NF-7 aus docs/ABNAHME-FIXRUNDE.md §8.
+  Die beiden zuvor hohen Befunde O-1 (Gift-Mail stoppt den Abruf) und O-3 (Absender-Domain
+  fälschbar) sind vor diesem Release behoben.
 
 ## [0.1.0] — 2026-09-08
 

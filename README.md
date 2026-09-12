@@ -216,6 +216,7 @@ maildigest connect-mail        # Mirror-Postfach: Zugang testen, Ordner wählen
 maildigest connect-llm         # OPTIONAL: Sprachmodell (auch gratis) verbinden
 maildigest connect-messenger   # Telegram/Discord/Signal, Testnachricht
 maildigest test                # Ende-zu-Ende-Selbsttest mit einer Beispielmail
+maildigest instructions --edit # was dir wichtig ist (jederzeit änderbar)
 maildigest run                 # Dauerbetrieb (Strg-C beendet sauber)
 ```
 
@@ -405,20 +406,19 @@ es nicht — auch kein `EXPUNGE`, das die Löschmarkierungen anderer Programme a
 Das Folgende ist keine Aufzählung von Kleinigkeiten, sondern die Liste der Stellen, an
 denen du dich auf MailDigest **nicht** verlassen solltest.
 
-**Noch nie gegen echte Gegenstellen gelaufen.** Version 0.1.0 ist vollständig gegen
-Attrappen getestet: kein echtes IMAP-Postfach, keine echte LLM-API, kein echter Messenger.
-Die Tests sind gründlich (1500+ Tests, ein Angriffskorpus, zwei dokumentierte
-Prüfdurchläufe), aber
-sie prüfen das Programm gegen ein nachgebautes Gegenüber. Ob ein realer IMAP-Server sich
-so verhält wie unser Mock, ob ein reales Modell das JSON-Format hält, ob Telegram die
-Nachricht so annimmt — das ist unbelegt. Rechne beim ersten Lauf mit Überraschungen und
-fang mit `maildigest test --dry-run` an.
+**Kaum Praxiserprobung.** Version 0.2.0 ist im September 2026 erstmals gegen echte
+Gegenstellen gelaufen: ein Spiegelpostfach bei web.de, ein Modell über OpenRouter, ein
+Telegram-Bot. Das ist eine Umgebung, ein Nutzer, wenige Tage. Alles andere ist gegen
+Attrappen getestet (1800+ Tests, ein Angriffskorpus, zwei dokumentierte Prüfrunden mit
+Blackbox-Testern). Ob dein IMAP-Server, dein Modell und dein Messenger sich so verhalten
+wie die geprüften, ist unbelegt. Rechne beim ersten Lauf mit Überraschungen und fang mit
+`maildigest test --dry-run` an.
 
-**Der zweite Blackbox-Durchlauf fehlt.** Der erste (docs/TESTING.md §6) fand zwei
-schwerwiegende Fehler; beide sind behoben und mit Regressionstests belegt. Unser eigenes
-Testprotokoll verlangt danach eine zweite, unabhängige Runde. Sie hat nicht stattgefunden.
-Eine weitere Prüfrunde im September 2026 (docs/TESTING.md §7) hat 38 Befunde geliefert — alle
-behoben —, ersetzt sie aber nicht: Die Nachprüfung lief dort mit Code-Zugriff.
+**Offene Befunde.** Die zweite Prüfrunde (docs/TESTRUNDE-2.md, blackbox geprüft) und die
+Abnahme (docs/ABNAHME-FIXRUNDE.md) haben die schweren Befunde geschlossen. Was offen ist,
+steht mit Schwere und Fix-Richtung in docs/TESTING.md §7 — darunter eine Mail aus
+Millionen leerer MIME-Teile, die einen Abrufzyklus um rund eine halbe Minute verlängert,
+und die Nachfix-Pakete NF-2 bis NF-7 der Abnahme.
 
 **Bild-Phishing bleibt offen.** Kein OCR, keine Bildanalyse. Wer seinen Text als Screenshot
 verschickt, bekommt eine Zusammenfassung wie „Mail ohne Text mit einem Bildanhang" — das
@@ -457,9 +457,27 @@ Zwei bewusste Eigenheiten, die wie Fehler aussehen können:
   Mailprogramm zeigt dir die HTML-Fassung. Weichen beide deutlich voneinander ab, steht das
   als Hinweis in der Nachricht; inhaltlich vergleichen kann MailDigest sie nicht.
 
+## Dokumentation
+
+Kurz gesagt: die README erklärt das Werkzeug, `docs/` erklärt das Programm.
+
+| Datei | Inhalt |
+|---|---|
+| [docs/SPEC-CLI.md](docs/SPEC-CLI.md) | Der Vertrag: jedes Kommando, jede Frage, jede Ausgabezeile, jedes Config-Feld, alle Exit-Codes |
+| [docs/SECURITY.md](docs/SECURITY.md) | Angreifermodell, Sanitizer-Regeln, Prompt-Härtung, Invarianten I1–I8 samt Review |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Komponenten, Datenmodell, Pipeline-Vertrag, Fehler- und Retry-Politik |
+| [docs/BETRIEB.md](docs/BETRIEB.md) | systemd-Unit, Cron, Wartung, Logereignisse |
+| [docs/TESTING.md](docs/TESTING.md) | Testprotokoll und alle Findings-Logs, inklusive der offenen Befunde (§7) |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Anforderungen mit Status |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Alle Design-Entscheidungen als ADRs (ADR-001 bis ADR-087) |
+| docs/TESTRUNDE-*.md, docs/ABNAHME-FIXRUNDE.md | Protokolle der Prüfrunden und der Abnahme, unverändert |
+| [PLAN.md](PLAN.md), [docs/PLAN-FIXRUNDE.md](docs/PLAN-FIXRUNDE.md) | Wie das Projekt entstanden ist: Arbeitspakete und Fixrunde, von KI-Agenten abgearbeitet und von Menschen entschieden |
+
 ## Lizenz und Status
 
-Version 0.1.0 (siehe [CHANGELOG.md](CHANGELOG.md)) — ein erstes vollständiges Release, noch
-ohne Praxiserprobung. Die verbindlichen Anforderungen stehen in
+Version 0.2.0 (siehe [CHANGELOG.md](CHANGELOG.md)) — das erste öffentliche Release, mit
+wenig Praxiserprobung und einer ehrlichen Liste offener Punkte (oben und in
+docs/TESTING.md §7). Die verbindlichen Anforderungen stehen in
 [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), das Sicherheitsmodell samt Invarianten-Review
-in [docs/SECURITY.md](docs/SECURITY.md).
+in [docs/SECURITY.md](docs/SECURITY.md). Fehler und Befunde bitte als GitHub-Issue mit
+Repro-Schritten, gern im Format aus docs/TESTING.md §3.
