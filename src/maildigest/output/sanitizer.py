@@ -189,7 +189,17 @@ _RE_DOMAINISH = re.compile(
 #: durch, obwohl ein Linkifier daraus sehr wohl ein Ziel macht. Die gewählte Form defangt
 #: strikt mehr — die fail-safe Richtung (ADR-036). Dass ``3.14``, ``1.2.3`` und ``v2.10.1``
 #: lesbar bleiben, kommt aus der Vier-Oktett-Form, nicht aus den Lookarounds.
-_RE_IPV4 = re.compile(r"(?<![A-Za-z0-9])\d{1,3}(?:\.\d{1,3}){3}(?!\.?\d)")
+#:
+#: **Vier oder mehr** Oktette (S-4): Mit genau ``{3}`` fand die Regex in einer längeren
+#: Punktkette (``1.1.1.1.1.1.1.``) nur das **letzte** Vier-Oktett-Fenster — der Treffer am
+#: Anfang scheiterte am Lookahead (fünftes Oktett), das nächste Fenster begann hinter einem
+#: Punkt und passte. Ergebnis ``1.1.1.1[.]1[.]1[.]1.``: Die ersten vier Oktette lebten
+#: weiter, und genau diese Form (``1.1.1.1`` vor ``[``) autolinkt ein Client. Mit ``{3,}``
+#: erfasst der Treffer die **ganze** Kette, und die Ersetzung bricht jeden Punkt darin.
+#: ``0.0.0.0000`` und ``1.2.3.4.5678`` bleiben wie bisher unangetastet (kein Fenster endet
+#: vor einer Ziffer); die Regressionsprobe steht neben dem Property-Test, der die Lücke
+#: fand (`test_hot_properties.py::test_s4_punktkette_wird_ganz_gebrochen`).
+_RE_IPV4 = re.compile(r"(?<![A-Za-z0-9])\d{1,3}(?:\.\d{1,3}){3,}(?!\.?\d)")
 
 #: `](` unmittelbar hintereinander ist die Markdown-Link-Syntax. Nach dem Scrubbing steht
 #: im Ziel zwar nie eine URL, aber die Form soll gar nicht erst entstehen (T7).

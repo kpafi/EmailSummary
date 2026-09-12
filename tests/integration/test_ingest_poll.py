@@ -15,13 +15,14 @@ Schwerpunkte:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
-from imap_tools import MailMessage, MailMessageFlags
+from imap_tools import BaseMailBox, MailMessage, MailMessageFlags
 from pydantic import SecretStr
 
 from maildigest.config import ImapConfig
@@ -51,6 +52,20 @@ def make_message(raw: bytes, uid: str) -> MailMessage:
     return MailMessage([(f"1 (UID {uid} FLAGS ())".encode(), raw), b")"])
 
 
+def header_fetch_answer(uid: str, raw: bytes, parts: str) -> tuple[str, list[Any]]:
+    """Serverantwort auf ``UID FETCH <uid> (BODY.PEEK[HEADER]<0.N> RFC822.SIZE INTERNALDATE)``
+    in der Form von `imaplib`; der Teilabruf `<0.N>` wird wie beim Server angewandt."""
+    limit = re.search(r"<0\.(\d+)>", parts)
+    headers = raw.split(b"\r\n\r\n", 1)[0] + b"\r\n\r\n"
+    if limit:
+        headers = headers[: int(limit.group(1))]
+    meta = (
+        f"1 (UID {uid} RFC822.SIZE {len(raw)} INTERNALDATE "
+        f'"01-Sep-2026 12:00:00 +0000" BODY[HEADER]<0> {{{len(headers)}}}'
+    ).encode()
+    return "OK", [(meta, headers), b")"]
+
+
 class FakeRawClient:
     """Ersatz für `imaplib.IMAP4_SSL`: protokolliert jedes rohe UID-Kommando (CT-9)."""
 
@@ -67,6 +82,15 @@ class FakeRawClient:
             for arg in args
         ]
         self._box.commands.append((command.upper(), *decoded))
+        if command.upper() == "FETCH":
+            # O-1 (zweite Iteration): der Kopfzeilen-Abruf einer unparsbaren Mail.
+            if self._box.header_fetch_error is not None:
+                raise self._box.header_fetch_error
+            entry = self._box.unparsable.get(str(args[0]))
+            raw = entry[1] if isinstance(entry, tuple) else entry
+            if isinstance(raw, bytes):
+                return header_fetch_answer(str(args[0]), raw, str(args[1]))
+            return "NO", [None]
         if self._box.uid_error is not None:
             raise self._box.uid_error
         return self._box.uid_status.get(command.upper(), "OK"), [b""]
@@ -82,8 +106,15 @@ class FakeMailBox:
         capabilities: tuple[str, ...] = ("IMAP4REV1", "MOVE"),
         uid_status: dict[str, str] | None = None,
         uid_error: Exception | None = None,
+        unparsable: dict[str, Any] | None = None,
+        header_fetch_error: Exception | None = None,
     ) -> None:
+        """`unparsable`: UID → Rohbytes, an denen der Parse von imap-tools scheitert, oder
+        eine Ausnahme, die der Konstruktor werfen soll, oder (Ausnahme, Rohbytes für den
+        Kopfzeilen-Abruf)."""
         self.messages = messages if messages is not None else []
+        self.unparsable = unparsable if unparsable is not None else {}
+        self.header_fetch_error = header_fetch_error
         self.commands: list[tuple[str, ...]] = []
         self.capabilities = capabilities
         self.uid_status = uid_status if uid_status is not None else {}
@@ -109,8 +140,26 @@ class FakeMailBox:
     def logout(self) -> None:
         self.logouts += 1
 
+    def uids(self, criteria: Any = "ALL", charset: Any = "US-ASCII", sort: Any = None) -> list[Any]:
+        """Wie `MailBox.uids`: ein `UID SEARCH`; die UIDs aller ungesehenen Mails."""
+        uids = [msg.uid for msg in self.messages] + list(self.unparsable)
+        return sorted(uids, key=lambda uid: str(uid or "").zfill(9))  # Server-Reihenfolge
+
     def fetch(self, criteria: Any = "ALL", **kwargs: Any) -> list[MailMessage]:
-        return list(self.messages)
+        """Wie `MailBox.fetch(uid_list=...)`: parst je UID im Aufruf (eifrig, wie imap-tools)."""
+        uid_list = kwargs.get("uid_list")
+        if uid_list is None:
+            return list(self.messages)
+        found = [msg for msg in self.messages if msg.uid in uid_list]
+        for uid in uid_list:
+            entry = self.unparsable.get(uid)
+            if isinstance(entry, tuple):
+                raise entry[0]
+            if isinstance(entry, BaseException):
+                raise entry
+            if isinstance(entry, bytes):  # der echte Parse von imap-tools — er wirft selbst
+                found.append(MailMessage([(f"1 (UID {uid} FLAGS ())".encode(), entry), b")"]))
+        return found
 
     # F-ING-1/CT-9: Alle Komfort-Methoden von imap-tools expungen intern.
     def flag(self, *args: Any, **kwargs: Any) -> None:
@@ -762,3 +811,260 @@ def test_o1_ersatzkey_ohne_lesbare_header_ist_stabil() -> None:
     assert erste.dedupe_key != andere.dedupe_key
     assert erste.ingest_failed is True
     assert erste.from_domain == ""  # „unbekannt", ADR-020 (b)
+
+
+# --- O-1, zweite Iteration: unparsbare Mail wird je UID isoliert -----------------------------
+
+
+def rfc822_poison(depth: int = 990) -> bytes:
+    """Die Gift-Mail des Skeptikers (sk6_e2e_rfc.py): `depth` `message/rfc822`-Ebenen, 31 KB.
+
+    Ab Tiefe 984 scheitert `email.message_from_bytes` — und damit der Konstruktor von
+    `imap_tools.MailMessage` — mit `RecursionError` (Standard-Rekursionslimit 1000), bevor
+    irgendein Code dieses Projekts die Mail sieht.
+    """
+    head = b"Message-ID: <poison-rfc822@example.org>\r\nFrom: a@example.org\r\nSubject: t\r\n"
+    body = b"Content-Type: text/plain\r\n\r\nHallo\r\n"
+    return head + b"Content-Type: message/rfc822\r\n\r\n" * depth + body
+
+
+class RawLevelClient:
+    """`imaplib`-Attrappe, gegen die die **echten** `uids()`/`fetch()` von imap-tools laufen.
+
+    Zählt jedes Kommando (CT-9, O-1 (c)); antwortet auf SEARCH, FETCH (voll und
+    Kopfzeilen) und STORE. Alles andere fliegt auf.
+    """
+
+    capabilities = ("IMAP4REV1", "MOVE")
+
+    def __init__(self, box: RawLevelMailBox) -> None:
+        self._box = box
+        self.commands: list[tuple[str, ...]] = []
+
+    def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+        decoded = [
+            arg.decode("utf-8", "replace") if isinstance(arg, bytes) else str(arg)
+            for arg in args
+        ]
+        self.commands.append((command.upper(), *decoded))
+        verb = command.upper()
+        if verb == "SEARCH":
+            return "OK", [" ".join(self._box.unseen()).encode()]
+        if verb == "FETCH":
+            uid, parts = decoded[0], decoded[1]
+            raw = self._box.mails.get(uid)
+            if raw is None:
+                return "OK", [None]
+            if "HEADER" in parts:
+                return header_fetch_answer(uid, raw, parts)
+            meta = f"1 (UID {uid} RFC822.SIZE {len(raw)} FLAGS () BODY[] {{{len(raw)}}}".encode()
+            return "OK", [(meta, raw), b")"]
+        if verb == "STORE":
+            self._box.seen.add(decoded[0])
+            return "OK", [b""]
+        raise AssertionError(f"unerwartetes IMAP-Kommando: {command} (F-ING-1/CT-9)")
+
+    def expunge(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailDigest darf niemals expunge aufrufen (F-ING-1, CT-9)")
+
+
+class RawLevelMailBox(BaseMailBox):
+    """Postfach auf `imaplib`-Ebene: `uids()`/`fetch()` sind die echten von imap-tools.
+
+    Damit läuft der eifrige Parse in `MailMessage.__init__` genau dort, wo er im Betrieb
+    läuft — innerhalb des `fetch`-Generators. `track_seen=False` liefert wie die Attrappe
+    des Skeptikers jede Mail in jedem Zyklus erneut.
+    """
+
+    def __init__(self, mails: dict[str, bytes], *, track_seen: bool = True) -> None:
+        self.mails = dict(mails)
+        self.seen: set[str] = set()
+        self.track_seen = track_seen
+        super().__init__()
+
+    def _get_mailbox_client(self) -> Any:
+        return RawLevelClient(self)
+
+    def unseen(self) -> list[str]:
+        return [uid for uid in self.mails if not (self.track_seen and uid in self.seen)]
+
+    @property
+    def commands(self) -> list[tuple[str, ...]]:
+        return self.client.commands  # type: ignore[no-any-return]
+
+    def login(self, *args: Any, **kwargs: Any) -> Any:
+        return self
+
+    def logout(self) -> None:
+        return None
+
+    def flag(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailBox.flag() expunged — verboten (F-ING-1, CT-9)")
+
+    def move(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailBox.move() kann client-seitig löschen — verboten (CT-9)")
+
+    def delete(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailDigest darf Mails niemals löschen (F-ING-1)")
+
+    def expunge(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("MailDigest darf niemals expunge aufrufen (F-ING-1)")
+
+
+def make_raw_client(box: RawLevelMailBox) -> ImapClient:
+    client = ImapClient(make_config(), mailbox_factory=lambda: box)
+    client.connect()
+    return client
+
+
+def test_o1b_unparsbare_mail_blockiert_den_poll_nicht(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Der Parse von imap-tools wirft für UID 1 `RecursionError`; UID 2 ist gesund.
+
+    Vor dem Fix: `fetch_unseen` deutete den Fehler in `ImapConnectionError` um — der ganze
+    Zyklus brach ab, nichts wurde verarbeitet, nichts markiert, bei jedem Poll dasselbe.
+    Jetzt: die gesunde Mail wird verarbeitet, die unparsbare als `failed`/`ingest_error` mit
+    Notiz gebucht, beide als gelesen markiert; beim Wiederanlauf ist sie ein Duplikat.
+    """
+    path = tmp_path / "state.db"
+    kopf = (
+        b"Message-ID: <gift@example.org>\r\nFrom: Absender <a@Example.ORG>\r\n"
+        b"Subject: Geheimer Betreff\r\n\r\nGeheimer Inhalt\r\n"
+    )
+    gift = {"1": (RecursionError("maximum recursion depth exceeded"), kopf)}
+    box = FakeMailBox([make_message(make_mail("normal"), "2")], unparsable=gift)
+    processor = RecordingProcessor()
+
+    with StateDB(path) as db, caplog.at_level(logging.INFO, logger="maildigest.ingest"):
+        stats = poll_once(make_client(box), db, processor)
+
+        assert (stats.fetched, stats.processed, stats.failed) == (2, 1, 1)
+        unlesbar, gesund = processor.seen
+        assert unlesbar.ingest_failed is True
+        assert unlesbar.dedupe_key == "<gift@example.org>"  # aus dem Kopfzeilen-Abruf
+        assert "a@Example.ORG" in unlesbar.from_addr
+        assert gesund.message_id == "<normal@example.org>"
+        record = db.get(unlesbar.dedupe_key)
+        assert record is not None
+        assert record.status is MailState.FAILED
+        assert record.error_class == "ingest_error"
+        assert db.count_by_status(MailState.DELIVERED) == 1
+
+    assert [flag[0] for flag in box.flagged] == ["1", "2"]
+    meldungen = [entry.message for entry in caplog.records]
+    assert "mail_unparsable" in meldungen
+    assert "mail_ingest_failed" not in meldungen
+    unparsable = next(entry for entry in caplog.records if entry.message == "mail_unparsable")
+    assert unparsable.levelno == logging.ERROR
+    assert unparsable.error == "RecursionError"  # type: ignore[attr-defined]
+    assert len(unparsable.mail) == 12  # type: ignore[attr-defined]
+    # I5: weder Betreff noch Inhalt noch Message-ID im Protokoll.
+    for entry in caplog.records:
+        zeile = entry.getMessage() + repr(entry.__dict__)
+        assert "Geheimer" not in zeile and "gift@example.org" not in zeile
+
+    # Wiederanlauf: nur die unparsbare Mail liegt noch da — Duplikat, kein zweiter Versuch.
+    zweiter = RecordingProcessor()
+    with StateDB(path) as db:
+        stats = poll_once(make_client(FakeMailBox(unparsable=gift)), db, zweiter)
+    assert (stats.fetched, stats.duplicates, stats.failed) == (1, 1, 0)
+    assert zweiter.seen == []
+
+
+def test_o1b_echte_giftmail_rfc822_tiefe_990(tmp_path: Path) -> None:
+    """Die Bytes des Skeptikers durch den **echten** `ImapClient` und die echten
+    imap-tools-Abrufpfade: drei Zyklen, kein `ImapConnectionError`, in jedem Zyklus werden
+    beide Mails als gelesen markiert. Vor dem Fix: drei Zyklen `ImapConnectionError`,
+    verarbeitete Mails [], STORE-Aufrufe 0."""
+    poison = rfc822_poison(990)
+    with pytest.raises(RecursionError):  # Vorbedingung: der Parse von imap-tools scheitert
+        MailMessage.from_bytes(poison)
+    box = RawLevelMailBox({"1": poison, "2": make_mail("normal")}, track_seen=False)
+    processor = RecordingProcessor()
+
+    with StateDB(tmp_path / "state.db") as db:
+        client = make_raw_client(box)
+        for zyklus in range(3):
+            stats = poll_once(client, db, processor)  # wirft nicht
+            assert stats.fetched == 2
+            stores = [cmd for cmd in box.commands if cmd[0] == "STORE"]
+            assert [cmd[1] for cmd in stores[-2:]] == ["1", "2"], zyklus
+            assert len(stores) == 2 * (zyklus + 1)
+        assert [(raw.message_id, raw.ingest_failed) for raw in processor.seen] == [
+            ("<poison-rfc822@example.org>", True),
+            ("<normal@example.org>", False),
+        ]
+        record = db.get("<poison-rfc822@example.org>")
+        assert record is not None and record.status is MailState.FAILED
+        assert record.error_class == "ingest_error"
+        assert db.count_by_status(MailState.DELIVERED) == 1
+    assert stats.duplicates == 2  # dritter Zyklus: beide bekannt
+
+
+def test_o1b_header_abruf_scheitert_auch(tmp_path: Path) -> None:
+    """Scheitert auch der Kopfzeilen-Abruf: leere Felder, Key allein aus der UID — und der
+    Key ist über zwei Läufe stabil (ADR-019), sonst wäre die Mail beim Wiederanlauf neu."""
+    path = tmp_path / "state.db"
+    gift = {"5": RecursionError("maximum recursion depth exceeded")}
+    keys: list[str] = []
+    for _lauf in range(2):
+        box = FakeMailBox(unparsable=gift, header_fetch_error=OSError("socket error"))
+        processor = RecordingProcessor()
+        with StateDB(path) as db:
+            stats = poll_once(make_client(box), db, processor)
+        assert [flag[0] for flag in box.flagged] == ["5"]
+        if processor.seen:
+            raw = processor.seen[0]
+            assert raw.ingest_failed is True
+            assert raw.message_id is None
+            assert (raw.from_addr, raw.from_domain, raw.subject_raw) == ("", "", "")
+            assert raw.dedupe_key.startswith("sha256:")
+            keys.append(raw.dedupe_key)
+            assert (stats.failed, stats.duplicates) == (1, 0)
+        else:
+            assert (stats.failed, stats.duplicates) == (0, 1)
+    assert len(keys) == 1  # zweiter Lauf: Duplikat unter demselben Key
+    andere = FakeMailBox(unparsable={"6": RecursionError("x")}, header_fetch_error=OSError())
+    with StateDB(tmp_path / "andere.db") as db:
+        processor = RecordingProcessor()
+        poll_once(make_client(andere), db, processor)
+    assert processor.seen[0].dedupe_key != keys[0]
+
+
+def test_o1b_nur_uid_kommandos_kein_expunge(tmp_path: Path) -> None:
+    """ADR-064: Auch der neue Kopfzeilen-Abruf ist ein rohes `UID FETCH` mit `PEEK`; im ganzen
+    Zyklus fallen nur SEARCH, FETCH und STORE — nie EXPUNGE, nie `\\Deleted`."""
+    box = RawLevelMailBox({"1": rfc822_poison(990), "2": make_mail("normal")})
+    with StateDB(tmp_path / "state.db") as db:
+        poll_once(make_raw_client(box), db, RecordingProcessor())
+    verbs = [cmd[0] for cmd in box.commands]
+    assert set(verbs) == {"SEARCH", "FETCH", "STORE"}
+    assert not any("Deleted" in " ".join(cmd) for cmd in box.commands)
+    header_fetches = [cmd for cmd in box.commands if cmd[0] == "FETCH" and "HEADER" in cmd[2]]
+    assert len(header_fetches) == 1
+    assert header_fetches[0][1] == "1"
+    assert "BODY.PEEK[HEADER]<0." in header_fetches[0][2]
+    assert "BODY[" not in header_fetches[0][2]  # kein Abruf ohne PEEK, kein Seen-Flag vorab
+
+
+@pytest.mark.parametrize("n", [10, 20, 40])
+def test_o1b_kommandozahl_je_zyklus(tmp_path: Path, n: int) -> None:
+    """O-1 (c): Der Abruf je UID kostet für gesunde Mails **kein** zusätzliches Kommando —
+    `MailBox.fetch(bulk=False)` setzte ohnehin ein SEARCH und je Mail ein FETCH ab
+    (vorher wie nachher 1 + 2n mit den STOREs). Nur eine unparsbare Mail kostet genau
+    ein weiteres FETCH (Kopfzeilen)."""
+    mails = {str(i): make_mail(f"m{i}") for i in range(1, n + 1)}
+    box = RawLevelMailBox(mails)
+    with StateDB(tmp_path / "a.db") as db:
+        stats = poll_once(make_raw_client(box), db, RecordingProcessor())
+    assert stats.processed == n
+    assert len(box.commands) == 1 + 2 * n
+    assert sum(1 for cmd in box.commands if cmd[0] == "SEARCH") == 1
+
+    mails[str(n + 1)] = rfc822_poison(990)
+    box = RawLevelMailBox(mails)
+    with StateDB(tmp_path / "b.db") as db:
+        stats = poll_once(make_raw_client(box), db, RecordingProcessor())
+    assert (stats.processed, stats.failed) == (n, 1)
+    assert len(box.commands) == 1 + 2 * (n + 1) + 1

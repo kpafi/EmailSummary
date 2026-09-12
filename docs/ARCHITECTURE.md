@@ -31,12 +31,21 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `ssl.create_default_context()` (Zertifikats- und Hostname-Prüfung aktiv). Kein Codepfad zu
   `MailBoxUnencrypted`/`MailBoxStartTls`, kein Schalter zum Abschalten der Prüfung. Port aus
   `[imap] port`; Port 143 wird mit einer verständlichen Fehlermeldung abgelehnt.
-- **Abruf:** `fetch(AND(seen=False), mark_seen=False)` im Ordner `[imap] folder`. Das
-  `mark_seen=False` ist sicherheitsrelevant: Das Gelesen-Flag ist die letzte, nicht die erste
-  Aktion (s. u.).
+- **Abruf je UID (O-1, ADR-020-Nachtrag, zweite Iteration):** erst `uids(AND(seen=False))`
+  (ein `UID SEARCH UNSEEN`) im Ordner `[imap] folder`, dann je UID
+  `fetch(uid_list=[uid], mark_seen=False, bulk=False)` (ein `UID FETCH`). Dieselben
+  Kommandos wie `fetch(bulk=False)` zuvor (1 + n je Zyklus), aber der eifrige Parse in
+  `MailMessage.__init__` läuft je Mail in eigenem Schutz: Scheitert er (`RecursionError` ab
+  984 `message/rfc822`-Ebenen), holt ein zweites, gedeckeltes `UID FETCH
+  (BODY.PEEK[HEADER]<0.262144> RFC822.SIZE INTERNALDATE)` nur die Kopfzeilen nach
+  (`BytesHeaderParser`, rekursiert nicht), und die Mail läuft als `UnparsableMailMessage`
+  → Ersatz-`RawMail` (`ingest_failed`) in den Fail-closed-Pfad; Log `mail_unparsable`.
+  Transport-/Protokollfehler (`ImapToolsError`, `OSError`, `imaplib.IMAP4.error`) bleiben
+  `ImapConnectionError`. Das `mark_seen=False` ist sicherheitsrelevant: Das Gelesen-Flag ist
+  die letzte, nicht die erste Aktion (s. u.).
 - **Reihenfolge je Mail (F-ING-2, ADR-019):**
-  1. `RawMail` bauen (scheitert das, tritt die Ersatz-`RawMail` mit `ingest_failed = True`
-  an seine Stelle — der Zyklus bricht nie ab, O-1), 2. `StateDB.claim(dedupe_key, content_hash=…)` (`INSERT OR IGNORE`,
+  1. `RawMail` bauen (scheitert das — oder schon der Parse in imap-tools —, tritt die
+  Ersatz-`RawMail` mit `ingest_failed = True` an seine Stelle — der Zyklus bricht nie ab, O-1), 2. `StateDB.claim(dedupe_key, content_hash=…)` (`INSERT OR IGNORE`,
   committet **vor** der Verarbeitung), 3. Pipeline-Callback, 4. Endstatus schreiben,
   5. `UID STORE +FLAGS (\Seen)` setzen und ggf. `UID MOVE` nach `[imap] move_processed_to`.
   Ein bereits bekannter Key wird übersprungen, aber trotzdem als gelesen markiert/verschoben,

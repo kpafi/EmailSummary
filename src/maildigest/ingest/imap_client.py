@@ -34,6 +34,14 @@ Sicherheits-Design dieses Moduls:
 * **I6 fail-closed:** Eine einzelne kaputte Mail beendet den Loop nicht. Der Fehler wird als
   Status `failed` festgehalten; die Metadaten-Notiz erzeugt die Pipeline
   (`process_mail` liefert `FailedNotice`), die hier als Verarbeitungs-Callback steckt.
+* **Abruf je UID (O-1, zweite Iteration):** Erst `UID SEARCH UNSEEN`, dann je UID ein
+  eigenes `UID FETCH`. imap-tools parst jede Mail eifrig im Konstruktor von
+  `MailMessage` — innerhalb seines `fetch`-Generators. Scheitert dieser Parse (eine
+  31-KB-Mail mit 984 `message/rfc822`-Ebenen reicht für `RecursionError`), war früher der
+  ganze Zyklus hin und die Mail blieb für immer ungesehen. Jetzt ist der Parse je Mail
+  isoliert: Die unparsbare Mail wird über einen zweiten, **nur Kopfzeilen** holenden
+  `UID FETCH` als :class:`UnparsableMailMessage` vertreten und läuft wie jede andere
+  unlesbare Mail in den Fail-closed-Pfad (Notiz, `failed`, Seen-Flag).
 
 IMAP IDLE wird bewusst nicht genutzt: ADR-007, in WP2 nach Prüfung der imap-tools-API
 bestätigt (siehe WP2-ADRs in docs/DECISIONS.md).
@@ -42,6 +50,7 @@ bestätigt (siehe WP2-ADRs in docs/DECISIONS.md).
 from __future__ import annotations
 
 import hashlib
+import imaplib
 import logging
 import re
 import ssl
@@ -51,6 +60,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from email.header import decode_header, make_header
 from email.message import Message
+from email.parser import BytesHeaderParser
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from types import TracebackType
 from typing import Final, Protocol
@@ -78,6 +88,7 @@ __all__ = [
     "MailProcessor",
     "MailboxFactory",
     "MailboxPostProcessError",
+    "UnparsableMailMessage",
     "backoff_delay",
     "build_raw_mail",
     "poll_once",
@@ -503,6 +514,14 @@ _MAX_HEADER_CHARS_PER_MAIL = 256 * 1024
 #: acht je Teil bei voller Teilezahl (`sanitizer.MAX_MIME_PARTS` = 500); gemessen 0,42 s.
 _MAX_HEADERS_PER_MAIL = 4096
 
+#: FETCH-Teile für den Kopfzeilen-Abruf einer unparsbaren Mail (O-1, zweite Iteration):
+#: nur die Kopfzeilen, per Teilabruf (RFC 3501 `<offset.count>`) server-seitig auf das
+#: Kopfzeilenbudget begrenzt, dazu Grösse und Eingangszeit für den Ersatz-Dedupe-Key.
+#: `PEEK`, damit der Abruf das `\Seen`-Flag nicht setzt (erst nach der Buchung, ADR-019).
+_HEADER_FETCH_PARTS = (
+    f"(BODY.PEEK[HEADER]<0.{_MAX_HEADER_CHARS_PER_MAIL}> RFC822.SIZE INTERNALDATE)"
+)
+
 #: `<lokalteil@domain>`-Klammer eines Headers (R-9, zweiter Griff). Beide Teile
 #: schliessen `@`, `<`, `>` und Whitespace aus — das Muster ist damit eindeutig und
 #: linear, es kann nicht zurücksetzen. Seit S-2 wird es nur noch mit `match` an der
@@ -865,6 +884,46 @@ def _best_effort(read: Callable[[], str]) -> str:
         return ""
 
 
+class UnparsableMailMessage(MailMessage):
+    """Platzhalter für eine Mail, die imap-tools nicht parsen konnte (O-1, zweite Iteration).
+
+    `MailMessage.__init__` ruft `email.message_from_bytes` — rekursiv und ausserhalb jeder
+    Schranke dieses Projekts. Scheitert es, ist von der Mail nur bekannt, was der Server
+    ausserhalb des Parsers hergibt: die UID, `RFC822.SIZE`, `INTERNALDATE` und die
+    Kopfzeilen des obersten Teils aus einem zweiten, gedeckelten `UID FETCH`. Die Kopfzeilen
+    werden mit :class:`email.parser.BytesHeaderParser` gelesen — der liest nur bis zur
+    ersten Leerzeile und steigt in keinen Teil hinab, kann also nicht rekursieren.
+
+    Die Klasse ist absichtlich eine `MailMessage`: `poll_once` und `mark_processed` sehen
+    dieselbe Schnittstelle (`uid`, `obj`, `_raw_flag_data`), :func:`_unreadable_raw_mail`
+    baut daraus die Ersatz-`RawMail`. Der Konstruktor der Oberklasse wird bewusst **nicht**
+    gerufen — er wäre genau der Parse, der gescheitert ist.
+
+    Attributes:
+        parse_error: Klassenname der Ausnahme aus dem Parse (für das Log, I5: kein Inhalt).
+        headers_fetched: True, wenn der Kopfzeilen-Abruf geklappt hat; sonst ist `obj`
+            leer und der Ersatz-Dedupe-Key hängt allein an der UID.
+    """
+
+    def __init__(self, uid: str, fetch_data: list[object] | None, error: BaseException) -> None:
+        self._raw_uid_data = f"(UID {uid})".encode()
+        self._raw_flag_data: list[bytes] = []
+        header_bytes = b""
+        for item in fetch_data or []:
+            if isinstance(item, bytes):
+                self._raw_flag_data.append(item)
+            elif isinstance(item, tuple) and len(item) >= 2:
+                if isinstance(item[0], bytes):
+                    self._raw_flag_data.append(item[0])
+                if isinstance(item[1], bytes):
+                    header_bytes = item[1]
+        # Der Server hat auf `<0.N>` geschnitten; die Schranke gilt auch für Server, die
+        # den Teilabruf ignorieren.
+        self.obj = BytesHeaderParser().parsebytes(header_bytes[:_MAX_HEADER_CHARS_PER_MAIL])
+        self.parse_error = type(error).__name__
+        self.headers_fetched = fetch_data is not None
+
+
 def _unreadable_raw_mail(msg: MailMessage) -> RawMail:
     """Notfall-`RawMail` für eine Mail, an der :func:`build_raw_mail` gescheitert ist (O-1).
 
@@ -882,6 +941,8 @@ def _unreadable_raw_mail(msg: MailMessage) -> RawMail:
     `mime_bytes` trägt bewusst keinen Mail-Inhalt: Die Mail läuft über
     `RawMail.ingest_failed` unmittelbar in den Fail-closed-Pfad der Pipeline.
     """
+    # S-1: Auch die Kopfzeilen des Notpfads sind gedeckelt; ein Fehler dabei ist egal.
+    _best_effort(lambda: str(_cap_message_headers(msg.obj)))
     message_id = _best_effort(lambda: _header(msg, "Message-ID") or "")
     digest = hashlib.sha256()
     digest.update(_best_effort(lambda: msg.uid or "").encode("utf-8", "replace"))
@@ -1139,29 +1200,85 @@ class ImapClient:
     # --- Abruf und Nachbehandlung ----------------------------------------------------------
 
     def fetch_unseen(self) -> Iterator[MailMessage]:
-        """Liefert alle ungesehenen Mails des konfigurierten Ordners.
+        """Liefert alle ungesehenen Mails des konfigurierten Ordners — **je UID einzeln**.
 
         ``mark_seen=False`` ist entscheidend: Das `\\Seen`-Flag wird erst nach erfolgreicher
         Verarbeitung gesetzt (:meth:`mark_processed`). Bricht der Prozess vorher ab, taucht
         die Mail beim nächsten Poll wieder auf — und wird dank State-DB als Duplikat erkannt
         (F-ING-2).
 
+        Ablauf (O-1, zweite Iteration): ein ``UID SEARCH UNSEEN`` (`MailBox.uids`), dann je
+        UID ein eigenes ``UID FETCH`` über :meth:`_fetch_one`. Das sind exakt die Kommandos,
+        die `MailBox.fetch(bulk=False)` ohnehin absetzt — nur dass der Parse jeder Mail jetzt
+        in seinem eigenen Schutz läuft: Eine Mail, die imap-tools nicht parsen kann, wird als
+        :class:`UnparsableMailMessage` geliefert statt den ganzen Zyklus zu kippen. Eine
+        zwischen SEARCH und FETCH verschwundene Mail (anderer Client) wird übersprungen.
+
         Raises:
-            ImapConnectionError: Verbindung weg oder FETCH fehlgeschlagen.
+            ImapConnectionError: Verbindung weg, SEARCH oder FETCH fehlgeschlagen.
         """
         try:
-            yield from self.mailbox.fetch(AND(seen=False), mark_seen=False, bulk=False)
-        except (ImapToolsError, OSError) as exc:
+            uids = list(self.mailbox.uids(AND(seen=False)))
+        except Exception as exc:  # ImapToolsError, OSError oder imaplib-eigene Typen
+            raise ImapConnectionError(
+                f"Searching unseen mail failed: {type(exc).__name__}"
+            ) from exc
+        for uid in uids:
+            msg = self._fetch_one(uid)
+            if msg is not None:
+                yield msg
+
+    def _fetch_one(self, uid: str) -> MailMessage | None:
+        """Holt **eine** Mail; ein gescheiterter Parse wird zum Platzhalter, kein Abbruch.
+
+        Zwei Fehlerklassen, sauber getrennt: Transport- und Protokollfehler
+        (`ImapToolsError`, `OSError`, `imaplib.IMAP4.error` — imaplib meldet Socketfehler
+        als eigenes `abort`) sind Verbindungsfehler und gehen als
+        :class:`ImapConnectionError` nach oben, damit der Runner reconnectet. **Alles
+        andere** kommt aus `MailMessage.__init__` — dem eifrigen Parse in imap-tools —
+        und ist eine Eigenschaft der Mail, nicht der Verbindung: `RecursionError` bei
+        rund 1000 `message/rfc822`-Ebenen (31 KB), `MemoryError`, jede kaputte
+        Parser-Ausnahme. Dafür holt :meth:`_unparsable_mail` die Kopfzeilen nach.
+
+        Returns:
+            Die Mail, der Platzhalter — oder ``None``, wenn die UID inzwischen weg ist.
+        """
+        try:
+            messages = list(
+                self.mailbox.fetch(uid_list=[uid], mark_seen=False, bulk=False)
+            )
+        except (ImapToolsError, OSError, imaplib.IMAP4.error) as exc:
             raise ImapConnectionError(
                 f"Fetching unseen mail failed: {type(exc).__name__}"
             ) from exc
-        except RecursionError as exc:
-            # O-1, Restfall: Schon das Parsen (`email.message_from_bytes` in imap-tools) ist
-            # rekursiv und scheitert jenseits von rund 1200 MIME-Ebenen — vor jedem Code
-            # dieses Projekts. Der Deckel in `build_raw_mail` kann dort nicht mehr greifen.
-            # Ein Verbindungsfehler ist der nächstliegende Ausgang: Der Runner macht
-            # Reconnect mit Backoff und lebt weiter, statt am Ende des Stacks zu sterben.
-            raise ImapConnectionError("Fetching unseen mail failed: RecursionError") from exc
+        except Exception as exc:  # der Parse der Mail selbst (RecursionError, …)
+            return self._unparsable_mail(uid, exc)
+        if not messages:
+            return None
+        return messages[0]
+
+    def _unparsable_mail(self, uid: str, error: BaseException) -> UnparsableMailMessage:
+        """Baut den Platzhalter einer unparsbaren Mail aus einem Kopfzeilen-Abruf.
+
+        ``UID FETCH <uid> (BODY.PEEK[HEADER]<0.N> RFC822.SIZE INTERNALDATE)`` — nur
+        Kopfzeilen, server-seitig auf das Kopfzeilenbudget geschnitten, `PEEK` ohne
+        Seen-Flag. Der Abruf kostet **ein** zusätzliches Kommando, und zwar nur für diese
+        eine Mail; gesunde Mails kosten keins mehr als vorher. Scheitert auch dieser Abruf
+        (Ablehnung oder Verbindungsfehler), entsteht der Platzhalter mit leeren Feldern —
+        der Ersatz-Dedupe-Key hängt dann allein an der UID. Ein echter Verbindungsabbruch
+        fällt gleich danach beim `UID STORE` auf und geht dort als
+        :class:`ImapConnectionError` nach oben.
+        """
+        fetch_data: list[object] | None = None
+        try:
+            status, data = self.mailbox.client.uid("FETCH", uid, _HEADER_FETCH_PARTS)
+            if str(status).upper() == "OK" and data and data[0] is not None:
+                fetch_data = list(data)
+        except Exception as exc:  # jede Fehlerklasse: der Platzhalter kommt ohne Kopfzeilen
+            logger.warning(
+                "mail_header_fetch_failed", extra={"error": type(exc).__name__}
+            )
+        return UnparsableMailMessage(uid, fetch_data, error)
 
     def list_folders(self) -> list[str]:
         """Namen aller Ordner des Postfachs — nur lesend (WP9, `connect-mail`).
@@ -1281,7 +1398,9 @@ def poll_once(
     Hashes) im Log.
 
     Auch ein Fehler **vor** der Verarbeitung beendet den Durchlauf nicht (O-1): Scheitert
-    `build_raw_mail` wider Erwarten (ADR-020 (e)), tritt :func:`_unreadable_raw_mail` an
+    `build_raw_mail` wider Erwarten (ADR-020 (e)) — oder schon der Parse in imap-tools, den
+    :meth:`ImapClient.fetch_unseen` je UID isoliert und als :class:`UnparsableMailMessage`
+    meldet (Log `mail_unparsable`) —, tritt :func:`_unreadable_raw_mail` an
     seine Stelle — die Mail wird über einen Ersatz-Dedupe-Key beansprucht, läuft als
     `ingest_failed` in den Fail-closed-Pfad (Metadaten-Notiz, Status `failed`,
     Fehlerklasse `ingest_error`) und wird als gelesen markiert. Sonst bliebe sie ungelesen
@@ -1314,19 +1433,29 @@ def poll_once(
     stats = IngestStats()
     for msg in client.fetch_unseen():
         stats.fetched += 1
-        try:
-            raw = build_raw_mail(msg)
-        except Exception as exc:  # O-1: keine einzelne Mail darf den Zyklus anhalten
+        if isinstance(msg, UnparsableMailMessage):
+            # O-1, zweite Iteration: imap-tools konnte die Mail nicht parsen; der Client hat
+            # sie über einen Kopfzeilen-Abruf isoliert. Sie geht denselben Weg wie eine Mail,
+            # an der `build_raw_mail` scheitert — nur der Logeintrag benennt den Fall.
             raw = _unreadable_raw_mail(msg)
-            # ADR-047/I5: nur die Exception-Klasse, kein Traceback ausserhalb von DEBUG.
             logger.error(
-                "mail_ingest_failed",
-                extra={
-                    "mail": dedupe_hash(raw.dedupe_key)[:12],
-                    "error": type(exc).__name__,
-                },
-                exc_info=traceback_enabled(logger),
+                "mail_unparsable",
+                extra={"mail": dedupe_hash(raw.dedupe_key)[:12], "error": msg.parse_error},
             )
+        else:
+            try:
+                raw = build_raw_mail(msg)
+            except Exception as exc:  # O-1: keine einzelne Mail darf den Zyklus anhalten
+                raw = _unreadable_raw_mail(msg)
+                # ADR-047/I5: nur die Exception-Klasse, kein Traceback ausserhalb von DEBUG.
+                logger.error(
+                    "mail_ingest_failed",
+                    extra={
+                        "mail": dedupe_hash(raw.dedupe_key)[:12],
+                        "error": type(exc).__name__,
+                    },
+                    exc_info=traceback_enabled(logger),
+                )
         key_short = dedupe_hash(raw.dedupe_key)[:12]
 
         outcome = db.claim(raw.dedupe_key, content_hash=raw.content_hash)

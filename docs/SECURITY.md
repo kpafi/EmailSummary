@@ -168,7 +168,12 @@ zu sein.
   Metadatum „mime-tiefe ueberschritten"; im Sanitizer zusätzlich hart auf 64 Ebenen begrenzt,
   unabhängig von der Config), MIME-Tiefe im **Ingest** 32 Ebenen (fester Wert, kein
   Config-Feld: tiefere Teilbäume werden vor jeder Serialisierung geleert, Log
-  `mail_mime_depth_capped` — ADR-020-Nachtrag, O-1), höchstens 500 gelaufene MIME-Teile je Mail
+  `mail_mime_depth_capped` — ADR-020-Nachtrag, O-1), eine Mail, die schon imap-tools nicht
+  parsen kann (ab 984 `message/rfc822`-Ebenen = 31 KB scheitert `email.message_from_bytes`
+  mit `RecursionError`), wird **je UID isoliert**: Abruf je UID, Kopfzeilen-Ersatz über ein
+  gedeckeltes `UID FETCH (BODY.PEEK[HEADER]<0.262144> …)`, Metadaten-Notiz, `failed`,
+  Seen-Flag — sie hält weder den Zyklus noch den Dienst an (ADR-020-Nachtrag, zweite
+  Iteration), höchstens 500 gelaufene MIME-Teile je Mail
   (weitere ⇒ Metadatum „mime-teile ueberschritten"), Rohwert **jedes** Headers 4096 Zeichen und
   32 Werte je Headername, Kopfzeilen des ganzen MIME-Baums 256 KiB und 4096 Zeilen (darüber
   wird der Baum abgeschnitten), höchstens 200 Empfänger in `to_addrs`,
@@ -312,7 +317,11 @@ nicht.
   (HC-9/HC-24).** Die Längendeckel in `_RE_DOMAINISH` und `links._LABEL` sind entfallen;
   die Lookarounds von `_RE_IPV4` sind ASCII-Grenzen. Die Entscheidung „ist das eine
   Domain/Adresse" fällt ausschließlich in der Formprüfung, Über-Defang ist der fail-safe
-  Ausgang (ADR-036).
+  Ausgang (ADR-036). **Nachgezogen (S-4, 2026-09-12):** `_RE_IPV4` verlangte genau vier
+  Oktette und brach in einer längeren Punktkette (`1.1.1.1.1.1.1.`) nur das letzte Fenster —
+  die ersten vier Oktette blieben lebend. Der Treffer erfasst jetzt die ganze Kette (`{3,}`),
+  jeder Punkt darin wird gebrochen; gefunden vom Property-Test CT-7, festgehalten als
+  expliziter Regressionstest (ADR-036, Nachtrag S-4).
 - **Gekürzte Dateinamen zeigen die Kürzung und die Endung (HC-22).** Kürzung in der Mitte
   mit `…`, Endung erhalten, Gesamtlänge ≤ 80 — bei einem geblockten Anhang ist die Endung
   die sicherheitsrelevante Information (ADR-040).

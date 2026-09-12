@@ -55,9 +55,22 @@ class FakeRawClient:
         self._box = box
 
     def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+        self._box.commands.append(command.upper())
         if command.upper() == "STORE":
             self._box.flagged.append(str(args[0]))
             self._box.seen.add(str(args[0]))
+        elif command.upper() == "FETCH":
+            # O-1 (zweite Iteration): Kopfzeilen-Abruf einer unparsbaren Mail.
+            uid, parts = str(args[0]), str(args[1])
+            raw = self._box.unparsable.get(uid)
+            if raw is None or "HEADER" not in parts:  # pragma: no cover - nicht erwartet
+                raise AssertionError(f"unerwartetes FETCH: {args}")
+            headers = raw.split(b"\r\n\r\n", 1)[0] + b"\r\n\r\n"
+            meta = (
+                f"1 (UID {uid} RFC822.SIZE {len(raw)} INTERNALDATE "
+                f'"01-Sep-2026 12:00:00 +0000" BODY[HEADER]<0> {{{len(headers)}}}'
+            ).encode()
+            return "OK", [(meta, headers), b")"]
         elif command.upper() != "MOVE":  # pragma: no cover - kein weiteres Kommando erwartet
             raise AssertionError(f"unerwartetes IMAP-Kommando: {command}")
         return "OK", [b""]
@@ -66,10 +79,15 @@ class FakeRawClient:
 class FakeMailBox:
     """Postfach-Attrappe: liefert Nachrichten, merkt Flags/Moves, kann nicht löschen."""
 
-    def __init__(self, messages: list[MailMessage]) -> None:
+    def __init__(
+        self, messages: list[MailMessage], *, unparsable: dict[str, bytes] | None = None
+    ) -> None:
+        """`unparsable`: UID → Rohbytes, an denen der Parse von imap-tools scheitert."""
         self.messages = messages
+        self.unparsable = unparsable if unparsable is not None else {}
         self.seen: set[str] = set()
         self.flagged: list[str] = []
+        self.commands: list[str] = []
         # CT-9: MailDigest setzt rohe UID-Kommandos ab, weil `MailBox.flag()`/`move()`
         # intern expungen. Der Fake bildet deshalb `imaplib`-Ebene nach.
         self.client = FakeRawClient(self)
@@ -80,8 +98,22 @@ class FakeMailBox:
     def logout(self) -> None:
         return None
 
+    def uids(self, criteria: Any = "ALL", charset: Any = "US-ASCII", sort: Any = None) -> list[Any]:
+        """Wie `MailBox.uids`: die UIDs aller ungesehenen Mails."""
+        uids = [msg.uid for msg in self.messages] + list(self.unparsable)
+        return [uid for uid in uids if uid not in self.seen]
+
     def fetch(self, criteria: Any = "ALL", **kwargs: Any) -> list[MailMessage]:
-        return [msg for msg in self.messages if msg.uid not in self.seen]
+        """Wie `MailBox.fetch(uid_list=...)`: parst je UID eifrig — wie imap-tools."""
+        uid_list = kwargs.get("uid_list")
+        if uid_list is None:
+            return [msg for msg in self.messages if msg.uid not in self.seen]
+        found = [msg for msg in self.messages if msg.uid in uid_list]
+        for uid in uid_list:
+            raw = self.unparsable.get(uid)
+            if raw is not None:  # der echte Parse von imap-tools — er wirft selbst
+                found.append(MailMessage([(f"1 (UID {uid} FLAGS ())".encode(), raw), b")"]))
+        return found
 
     def flag(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover
         raise AssertionError("MailBox.flag() expunged — verboten (F-ING-1, CT-9)")
@@ -503,3 +535,131 @@ def test_o1_run_forever_stirbt_nicht(caplog: pytest.LogCaptureFixture) -> None:
         assert "runner_stopped" in [entry.message for entry in caplog.records]
         assert db.count_by_status(MailState.DELIVERED) == 1
         assert box.flagged == ["1"]
+
+
+# --- O-1, zweite Iteration: unparsbare Mail (Parse in imap-tools scheitert) ------------------
+
+
+def rfc822_poison(depth: int = 990) -> bytes:
+    """Die Gift-Mail des Skeptikers: 31 KB, `depth` `message/rfc822`-Ebenen — der Parse von
+    imap-tools (`email.message_from_bytes`) scheitert daran mit `RecursionError`."""
+    head = b"Message-ID: <poison-rfc822@example.org>\r\nFrom: a@example.org\r\nSubject: Tief\r\n"
+    return head + b"Content-Type: message/rfc822\r\n\r\n" * depth + b"\r\nHallo\r\n"
+
+
+def test_o1b_run_forever_drei_zyklen(caplog: pytest.LogCaptureFixture) -> None:
+    """Gift-Mail (unparsbar) + eine Korpus-Mail: drei Zyklen `run_forever` ohne einen
+    einzigen `ingest_failed`/Reconnect; die Gift-Mail ist nach dem ersten Zyklus gebucht
+    (`failed`/`ingest_error`), als Notiz zugestellt und gelesen; die Mail dahinter verarbeitet.
+
+    Vor dem Fix: jeder Zyklus `ingest_failed error=ImapConnectionError`, Backoff, nichts
+    verarbeitet, nichts markiert — endlos.
+    """
+    gesund = corpus_messages()[:1]
+    box = FakeMailBox(gesund, unparsable={"999": rfc822_poison(990)})
+    with StateDB(":memory:") as db:
+        messenger = CollectingMessenger()
+        runner = make_runner(
+            db,
+            box,
+            summarizer=ScriptedSummarizer(low_marker="unmöglich"),
+            critic=ScriptedCritic(),
+            messenger=messenger,
+        )
+        # Telegram-Fernauslösung (ADR-078) ist hier nicht Gegenstand — kein Netz im Test.
+        runner._commands_enabled = lambda: False  # type: ignore[method-assign]
+        runner.sleep = lambda _seconds: None  # kein echtes Poll-Intervall zwischen den Zyklen
+        zyklen = 0
+        echt = runner.ingest.run_once
+
+        def dreimal_dann_stopp() -> Any:
+            nonlocal zyklen
+            zyklen += 1
+            try:
+                return echt()
+            finally:
+                if zyklen == 3:
+                    runner.stop()
+
+        runner.ingest.run_once = dreimal_dann_stopp  # type: ignore[method-assign]
+        with caplog.at_level("INFO"):
+            stats = runner.run_forever(handle_signals=False)
+
+        assert stats.cycles == 3
+        assert (stats.ingest.fetched, stats.ingest.processed, stats.ingest.failed) == (2, 1, 1)
+        meldungen = [entry.message for entry in caplog.records]
+        assert "ingest_failed" not in meldungen  # kein Verbindungsfehler, kein Backoff
+        assert "imap_reconnect_scheduled" not in meldungen
+        assert meldungen.count("mail_unparsable") == 1
+        record = db.get("<poison-rfc822@example.org>")
+        assert record is not None
+        assert record.status is MailState.FAILED
+        assert record.error_class == "ingest_error"
+        assert db.count_by_status(MailState.DELIVERED) >= 1
+        # Die Metadaten-Notiz ist raus (I6, fail-closed) — ohne Mail-Inhalt.
+        notizen = [m for m in messenger.sent if m.dedupe_key == "<poison-rfc822@example.org>"]
+        assert len(notizen) == 1
+        assert "Hallo" not in "\n".join(notizen[0].parts)
+        assert sorted(box.flagged) == sorted(["999", gesund[0].uid or ""])
+        assert "EXPUNGE" not in box.commands
+
+
+def test_o1b_run_once_bilanz_und_exitcode(tmp_path: Path) -> None:
+    """`maildigest run --once` mit der Gift-Mail im Postfach: Exit 0, Bilanzzeile zählt sie
+    als Fehler — und **nicht** mehr „Mailbox unreachable" (vor dem Fix: Exit 1 bei jedem
+    Lauf, ohne Bilanz, der Betreiber suchte den Fehler in der Verbindung)."""
+    import io
+
+    from maildigest.cli import EXIT_OK, Hooks, main
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+[general]
+state_db = "{tmp_path / "state.db"}"
+log_level = "ERROR"
+
+[imap]
+host = "imap.example.org"
+username = "mirror@example.org"
+password = "geheim"
+
+[llm]
+model = "modell"
+api_key = "sk-test"
+
+[messenger]
+active = "telegram"
+
+[messenger.telegram]
+token = "1:abc"
+chat_id = "42"
+""",
+        encoding="utf-8",
+    )
+    config_path.chmod(0o600)
+    box = FakeMailBox(corpus_messages()[:1], unparsable={"999": rfc822_poison(990)})
+    messenger = CollectingMessenger()
+
+    def runner_factory(config: Config, **kwargs: Any) -> Runner:
+        return build_runner(
+            config,
+            summarizer=ScriptedSummarizer(low_marker="unmöglich"),
+            critic=ScriptedCritic(),
+            messenger=messenger,
+            client_factory=lambda: ImapClient(config.imap, mailbox_factory=lambda: box),
+            sleep=lambda _seconds: None,
+        )
+
+    out, err = io.StringIO(), io.StringIO()
+    code = main(
+        ["run", "--once", "--config", str(config_path)],
+        stdin=io.StringIO(""),
+        stdout=out,
+        stderr=err,
+        hooks=Hooks(build_runner=runner_factory),
+    )
+    assert code == EXIT_OK
+    assert "Mailbox unreachable" not in err.getvalue()
+    assert "Run finished: 2 mails fetched, 1 processed, 0 duplicates, 1 errors" in err.getvalue()
+    assert sorted(box.flagged) == sorted(["999", corpus_messages()[0].uid or ""])

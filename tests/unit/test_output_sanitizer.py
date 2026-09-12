@@ -287,6 +287,42 @@ def test_hc9_zahlen_und_versionen_bleiben_lesbar(payload: str) -> None:
     assert payload in final_guard(scrub_field(f"Stand {payload} heute"))
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ("1.1.1.1.1.1.1.", "1[.]1[.]1[.]1[.]1[.]1[.]1."),
+        ("10.0.0.1.2", "10[.]0[.]0[.]1[.]2"),
+        ("192.0.2.1.2.3.4.5", "192[.]0[.]2[.]1[.]2[.]3[.]4[.]5"),
+    ],
+)
+def test_s4_punktkette_ueber_vier_oktette_wird_ganz_gebrochen(
+    payload: str, expected: str
+) -> None:
+    """S-4: `_RE_IPV4` mit genau ``{3}`` brach in längeren Ketten nur das letzte Fenster.
+
+    ``1.1.1.1.1.1.1.`` wurde zu ``1.1.1.1[.]1[.]1[.]1.`` — vier lebende Oktette am Anfang,
+    die ein Linkifier als Adresse nimmt. Mit ``{3,}`` erfasst der Treffer die ganze Kette.
+    """
+    result = final_guard(scrub_field(f"Zugang unter {payload} heute"))
+    assert expected in result
+    assert payload not in result
+
+
+@pytest.mark.parametrize("payload", ["0.0.0.0000", "1.2.3.4.5678", "1234.1.2.3.4"])
+def test_s4_ziffernlauf_hinter_der_kette_bleibt_wie_bisher(payload: str) -> None:
+    """Gegenprobe zu S-4: Ein Fenster, das vor einer Ziffer endet, ist keine Adresse.
+
+    ``0.0.0.0000`` und ``1.2.3.4.5678`` bleiben unangetastet (kein Fenster passt);
+    ``1234.1.2.3.4`` wird wie vor dem Fix hinter dem ersten Punkt gebrochen — die
+    Änderung erweitert die Kette nur nach rechts, nie über eine vierstellige Zahl.
+    """
+    result = final_guard(scrub_field(payload))
+    if payload == "1234.1.2.3.4":
+        assert result == "1234.1[.]2[.]3[.]4"
+    else:
+        assert result == payload
+
+
 def test_hc24_marke_ueber_63_zeichen_wird_defangt() -> None:
     """HC-24: Der Längendeckel in der *Erkennung* ließ lange Marken lebend durch.
 

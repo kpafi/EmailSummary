@@ -42,6 +42,17 @@ docs/TESTRUNDE-HOT-COLD.md):
   scheitert die Umwandlung einer Mail trotzdem, bekommt der Nutzer die Metadaten-Notiz, die
   Mail den Status `failed` und der Abruf läuft mit der nächsten Mail weiter (O-1,
   ADR-020-Nachtrag).
+- **Nachgezogen (zweite Iteration): Eine 31 KB grosse Mail konnte den Abruf weiterhin dauerhaft
+  blockieren.** Bei rund 1000 ineinander gesteckten `message/rfc822`-Teilen scheiterte schon
+  die IMAP-Bibliothek beim Parsen — noch bevor MailDigest die Mail sah. Der Fehler wurde als
+  Verbindungsproblem gemeldet („Mailbox unreachable" bzw. endlose Reconnect-Versuche), die
+  Mail blieb ungelesen liegen und blockierte alle Mails dahinter. Der Abruf holt jetzt jede
+  Mail einzeln je UID; eine Mail, die sich nicht parsen lässt, wird über einen
+  Kopfzeilen-Abruf identifiziert, als Metadaten-Notiz zugestellt, als `failed` gebucht und
+  als gelesen markiert — die Mails dahinter werden verarbeitet, `run --once` endet mit Exit 0
+  und zählt sie in der Bilanz als Fehler. Neues Logereignis `mail_unparsable`; die Zahl der
+  IMAP-Kommandos je Abruf bleibt gleich (O-1, ADR-020-Nachtrag zweite Iteration,
+  ADR-064-Nachtrag).
 
 - **Ohne Sprachmodell kam bei einem Betreff über 100 Zeichen keine Zusammenfassung mehr an,
   sondern nur die Metadaten-Notiz** — für eine alltägliche Mailklasse war der
@@ -77,7 +88,10 @@ docs/TESTRUNDE-HOT-COLD.md):
   Teils setzen (HC-6); die Link-Fußnote enthält kein Markdown mehr (HC-7); ein rohes
   Steuerzeichen erreicht die Nachricht nicht mehr (HC-8); nackte IP-Adressen und sehr lange
   Domain-Marken werden jetzt in jeder Nachbarschaft gebrochen (HC-9, HC-24); die `/status`-
-  Antwort entschärft den Ordnernamen (HC-28).
+  Antwort entschärft den Ordnernamen (HC-28). Nachgezogen (S-4): Eine Punktkette aus mehr
+  als vier Zahlengruppen (`1.1.1.1.1.1.1.`) wurde nur im letzten Vier-Oktett-Fenster
+  gebrochen, die ersten vier Oktette blieben als anklickbare Adresse stehen; jetzt wird jeder
+  Punkt der Kette gebrochen (ADR-036, Nachtrag S-4).
 - **Kein Mail- oder Modelltext mehr im Betreiber-Protokoll**: ein vom Modell erfundener
   Feldname wird durch `<extra field>` ersetzt (HC-11).
 - **Zu lange Anhang-Dateinamen** werden sichtbar in der Mitte gekürzt und behalten ihre Endung

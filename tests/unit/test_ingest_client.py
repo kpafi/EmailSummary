@@ -10,6 +10,8 @@ Gelesen-Markierung/Verschieben statt Löschen (F-ING-1), Fehlerübersetzung.
 
 from __future__ import annotations
 
+import imaplib
+import re
 import ssl
 from typing import Any
 
@@ -24,6 +26,7 @@ from maildigest.ingest.imap_client import (
     ImapConnectionError,
     IngestError,
     MailboxPostProcessError,
+    UnparsableMailMessage,
 )
 
 MAIL = b"""\
@@ -68,6 +71,23 @@ def _as_text(value: Any) -> str:
     return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
 
 
+def header_fetch_answer(uid: str, raw: bytes, parts: str) -> tuple[str, list[Any]]:
+    """Serverantwort auf ``UID FETCH <uid> (BODY.PEEK[HEADER]<0.N> RFC822.SIZE INTERNALDATE)``.
+
+    Genau die Form, die `imaplib` liefert: ein Tupel (Metadaten, Kopfzeilen) und das
+    schliessende `)`. Der Teilabruf `<0.N>` wird wie beim Server angewandt.
+    """
+    limit = re.search(r"<0\.(\d+)>", parts)
+    headers = raw.split(b"\r\n\r\n", 1)[0] + b"\r\n\r\n"
+    if limit:
+        headers = headers[: int(limit.group(1))]
+    meta = (
+        f"1 (UID {uid} RFC822.SIZE {len(raw)} INTERNALDATE "
+        f'"01-Sep-2026 12:00:00 +0000" BODY[HEADER]<0> {{{len(headers)}}}'
+    ).encode()
+    return "OK", [(meta, headers), b")"]
+
+
 class FakeRawClient:
     """Ersatz für `imaplib.IMAP4_SSL` — protokolliert **jedes** rohe Kommando.
 
@@ -85,6 +105,15 @@ class FakeRawClient:
 
     def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
         self._box.commands.append((command.upper(), *(_as_text(arg) for arg in args)))
+        if command.upper() == "FETCH":
+            # O-1 (zweite Iteration): der Kopfzeilen-Abruf einer unparsbaren Mail.
+            if self._box.header_fetch_error is not None:
+                raise self._box.header_fetch_error
+            entry = self._box.unparsable.get(str(args[0]))
+            raw = entry[1] if isinstance(entry, tuple) else entry
+            if isinstance(raw, bytes):
+                return header_fetch_answer(str(args[0]), raw, str(args[1]))
+            return "NO", [None]
         if self._box.uid_error is not None:
             raise self._box.uid_error
         return self._box.uid_status.get(command.upper(), "OK"), [b""]
@@ -107,8 +136,20 @@ class FakeMailBox:
         folder_error: Exception | None = None,
         capabilities: tuple[str, ...] = ("IMAP4REV1", "MOVE", "UIDPLUS"),
         uid_status: dict[str, str] | None = None,
+        search_error: Exception | None = None,
+        unparsable: dict[str, Any] | None = None,
+        header_fetch_error: Exception | None = None,
+        vanished: tuple[str, ...] = (),
     ) -> None:
+        """`unparsable`: UID → Rohbytes, die imap-tools nicht parsen kann, **oder** eine
+        Ausnahme, die der Konstruktor werfen soll, **oder** (Ausnahme, Rohbytes für den
+        Kopfzeilen-Abruf). `vanished`: UIDs, die SEARCH nennt, FETCH aber nicht mehr findet."""
         self.messages = messages if messages is not None else []
+        self.search_error = search_error
+        self.unparsable = unparsable if unparsable is not None else {}
+        self.header_fetch_error = header_fetch_error
+        self.vanished = vanished
+        self.search_calls: list[str] = []
         self.folders = folders if folders is not None else ["INBOX", "Archiv"]
         self.folder_error = folder_error
         self.login_error = login_error
@@ -143,11 +184,32 @@ class FakeMailBox:
     def logout(self) -> None:
         self.logouts += 1
 
+    def uids(self, criteria: Any = "ALL", charset: Any = "US-ASCII", sort: Any = None) -> list[Any]:
+        """Wie `MailBox.uids`: ein `UID SEARCH`; liefert die UIDs aller ungesehenen Mails."""
+        self.search_calls.append(str(criteria))
+        if self.search_error is not None:
+            raise self.search_error
+        uids = [msg.uid for msg in self.messages] + list(self.unparsable) + list(self.vanished)
+        return sorted(uids, key=lambda uid: str(uid or "").zfill(9))  # Server-Reihenfolge
+
     def fetch(self, criteria: Any = "ALL", **kwargs: Any) -> list[MailMessage]:
+        """Wie `MailBox.fetch(uid_list=...)`: parst je UID im Aufruf (eifrig, wie imap-tools)."""
         self.fetch_calls.append({"criteria": str(criteria), **kwargs})
         if self.fetch_error is not None:
             raise self.fetch_error
-        return list(self.messages)
+        uid_list = kwargs.get("uid_list")
+        if uid_list is None:
+            return list(self.messages)
+        found = [msg for msg in self.messages if msg.uid in uid_list]
+        for uid in uid_list:
+            entry = self.unparsable.get(uid)
+            if isinstance(entry, tuple):
+                raise entry[0]
+            if isinstance(entry, BaseException):
+                raise entry
+            if isinstance(entry, bytes):  # der echte Parse von imap-tools — er wirft selbst
+                found.append(MailMessage([(f"1 (UID {uid} FLAGS ())".encode(), entry), b")"]))
+        return found
 
     @property
     def folder(self) -> Any:
@@ -299,15 +361,114 @@ def test_fetch_unseen_does_not_mark_seen() -> None:
     messages = list(client.fetch_unseen())
     assert len(messages) == 1
     assert box.fetch_calls[0]["mark_seen"] is False
-    assert "UNSEEN" in box.fetch_calls[0]["criteria"]
+    # O-1 (zweite Iteration): erst ein `UID SEARCH UNSEEN`, dann je UID ein eigener Abruf.
+    assert box.search_calls == ["(UNSEEN)"]
+    assert box.fetch_calls[0]["uid_list"] == [messages[0].uid]
 
 
 def test_fetch_error_becomes_connection_error() -> None:
-    box = FakeMailBox(fetch_error=MailboxFetchError(("NO", [b"nope"]), "OK"))
+    box = FakeMailBox([make_message()], fetch_error=MailboxFetchError(("NO", [b"nope"]), "OK"))
     client = make_client(box)
     client.connect()
     with pytest.raises(ImapConnectionError):
         list(client.fetch_unseen())
+
+
+def test_o1b_search_fehler_ist_ein_verbindungsfehler() -> None:
+    """Der neue Vorab-`UID SEARCH` meldet Transportfehler wie der Abruf: als Verbindungsfehler."""
+    box = FakeMailBox(search_error=OSError("socket error"))
+    client = make_client(box)
+    client.connect()
+    with pytest.raises(ImapConnectionError):
+        list(client.fetch_unseen())
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("socket error"),
+        MailboxFetchError(("NO", [b"nope"]), "OK"),
+        imaplib.IMAP4.abort("socket error: EOF"),
+    ],
+    ids=["OSError", "MailboxFetchError", "imaplib.abort"],
+)
+def test_o1b_echter_verbindungsfehler_bleibt_verbindungsfehler(error: Exception) -> None:
+    """Die Isolation je UID darf einen echten Verbindungsabbruch nicht als „unparsbare Mail"
+    verbuchen — sonst würde eine tote Verbindung als `failed`-Mail gebucht. `imaplib`
+    meldet Socketfehler als eigenes `abort`, das kein `ImapToolsError` ist."""
+    box = FakeMailBox([make_message(uid="1")], fetch_error=error)
+    client = make_client(box)
+    client.connect()
+    with pytest.raises(ImapConnectionError):
+        list(client.fetch_unseen())
+
+
+def test_o1b_fetch_unseen_isoliert_unparsbare_mail() -> None:
+    """O-1 (zweite Iteration): Wirft der Parse von imap-tools für **eine** UID, liefert
+    `fetch_unseen` dafür einen Platzhalter mit den nachgeholten Kopfzeilen — und die Mail
+    dahinter ganz normal. Vor dem Fix wurde der `RecursionError` in `ImapConnectionError`
+    umgedeutet: kein Platzhalter, keine weitere Mail, endlose Wiederholung."""
+    kopf = (
+        b"Message-ID: <gift@example.org>\r\nFrom: a@example.org\r\nSubject: Gift\r\n\r\nHallo\r\n"
+    )
+    box = FakeMailBox(
+        [make_message(uid="2")], unparsable={"1": (RecursionError("maximum recursion"), kopf)}
+    )
+    client = make_client(box)
+    client.connect()
+    messages = list(client.fetch_unseen())
+
+    assert [msg.uid for msg in messages] == ["1", "2"]
+    platzhalter = messages[0]
+    assert isinstance(platzhalter, UnparsableMailMessage)
+    assert platzhalter.parse_error == "RecursionError"
+    assert platzhalter.headers_fetched is True
+    assert platzhalter.obj["Message-ID"] == "<gift@example.org>"
+    assert platzhalter.size_rfc822 == len(kopf)
+    assert not isinstance(messages[1], UnparsableMailMessage)
+    # Genau ein zusätzliches Kommando, nur für die unparsbare Mail, nur Kopfzeilen, PEEK.
+    fetches = [cmd for cmd in box.commands if cmd[0] == "FETCH"]
+    assert len(fetches) == 1
+    assert fetches[0][1] == "1"
+    assert "BODY.PEEK[HEADER]<0." in fetches[0][2]
+    assert "RFC822.SIZE" in fetches[0][2] and "INTERNALDATE" in fetches[0][2]
+
+
+def test_o1b_kopfzeilen_abruf_scheitert_auch() -> None:
+    """Scheitert auch der Kopfzeilen-Abruf, bleibt der Platzhalter — mit UID, ohne Felder."""
+    box = FakeMailBox(
+        unparsable={"7": RecursionError("maximum recursion")},
+        header_fetch_error=OSError("socket error"),
+    )
+    client = make_client(box)
+    client.connect()
+    (platzhalter,) = client.fetch_unseen()
+
+    assert isinstance(platzhalter, UnparsableMailMessage)
+    assert platzhalter.uid == "7"
+    assert platzhalter.headers_fetched is False
+    assert list(platzhalter.obj.items()) == []
+    assert platzhalter.size_rfc822 == 0
+
+
+def test_o1b_unparsbare_mail_ohne_kopfzeilen_antwort() -> None:
+    """Antwortet der Server auf den Kopfzeilen-Abruf mit NO, gilt dasselbe wie bei einem Fehler."""
+    box = FakeMailBox(unparsable={"7": RecursionError("maximum recursion")})
+    client = make_client(box)
+    client.connect()
+    (platzhalter,) = client.fetch_unseen()
+    assert isinstance(platzhalter, UnparsableMailMessage)
+    assert platzhalter.headers_fetched is False
+    assert platzhalter.uid == "7"
+
+
+def test_o1b_verschwundene_uid_wird_uebersprungen() -> None:
+    """Eine UID, die SEARCH nennt, FETCH aber nicht mehr findet (anderer Client), wird
+    übersprungen — wie bei `MailBox.fetch`, und ohne Platzhalter."""
+    box = FakeMailBox([make_message(uid="2")], vanished=("1",))
+    client = make_client(box)
+    client.connect()
+    assert [msg.uid for msg in client.fetch_unseen()] == ["2"]
 
 
 # --- Nachbehandlung --------------------------------------------------------------------------

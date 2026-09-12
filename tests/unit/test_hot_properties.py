@@ -559,6 +559,26 @@ def test_no_rendered_markdown_survives_the_field_scrub(payload: str) -> None:
     assert_output_safe(result)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    ["1.1.1.1.1.1.1.", "1.1.1.1.1", "1.2.3.4.5.6.7.8", "1.2.3.4.5."],
+)
+def test_s4_punktkette_wird_ganz_gebrochen(payload: str) -> None:
+    """S-4: hypothesis-Gegenbeispiel ``1.1.1.1.1.1.1.`` aus dem Property-Test darüber.
+
+    `_RE_IPV4` verlangte **genau** vier Oktette; in einer längeren Kette scheiterte das
+    Fenster am Anfang am Lookahead (fünftes Oktett) und erst das letzte Fenster passte —
+    ``1.1.1.1[.]1[.]1[.]1.`` ließ die ersten vier Oktette leben, und das Orakel fand
+    ``1.1.1.1`` vor ``[``. Seit ``{3,}`` bricht die Ersetzung jeden Punkt der Kette. Festgehalten
+    als explizites Beispiel, weil die Beispiel-Datenbank von hypothesis ein lokaler Cache ist
+    (ADR-058) und der Fall sonst auf einer anderen Maschine wieder Zufall wäre.
+    """
+    result = final_guard(scrub_field(payload))
+    assert "." not in result.replace("[.]", "").rstrip("."), result
+    assert not _RE_LIVE_IPV4.search(result), f"lebende IPv4 in {result!r}"
+    assert_output_safe(result)
+
+
 @_SLOW
 @given(MARKDOWN_ATTACK)
 def test_no_rendered_markdown_survives_the_plain_scrub(payload: str) -> None:

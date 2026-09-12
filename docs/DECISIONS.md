@@ -599,13 +599,67 @@
      gebucht und als gelesen markiert; der Zyklus läuft mit der nächsten Mail weiter, beim
      Wiederanlauf ist sie ein Duplikat. Logs: `mail_ingest_failed` (ERROR, nur
      Exception-Klasse und Hash) und `mail_unreadable`.
-  Bewusst **nicht** gelöst: Jenseits von rund 1200 Ebenen scheitert schon der Parser der
-  Standardbibliothek innerhalb von `MailMessage.from_bytes`, also bevor irgendein Code
-  dieses Projekts die Mail sieht. `fetch_unseen` fängt diesen `RecursionError` und meldet
-  ihn als `ImapConnectionError`: Der Runner macht Reconnect mit Backoff und lebt weiter,
-  statt zu sterben — die Mail bleibt aber liegen und muss von Hand entfernt werden. Die
-  Alternative wäre, den Abruf auf Einzel-UIDs umzubauen; das ist eine Änderung der
-  Abrufmechanik und gehört nicht in diesen Fix.
+  Bewusst **nicht** gelöst (Stand erste Iteration): Jenseits von rund 1200 Ebenen scheitert
+  schon der Parser der Standardbibliothek innerhalb von `MailMessage.from_bytes`, also bevor
+  irgendein Code dieses Projekts die Mail sieht. `fetch_unseen` fing diesen `RecursionError`
+  und meldete ihn als `ImapConnectionError`: Der Runner machte Reconnect mit Backoff und
+  lebte weiter, statt zu sterben — die Mail blieb aber liegen. *Durch den zweiten Nachtrag
+  geschlossen.*
+
+- **Nachtrag (Abschluss-Nachfixrunde, zweite Iteration, 2026-09-12, O-1): Restfall
+  geschlossen — Abruf je UID, Kopfzeilen-Ersatz für unparsbare Mails.** Der Skeptiker hat
+  den Restfall nachgemessen: Nicht „rund 1200", sondern **984 `message/rfc822`-Ebenen =
+  31 569 Bytes** (0,12 % von `max_mail_bytes`) reichen, damit `email.message_from_bytes`
+  im Konstruktor von `imap_tools.MailMessage` mit `RecursionError` scheitert — und zwar
+  **innerhalb** des `fetch`-Generators von imap-tools, vor jeder Zeile Projektcode. Die
+  Umdeutung in `ImapConnectionError` tauschte den Absturz gegen eine endlose
+  Wiederholschleife: Die Mail wurde nie beansprucht, nie `failed`, nie als gelesen markiert;
+  `run --once` scheiterte bei jedem Lauf mit „Mailbox unreachable", obwohl das Netz in
+  Ordnung war. Das verletzte die Messlatte von (e) und I6 weiterhin. Festlegungen:
+  4. **Abruf je UID.** `fetch_unseen` holt zuerst die UID-Liste der ungesehenen Mails
+     (`MailBox.uids(AND(seen=False))` = ein `UID SEARCH`), dann je UID einzeln
+     `MailBox.fetch(uid_list=[uid], mark_seen=False, bulk=False)` (ein `UID FETCH`, kein
+     erneutes SEARCH). Das sind **exakt** die Kommandos, die `fetch(bulk=False)` schon vorher
+     absetzte — gemessen mit einer zählenden Attrappe auf `imaplib`-Ebene: n = 10/20/40
+     ungesehene Mails ⇒ 21/41/81 Kommandos (1 SEARCH + n FETCH + n STORE), vorher wie
+     nachher. Der Unterschied ist allein, dass der eifrige Parse jeder Mail jetzt in seinem
+     eigenen `try` läuft.
+  5. **Zwei Fehlerklassen, sauber getrennt.** `ImapToolsError`, `OSError` und
+     `imaplib.IMAP4.error` (imaplib meldet Socketfehler als eigenes `abort`, das kein
+     `ImapToolsError` ist — bisher eine Lücke) bleiben Verbindungsfehler ⇒
+     `ImapConnectionError` ⇒ Reconnect mit Backoff. **Alles andere** aus dem Abruf einer
+     UID stammt aus `MailMessage.__init__` und ist eine Eigenschaft der Mail, nicht der
+     Verbindung: Die Mail wird als `UnparsableMailMessage` vertreten — eine `MailMessage`,
+     deren Konstruktor bewusst nicht gerufen wird — und geht den Weg der Ersatz-`RawMail`
+     aus Punkt 3 (Notiz, `failed`/`ingest_error`, Seen-Flag). Die Umdeutung
+     `RecursionError ⇒ ImapConnectionError` entfällt.
+  6. **Kopfzeilen-Ersatz, ein Kommando, nur für diese Mail.** Für den Platzhalter wird
+     einmal ``UID FETCH <uid> (BODY.PEEK[HEADER]<0.262144> RFC822.SIZE INTERNALDATE)``
+     abgesetzt: nur Kopfzeilen, per Teilabruf server-seitig auf das bestehende
+     Kopfzeilenbudget (256 KiB) geschnitten, `PEEK` ohne Seen-Flag (ADR-019), gelesen mit
+     `email.parser.BytesHeaderParser` (liest bis zur ersten Leerzeile, steigt in keinen Teil
+     hinab, kann nicht rekursieren), danach der Kopfzeilendeckel aus S-1. Dedupe-Key wie in
+     Punkt 3: `Message-ID`, sonst `sha256` über UID + FETCH-Metadaten (`INTERNALDATE`,
+     `RFC822.SIZE`) + lesbare Kopfzeilen. Scheitert auch dieser Abruf (Ablehnung oder
+     Fehler jeder Klasse), entsteht der Platzhalter mit leeren Feldern und dem Key allein
+     aus der UID — über Neustarts stabil; ein echter Verbindungsabbruch fällt unmittelbar
+     danach beim `UID STORE` auf und geht dort als `ImapConnectionError` nach oben. Ein
+     zusätzliches Kommando **je Mail** wurde geprüft und verworfen: Die Isolation braucht
+     es nicht, der Parse scheitert erst nach dem vollen FETCH, und nur dann wird nachgeholt.
+     Nur UID-Kommandos, kein EXPUNGE, kein `\Deleted` (ADR-064-Nachtrag).
+  7. **Sichtbar für den Betreiber.** Neues Logereignis `mail_unparsable` (ERROR; Felder
+     nur `mail` = 12-stelliger Dedupe-Hash und `error` = Exception-Klassenname, I5) sowie
+     `mail_header_fetch_failed` (WARNING, nur Fehlerklasse). `run --once` endet mit Exit 0
+     und zählt die Mail in der Bilanzzeile als Fehler; „Mailbox unreachable" bleibt echten
+     Verbindungsfehlern vorbehalten.
+  Damit gilt (e) für jede Mail unter `max_mail_bytes`: Keine hält den Zyklus an, keine
+  blockiert den Dienst dauerhaft. Tests: `test_o1b_*` in `tests/unit/test_ingest_client.py`
+  (Platzhalter, Fehlerklassen, Kopfzeilen-Abruf, verschwundene UID),
+  `tests/integration/test_ingest_poll.py` (unparsbare Mail blockiert den Poll nicht; echte
+  Gift-Mail des Skeptikers über den echten `ImapClient` und die echten imap-tools-Abrufpfade,
+  drei Zyklen; Kopfzeilen-Abruf scheitert auch; nur UID-Kommandos; Kommandozahl je Zyklus
+  n = 10/20/40) und `tests/integration/test_runner_e2e.py` (`run_forever` drei Zyklen ohne
+  Reconnect; `run --once` Bilanz und Exit-Code).
 
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
@@ -1097,6 +1151,22 @@ ihre *Erkennung* zu eng.
   abschließenden Wurzelpunkt (`192.0.2.1.`) ungebrochen durch, obwohl ein Linkifier daraus
   sehr wohl ein Ziel macht. Dass `3.14`, `1.2.3` und `v2.10.1` lesbar bleiben, kommt aus der
   Vier-Oktett-Form, nicht aus den Lookarounds.
+
+**Nachtrag (Abschluss-Nachfixrunde, 2026-09-12, S-4):** Die HC-9-Form `{3}` hatte selbst
+eine Lücke, die der Property-Test CT-7 (`test_no_rendered_markdown_survives_the_field_scrub`)
+mit dem Gegenbeispiel `1.1.1.1.1.1.1.` fand: In einer Kette aus **mehr als vier**
+Zahlengruppen scheiterte das Fenster am Anfang am Lookahead `(?!\.?\d)` (fünftes Oktett),
+das nächste Fenster begann hinter einem Punkt (den die Lookbehind-Form von HC-9 bewusst
+zulässt) und passte — Ergebnis `1.1.1.1[.]1[.]1[.]1.`, die ersten vier Oktette lebend und
+für einen Linkifier eine Adresse. Fix: `{3,}` statt `{3}` — der Treffer erfasst die ganze
+Kette, die Ersetzung bricht jeden Punkt darin. Die Grenzen bleiben: `0.0.0.0000` und
+`1.2.3.4.5678` sind weiterhin keine Adresse (kein Fenster endet vor einer Ziffer), `3.14`,
+`1.2.3`, `v2.10.1` bleiben lesbar (weniger als vier Gruppen). Lehre: Ein „genau n"-Muster
+in einer Ersetzung, die jeden Treffer bricht, ist eine Lücke, sobald die Eingabe länger als
+n sein darf — die Ersetzung muss die ganze Kette nehmen (`{n,}`) oder auf jeder Fuge
+arbeiten. Das Gegenbeispiel steht als expliziter Test neben dem Property-Test
+(`test_s4_punktkette_wird_ganz_gebrochen`), weil die hypothesis-Beispiel-Datenbank ein
+lokaler Cache ist (ADR-058).
 
 ## ADR-037: Markup wird entfernt statt escaped; `_` bleibt erhalten
 - Status: accepted
@@ -1953,6 +2023,16 @@ ihre *Erkennung* zu eng.
   imap-tools (`MailBox.client` ist die `imaplib`-Instanz); die Test-Attrappen bilden deshalb
   jetzt die `imaplib`-Ebene nach und lassen `flag()`/`move()`/`delete()`/`expunge()` hart
   auffliegen, sobald sie überhaupt gerufen werden.
+- **Nachtrag (Abschluss-Nachfixrunde, zweite Iteration, 2026-09-12, O-1):** Ein drittes
+  rohes UID-Kommando kommt hinzu, und zwar **lesend**: ``UID FETCH <uid>
+  (BODY.PEEK[HEADER]<0.262144> RFC822.SIZE INTERNALDATE)`` holt die Kopfzeilen einer Mail
+  nach, die imap-tools nicht parsen konnte (ADR-020-Nachtrag, Punkt 6). `PEEK` setzt kein
+  Flag, der Teilabruf begrenzt die Antwort server-seitig. Der Abruf selbst läuft weiterhin
+  über `MailBox.uids()`/`MailBox.fetch(uid_list=…)` — beides sind reine `UID SEARCH`/`UID
+  FETCH`-Pfade ohne STORE. Die Zusage bleibt: `\Deleted` und `EXPUNGE` kommen im Modul
+  in keinem Pfad vor; die Attrappen (auch die neue auf `imaplib`-Ebene, gegen die die
+  echten `uids()`/`fetch()` laufen) lassen jedes andere Kommando auffliegen
+  (`test_o1b_nur_uid_kommandos_kein_expunge`).
 
 ## ADR-065: Ein abgelehntes Nachbehandlungs-Kommando ist kein Verbindungsfehler
 - Status: accepted
