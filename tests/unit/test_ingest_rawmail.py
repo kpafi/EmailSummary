@@ -550,7 +550,9 @@ def test_hc2_2_gewoehnlicher_kodierter_name_bleibt_lesbar() -> None:
 # `_ENCODED_WORD_RE` verlangte einen nicht-leeren Charset (`[^?]+`). `decode_header` — der
 # Dekoder, der im selben Pfad danach läuft — kennt diese Einschränkung nicht: Ein einziges
 # fehlendes Zeichen (`=??Q?…?=`) genügte, um an der Maske vorbei wieder Adresssyntax in den
-# Anzeigenamen zu bringen. Die Maske folgt jetzt der Form von `email.header.ecre`.
+# Anzeigenamen zu bringen. Seit O-3 folgt die Maske der Wortform des RFC-5322-Parsers der
+# Standardbibliothek (`email.headerregistry`): Token-Grenze, kein weiteres `?` im kodierten
+# Teil — genau das, was Mailprogramme als kodiertes Wort lesen.
 
 #: Kodierte Formen, die `decode_header` als kodiert liest — die Maske muss sie alle sehen.
 _KODIERTE_FORMEN = [
@@ -1263,3 +1265,161 @@ def test_o1_sanitizer_parse_der_giftmail_ist_gedeckelt() -> None:
     assert mail.dedupe_key == "<poison@example.org>"
     # Jenseits von `limits.max_mime_depth` steht ein Metadatum statt Inhalt (ADR-030).
     assert any("tiefe" in att.filename_sanitized for att in mail.attachments)
+
+
+# --- O-3: die Maske spiegelt den Parser der Mailprogramme -------------------------------
+
+_RP = b"billing@bank.example"
+
+
+def _o3_mail(header: bytes, *, field: bytes = b"From") -> bytes:
+    head = b"Return-Path: <" + _RP + b">\r\nMessage-ID: <o3@y>\r\n"
+    if field == b"From":
+        head += b"From: " + header + b"\r\n"
+    else:
+        head += b"From: <real@evil.example>\r\nReply-To: " + header + b"\r\n"
+    return head + (
+        b"To: m@example.org\r\nSubject: Hi\r\nDate: Mon, 01 Sep 2026 10:00:00 +0200\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHallo.\r\n"
+    )
+
+
+def _o3_oracle(mail: bytes, field: bytes) -> str:
+    """Was ein Mailprogramm zeigt: der RFC-5322-Parser der Standardbibliothek."""
+    import email
+    import email.policy
+
+    parsed = email.message_from_bytes(mail, policy=email.policy.default)
+    try:
+        addresses = parsed[field.decode()].addresses
+    except Exception:
+        return ""
+    return addresses[0].domain.lower() if addresses and addresses[0].domain else ""
+
+
+#: Die 45 Header-Formen des Skeptikers (fünfte NF-1-Iteration) plus die O-3-Repros.
+_O3_FORMEN = [
+    b'=?utf-8?Q?a?"?= <x@bank.example> =?utf-8?Q?"?= <real@evil.example>',
+    b'x=?utf-8?Q?a"?= <x@bank.example> =?utf-8?Q?"?= <real@evil.example>',
+    b'=?utf-8?Q?a"?= <x@bank.example> =?utf-8?Q?"?= <real@evil.example>',
+    b"=?utf-8?Q?a?(?= <x@bank.example> =?utf-8?Q?)?= <real@evil.example>",
+    b'=??Q?"?= <x@bank.example> =??Q?"?= <real@evil.example>',
+    b'=?utf-8?B?"?= <x@bank.example> =?utf-8?B?"?= <real@evil.example>',
+    b'"a =?utf-8?Q?b"?= <x@bank.example> " <real@evil.example>',
+    b'"a =?utf-8?Q?b"?= <x@bank.example>',
+    b"(<x@bank.example>)",
+    b"<real@evil.example> (<x@bank.example>) <y@bank.example>",
+    b") <x@bank.example> ( <real@evil.example>",
+    b"(\\\\) <x@bank.example>) <real@evil.example>",
+    b"(\\\\\\) <x@bank.example>) <real@evil.example>",
+    b'\\"<x@bank.example> <real@evil.example>',
+    b'(" <x@bank.example>) <real@evil.example>',
+    b'"( <x@bank.example>" <real@evil.example>',
+    b'"( <x@bank.example>" <real@evil.example> (',
+    b"(\xc3\xa4 <x@bank.example>) <real@evil.example>",
+    b'\xe4"<x@bank.example> <real@evil.example>',
+    b"(<x@bank.example>\r\n ) <real@evil.example>",
+    b"<real@\r\n evil.example> (<x@bank.example>)",
+    b'"\r\n <x@bank.example>" <real@evil.example>',
+    b"g:<x@bank.example>;<real@evil.example>",
+    b"g:; <real@evil.example>",
+    b"(g:<x@bank.example>;) <real@evil.example>",
+    b"<@bank.example:real@evil.example>",
+    b"<@bank.example,(<y@bank.example>)@a.example:real@evil.example>",
+    b"<real@evil.example>, <x@bank.example>",
+    b"<real@evil>, <x@bank.example>",
+    b"<@evil.example>, <x@bank.example>",
+    b"<x@[bank.example]> <real@evil.example>",
+    b'"real@evil.example"@bank.example',
+    b"<> <x@bank.example>",
+    b"<real> <x@bank.example>",
+    b"(<x@bank.example>)\t<real@evil.example>",
+    b"x.bank.example <real@evil.example>",
+    b"=?utf-8?Q?(?= <x@bank.example> <real@evil.example>",
+    b"=?utf-8?Q?)?= (<x@bank.example> <real@evil.example>",
+    b'" <real@evil.example>',
+    b"=?utf-8?Q?abc <x@bank.example> <real@evil.example>",
+    b"=?utf-8?Q?=3Cx@bank.example=3E?= <real@evil.example>",
+    b"=?utf-8?Q?<x@bank.example>?=",
+    b"()" * 2000 + b"<real@evil.example>",
+    b"()" * 2000 + b"<x@bank.example>",
+    b"A" * 4090 + b" <x@bank.example> <real@evil.example>",
+    b"(a)" * 1365 + b" <x@bank.example> <real@evil.example>",
+    b"Bank =?utf-8?Q?Support?(?= <x@bank.example> ) <real@evil.example>",
+    b"=?utf-8?Q?info@bank.example?,?= <attacker@evil.example>",
+]
+
+
+@pytest.mark.parametrize("field", [b"From", b"Reply-To"])
+@pytest.mark.parametrize("header", _O3_FORMEN)
+def test_o3_nie_eine_domain_die_das_mailprogramm_nicht_zeigt(header: bytes, field: bytes) -> None:
+    """Regel des Skeptikers: nie `bank` zeigen, wo das Orakel es nicht zeigt, und nie
+    „unbekannt" ohne Warnung. Abweichungen in die sichere Richtung (unbekannt + Warnung,
+    obwohl das Orakel eine Domain nennt) sind erlaubt."""
+    from email.utils import parseaddr
+
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    mail = _o3_mail(header, field=field)
+    raw = build_raw_mail(MailMessage.from_bytes(mail))
+    report = MailSanitizer().sanitize(raw).sanitization_report
+    oracle = _o3_oracle(mail, field)
+    if field == b"From":
+        shown, warned = raw.from_domain, report.return_path_mismatch
+    else:
+        shown = parseaddr(raw.reply_to or "")[1].rpartition("@")[2].lower()
+        warned = report.reply_to_mismatch
+    assert not ("bank" in shown and "bank" not in oracle), (shown, oracle)
+    assert not (shown == "" and not warned), (shown, oracle, raw.from_addr, raw.reply_to)
+
+
+def test_o3_klammer_in_ungueltigem_kodierten_wort_bleibt_sichtbar() -> None:
+    """Der Befund selbst: `=?utf-8?Q?Support?(?=` ist kein kodiertes Wort, die Klammer
+    öffnet einen Kommentar — wie beim Parser der Mailprogramme."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import _mask_encoded_words, build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    masked, words, _stem = _mask_encoded_words("Bank =?utf-8?Q?Support?(?= <x@bank.example> )")
+    assert not words and "(" in masked
+    header = b"Bank =?utf-8?Q?Support?(?= <x@bank.example> ) <real@evil.example>"
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(header)))
+    assert raw.from_domain == "evil.example"
+    assert MailSanitizer().sanitize(raw).sanitization_report.return_path_mismatch
+
+
+def test_o3_kodiertes_wort_nur_an_token_grenze() -> None:
+    from maildigest.ingest.imap_client import _mask_encoded_words
+
+    assert _mask_encoded_words("x=?utf-8?Q?a?= <a@b.example>")[1] == {}
+    assert len(_mask_encoded_words("=?utf-8?Q?a?= <a@b.example>")[1]) == 1
+    assert len(_mask_encoded_words("(=?utf-8?Q?a?=) <a@b.example>")[1]) == 1
+    assert len(_mask_encoded_words('"x"=?utf-8?Q?a?= <a@b.example>')[1]) == 1
+
+
+def test_o3_erste_angabe_entscheidet_und_domain_muss_hostname_sein() -> None:
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import _domain_of, build_raw_mail
+
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(b"<@evil.example>, <x@bank.example>")))
+    assert raw.from_domain == ""
+    assert _domain_of("a@bank.example?,?=") == ""
+    assert _domain_of("a@xn--bcher-kva.example") == "xn--bcher-kva.example"
+    assert _domain_of("a@BANK.example.") == "bank.example"
+
+
+def test_o3_unlesbarer_reply_to_loest_die_warnung_aus() -> None:
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    header = b"=?utf-8?Q?<x@bank.example>?="
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(header, field=b"Reply-To")))
+    assert raw.reply_to == "(unreadable)"
+    assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch

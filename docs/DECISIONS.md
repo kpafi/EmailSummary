@@ -661,6 +661,24 @@
   n = 10/20/40) und `tests/integration/test_runner_e2e.py` (`run_forever` drei Zyklen ohne
   Reconnect; `run --once` Bilanz und Exit-Code).
 
+**Nachtrag (Release 0.2.0, 2026-09-12, O-3):** Die Maske für kodierte Wörter war
+breiter als der Parser, den Mailprogramme benutzen: `=?utf-8?Q?Support?(?=` wurde
+maskiert und versteckte die Klammer, der RFC-5322-Parser der Standardbibliothek
+(`email.headerregistry`, Orakel der Skeptiker) verwirft ein Wort mit `?` im kodierten
+Teil dagegen als Klartext, in dem `(` einen Kommentar öffnet — das Werkzeug zeigte
+`bank.example` ohne Warnung. Vier Festlegungen: (1) `_ENCODED_WORD_RE` maskiert genau die
+Wortform des Parsers — an einer Token-Grenze (Anfang, Whitespace, `(`, `)`, `"`) und ohne
+weiteres `?` im kodierten Teil; ein einziger `finditer`-Durchlauf, linear (R-8-Test bleibt).
+(2) Die **erste** Angabe eines Adress-Headers entscheidet, wie bei `email.policy.default`;
+ist sie unvollständig, gilt die Adresse als unbekannt, spätere Angaben rücken nicht nach.
+(3) Eine Domain zählt nur hostname-förmig (`_HOSTNAME_RE`); Reste ungültiger
+Kodierungssyntax wie `bank.example?,?=` ergeben „unbekannt". (4) Ein vorhandener, aber
+unlesbarer Header wird als `(unreadable)` geführt, nie als leer — sonst bliebe bei
+Reply-To die Warnung aus; ein Anzeigename ohne Adresse darf sich nie als Adresse lesen
+lassen. Regel für alle vier: Das Werkzeug zeigt nie eine Domain, die das Mailprogramm
+nicht zeigt, und meldet nie „unbekannt" ohne Warnung — die 45 Header-Formen des
+Skeptikers sind als Test festgehalten.
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28

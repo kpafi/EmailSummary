@@ -476,10 +476,15 @@ def _clean_display_name(name: str) -> str:
 #: ganzen Resttext — O(n²) (gemessen: 156-KiB-`From` = 18,2 s CPU, vorher 0,002 s). Der
 #: Scanner liefert dieselben Segmente wie `ecre` (erstes `?=` nach dem Kopf, non-greedy),
 #: braucht aber nur einen Durchlauf über den Text.
-_ENCODED_WORD_START_RE = re.compile(r"=\?[^?]*\?[BbQq]\?")
+#: Ein kodiertes Wort, wie es der RFC-5322-Parser der Standardbibliothek
+#: (`email.headerregistry`, das Orakel der Mailprogramme) tatsächlich liest (O-3):
+#: nur an einer Token-Grenze (Anfang, Whitespace, `(`, `)`, `"`), und im kodierten Teil
+#: kein weiteres `?` — der Parser schneidet am ersten `?=` ab und verwirft ein Wort mit
+#: mehr als zwei inneren `?` als Klartext. Alles andere ist für ihn Text, in dem eine
+#: Klammer einen Kommentar öffnet; die Maske darf es deshalb nicht verstecken.
+_ENCODED_WORD_RE = re.compile(r'(?<![^\s()"])=\?[^?]*\?[BbQq]\?[^?]*\?=')
 
 #: Abschluss eines RFC-2047-Wortes.
-_ENCODED_WORD_END = "?="
 
 #: Obergrenze für den **rohen** Wert eines anzeigenamentragenden Headers, angewandt vor
 #: jeder Verarbeitung (R-8, Schicht a). RFC 5322 §2.1.1 erlaubt 998 Zeichen je Zeile;
@@ -553,21 +558,16 @@ def _mask_encoded_words(raw_text: str) -> tuple[str, dict[str, str], str]:
     words: dict[str, str] = {}
     pieces: list[str] = []
     position = 0
-    while True:
-        head = _ENCODED_WORD_START_RE.search(raw_text, position)
-        if head is None:
-            break
-        end = raw_text.find(_ENCODED_WORD_END, head.end())
-        if end < 0:
-            # Kein schliessendes `?=` mehr — und für jede spätere Startstelle erst recht
-            # nicht (sie liegt weiter rechts). Abbrechen statt weitersuchen: genau das
-            # macht den Durchlauf linear (R-8).
-            break
+    # O-3: ein einziger linearer Durchlauf über genau die Wortform des Standard-Parsers.
+    # Ein Kandidat mit `?` im kodierten Teil (`=?utf-8?Q?Support?(?=`) ist kein Wort —
+    # weder für den Parser noch für die Maske; seine Klammer bleibt sichtbar. Jede
+    # Zeichenklasse endet an einem `?`, der Durchlauf bleibt damit linear (R-8).
+    for match in _ENCODED_WORD_RE.finditer(raw_text):
         token = f"{stem}{len(words)}"
-        words[token] = raw_text[head.start() : end + len(_ENCODED_WORD_END)]
-        pieces.append(raw_text[position : head.start()])
+        words[token] = match.group(0)
+        pieces.append(raw_text[position : match.start()])
         pieces.append(token)
-        position = end + len(_ENCODED_WORD_END)
+        position = match.end()
     pieces.append(raw_text[position:])
     return "".join(pieces), words, stem
 
@@ -654,9 +654,15 @@ def _first_address(text: str, *, placeholder_stem: str = "") -> tuple[str, str]:
         for name, address in pairs
         if not (placeholder_stem and placeholder_stem in address)
     ]
-    for name, address in candidates:
-        local, at_sign, domain = address.rpartition("@")
-        if at_sign and local and domain.strip().strip("<>[]").rstrip("."):
+    if candidates:
+        # O-3: Die **erste** Angabe entscheidet — wie bei `email.policy.default`. Ist sie
+        # keine vollständige `lokalteil@domain` mit hostname-förmiger Domain, rücken
+        # spätere Angaben nicht nach (sonst bestimmte `<@evil.example>, <x@bank.example>`
+        # die Domain über die zweite); es bleibt nur der R-9-Rückfall auf die erste
+        # spitze Klammer, der bei einer unvollständigen ersten Klammer nichts liefert.
+        name, address = candidates[0]
+        local, at_sign, _domain = address.rpartition("@")
+        if at_sign and local and _domain_of(address):
             return name, address
     # R-9: `getaddresses` verwirft den Adressteil komplett, sobald hinter der spitzen
     # Klammer noch ein Token steht — `<attacker@evil.example> MDENCWORD0` liefert
@@ -674,14 +680,19 @@ def _first_address(text: str, *, placeholder_stem: str = "") -> tuple[str, str]:
     )
     if bracketed is not None:
         address = bracketed.group(1)
-        local, at_sign, domain = address.rpartition("@")
-        if at_sign and local and domain.strip().strip("<>[]").rstrip("."):
+        local, at_sign, _domain = address.rpartition("@")
+        if at_sign and local and _domain_of(address):
             name = text[: positions[first_bracket]]
             return " ".join(name.split()), address
-    if candidates:
-        return candidates[0]
-    # Nur Platzhalter: Der Header trägt gar keine Adresse, alles davon ist Name.
-    return " ".join(part for pair in pairs for part in pair if part), ""
+    # Keine brauchbare Adresse: alles ist Name (O-3: auch eine unvollständige erste
+    # Angabe zählt nicht als Adresse). Der Aufrufer macht daraus `(unreadable)`, wenn
+    # sich der Name selbst als Adresse lesen liesse.
+    return " ".join(text.split()), ""
+
+
+#: Anzeigeform eines vorhandenen, aber unlesbaren Adress-Headers (O-3). Ein Kommentar,
+#: damit `parseaddr` daraus nie eine Adresse liest.
+_UNREADABLE_HEADER = "(unreadable)"
 
 
 def _compose_display_address(name: str, address: str) -> str:
@@ -693,7 +704,10 @@ def _compose_display_address(name: str, address: str) -> str:
     Korpus sehen), sonst quotiert, sonst bleibt nur die nackte Adresse.
     """
     if not address:
-        return name
+        # O-3: Ohne Adresse darf die Anzeigeform nicht selbst wie eine aussehen —
+        # `parseaddr` (Sanitizer, `_reply_to_mismatch`) läse sonst `x@bank.example` aus
+        # dem dekodierten Namen `=?utf-8?Q?<x@bank.example>?=` als Adresse.
+        return "" if parseaddr(name)[1] else name
     if not name:
         return address
     plain = f"{name} <{address}>"
@@ -724,21 +738,31 @@ def _address_header(msg: MailMessage, name: str) -> tuple[str, str]:
         return "", ""
     masked, encoded_words, stem = _mask_encoded_words(raw_text)
     display, address = _first_address(masked, placeholder_stem=stem)
-    if not encoded_words:
-        if not address or parseaddr(raw_text)[1] == address:
-            # Kein kodiertes Wort: Es gibt nichts zu reparieren, und jede Normalisierung
-            # des Rohwerts wäre nur eine weitere Fehlerquelle.
-            return raw_text, address
+    if not encoded_words and address and parseaddr(raw_text)[1] == address:
+        # Kein kodiertes Wort: Es gibt nichts zu reparieren, und jede Normalisierung
+        # des Rohwerts wäre nur eine weitere Fehlerquelle.
+        return raw_text, address
+    if not encoded_words and not address:
+        # O-3: Ohne Adresse darf der Rohwert nur bleiben, wenn auch `parseaddr` keine
+        # darin liest — der Sanitizer vergleicht `from_addr` und `reply_to` genau damit.
+        final = "" if parseaddr(raw_text)[1] else raw_text
+    else:
         # S-2: Die Adresse steht fest, aber `parseaddr` liest sie aus dem Rohwert nicht
-        # heraus (Token oder Kommentar hinter der Klammer, R-9-Form). Der Sanitizer
-        # vergleicht `from_addr` und `reply_to` genau mit `parseaddr` — bliebe der Rohwert
-        # stehen, hielte er die Antwortadresse für unbekannt und schwiege. Deshalb die
-        # Anzeigeform so zusammensetzen, dass `parseaddr` nachweislich diese Adresse
-        # zurückgibt (Selbstprüfung in `_compose_display_address`).
-        return _compose_display_address(_clean_display_name(display), address), address
-    display = _unmask_encoded_words(display, encoded_words)
-    decoded = _decode_mime_words(display) if display else ""
-    return _compose_display_address(_clean_display_name(decoded), address), address
+        # heraus (Token oder Kommentar hinter der Klammer, R-9-Form) — oder der Name
+        # trägt kodierte Wörter. Die Anzeigeform wird so zusammengesetzt, dass
+        # `parseaddr` nachweislich diese Adresse zurückgibt (Selbstprüfung in
+        # `_compose_display_address`).
+        name = display
+        if encoded_words:
+            unmasked = _unmask_encoded_words(display, encoded_words)
+            name = _decode_mime_words(unmasked) if display else ""
+        final = _compose_display_address(_clean_display_name(name), address)
+    if not address and not final:
+        # O-3: Der Header ist da, liefert aber weder Adresse noch einen Namen, der nicht
+        # selbst wie eine Adresse aussieht. Ein leerer Rückgabewert hiesse für den
+        # Sanitizer „kein Header" — und ein fehlender Reply-To löst keine Warnung aus.
+        return _UNREADABLE_HEADER, ""
+    return final, address
 
 
 def _capped_raw_header(value: object) -> str:
@@ -751,6 +775,12 @@ def _capped_raw_header(value: object) -> str:
     defekt oder bösartig, sein Anfang genügt, um Adresse und Anzeigename zu bestimmen.
     """
     return _collapse(_predecode_eight_bit(_cap_header_value(value)))
+
+
+#: Hostname-Form einer Domain (ASCII-Marken, Punkte, Bindestriche; Punycode inklusive).
+_HOSTNAME_RE = re.compile(
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*"
+)
 
 
 def _domain_of(address: str) -> str:
@@ -766,7 +796,10 @@ def _domain_of(address: str) -> str:
             # Kein "lokalteil@domain" — z. B. ein blosser Anzeigename wie "Postmaster".
             continue
         cleaned = domain.strip().strip("<>[]").rstrip(".").lower()
-        if cleaned:
+        # O-3: Nur eine hostname-förmige Domain zählt. Reste ungültiger Kodierungssyntax
+        # (`bank.example?,?=`) oder Klammerbruchstücke ergäben sonst eine „Domain", die
+        # kein Mailprogramm zeigt — unbekannt ist dann die sichere Richtung.
+        if cleaned and _HOSTNAME_RE.fullmatch(cleaned):
             return cleaned
     return ""
 
