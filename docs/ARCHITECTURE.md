@@ -35,7 +35,8 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `mark_seen=False` ist sicherheitsrelevant: Das Gelesen-Flag ist die letzte, nicht die erste
   Aktion (s. u.).
 - **Reihenfolge je Mail (F-ING-2, ADR-019):**
-  1. `RawMail` bauen, 2. `StateDB.claim(dedupe_key, content_hash=…)` (`INSERT OR IGNORE`,
+  1. `RawMail` bauen (scheitert das, tritt die Ersatz-`RawMail` mit `ingest_failed = True`
+  an seine Stelle — der Zyklus bricht nie ab, O-1), 2. `StateDB.claim(dedupe_key, content_hash=…)` (`INSERT OR IGNORE`,
   committet **vor** der Verarbeitung), 3. Pipeline-Callback, 4. Endstatus schreiben,
   5. `UID STORE +FLAGS (\Seen)` setzen und ggf. `UID MOVE` nach `[imap] move_processed_to`.
   Ein bereits bekannter Key wird übersprungen, aber trotzdem als gelesen markiert/verschoben,
@@ -509,6 +510,8 @@ class RawMail(BaseModel, frozen=True):
     size_bytes: int
     content_hash: str               # sha256(mime_bytes), zweites Dedupe-Merkmal (ADR-079)
     id_collision: bool              # Key belegt, Inhalt anders (ADR-079)
+    ingest_failed: bool             # Ingest konnte die Mail nicht auswerten (O-1): direkt
+                                    # fail-closed, nie zusammenfassen
 
 class AttachmentInfo(BaseModel, frozen=True):
     filename_sanitized: str
@@ -599,7 +602,14 @@ class FailureNotice(BaseModel, frozen=True):
   aufgelöster Header-Faltung. `auth_results_header` enthält **alle**
   `Authentication-Results`-Vorkommen, mit `\n` verbunden. `build_raw_mail` wirft
   grundsätzlich nicht — eine dort scheiternde Mail käme nie in den Fail-closed-Pfad und
-  ginge still verloren (I6/F-OPS-3).
+  ginge still verloren (I6/F-OPS-3). Scheitert es wider Erwarten doch, baut `poll_once` die
+  Ersatz-`RawMail` (`ingest_failed = True`, nur lesbare Felder, Platzhalter statt
+  `mime_bytes`) und die Pipeline macht daraus unmittelbar die Metadaten-Notiz — Status
+  `failed`, Fehlerklasse `ingest_error` (O-1, ADR-020-Nachtrag).
+- **MIME-Tiefe im Ingest (O-1, ADR-020-Nachtrag):** `build_raw_mail` deckelt den geparsten
+  Baum **vor** jeder Serialisierung iterativ auf `MAX_MIME_DEPTH` (32) Ebenen; tiefere
+  Teilbäume werden geleert (Log `mail_mime_depth_capped`). Gewöhnliche Mails bleiben
+  unberührt und byteidentisch.
 
 ## 4. Pipeline-Vertrag (`pipeline.py`)
 

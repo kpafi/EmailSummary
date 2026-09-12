@@ -71,6 +71,12 @@ class RawMail(BaseModel):
     #: Der Ingest setzt das Flag, der Sanitizer kopiert es in den `SanitizationReport`,
     #: der Composer macht daraus eine `🔍`-Hinweiszeile.
     id_collision: bool = False
+    #: Der Ingest konnte diese Mail nicht auswerten (O-1): `build_raw_mail` ist trotz aller
+    #: Absicherungen gescheitert, die Felder tragen nur, was überhaupt lesbar war, und
+    #: `mime_bytes` ist ein Platzhalter. Die Pipeline schickt eine so markierte Mail ohne
+    #: Umweg in den Fail-closed-Pfad (Metadaten-Notiz, Status `failed`); sie wird nie
+    #: zusammengefasst. Nur der Ingest setzt das Flag.
+    ingest_failed: bool = False
 
 
 class AttachmentInfo(BaseModel):

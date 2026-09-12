@@ -559,6 +559,54 @@
   TOKEN` ergibt über `getaddresses` `evil.exampletoken` — ein Bruchstück der eigenen
   Adresse des Angreifers im Adressteil, keine fremde Domain und kein Anzeigenamen-Inhalt.
 
+- **Nachtrag (Abschluss-Nachfixrunde, 2026-09-12, O-1):** Punkt (e) war eine Absicht ohne
+  Boden. Eine 16 KB grosse Mail mit 250 verschachtelten `multipart`-Ebenen liess
+  `Message.as_bytes()` mit `RecursionError` scheitern; der Rückfall `str(msg.obj)` in
+  `_raw_bytes` läuft über **denselben** rekursiven Generator, scheiterte genauso und war
+  nicht gefangen. `build_raw_mail` warf, `poll_once` rief es ohne Schutz, Runner und CLI
+  fangen nur `IngestError` — der Dauerbetrieb starb bzw. `run --once` scheiterte bei jedem
+  Lauf, und weil die Mail nie als gelesen markiert wurde, kippte sie jeden Poll erneut:
+  alle danach eintreffenden Mails blieben unverarbeitet liegen, bis jemand die Mail von
+  Hand aus dem Postfach nahm. Drei Festlegungen, alle drei verbindlich:
+  1. **Tiefendeckel vor jeder Serialisierung.** `_cap_message_depth` (Modulkonstante
+     `MAX_MIME_DEPTH` = 32) läuft als erstes in `build_raw_mail` — **iterativ**, wie das
+     Kopfzeilenbudget `_cap_message_headers`: Eine Schranke gegen Rekursion darf nicht
+     selbst rekursiv sein. Ein Teilbaum jenseits der Tiefe wird durch einen **leeren**
+     Payload ersetzt; der Teil bleibt mit seinen Kopfzeilen stehen. Danach arbeitet jeder
+     weitere Durchlauf — Kopfzeilenbudget, `msg.text`/`msg.html` von imap-tools, `walk()`,
+     `as_bytes()`, der zweite Parse im Sanitizer — auf einem flachen Baum; alles
+     Nachgelagerte sieht denselben, konsistenten Baum, und `content_hash` bleibt für
+     gewöhnliche Mails unverändert (der Deckel ist dort ein reiner Lesedurchlauf). Log:
+     `mail_mime_depth_capped`, ohne Felder (I5). Kein Config-Feld: Schranke gegen einen
+     Angriff, kein Geschmacksparameter. 32 ist weit jenseits aller realen Mails (zwei bis
+     vier Ebenen) und weit unterhalb der Rekursionsgrenze.
+  2. **Der Rückfall in `_raw_bytes` fängt alles.** Drei Stufen: `as_bytes()`, `str()`,
+     zuletzt `_headers_only_bytes` — die Kopfzeilen des obersten Teils (bereits gedeckelt,
+     gefaltete Werte zusammengezogen) plus die Hinweiszeile „message body could not be
+     serialized". Der Notwert ist parsbares MIME ohne Mail-Inhalt, damit die Mail den
+     Fail-closed-Pfad erreicht statt still zu verschwinden. Punkt (e) gilt damit nicht
+     mehr nur als Absicht, sondern als geprüfte Eigenschaft.
+  3. **Schutz um `build_raw_mail` in `poll_once`.** „Wirft nie" ist eine Zusage, kein
+     Naturgesetz; genau an dieser Stelle kostet ihr Bruch den ganzen Dienst. Scheitert
+     `build_raw_mail` trotzdem, tritt `_unreadable_raw_mail` an seine Stelle: jedes Feld
+     einzeln und abgesichert gelesen, Unbekanntes bleibt leer (Punkt (b)/(c)), Dedupe-Key
+     ist die `Message-ID`, wenn sie lesbar ist, sonst ein Hash aus UID, den rohen
+     FETCH-Daten (`INTERNALDATE`, `RFC822.SIZE`) und den lesbaren Kopfzeilen — über
+     Neustarts stabil (ADR-019). `content_hash` bleibt leer („unbekannt", ADR-079), damit
+     ein späterer geglückter Lauf keine Kollision auslöst. Die Mail wird beansprucht, über
+     `RawMail.ingest_failed` ohne Umweg in den Fail-closed-Ausgang der Pipeline geschickt
+     (Metadaten-Notiz, Stufe `sanitize`, Fehlerklasse `ingest_error`), als `failed`
+     gebucht und als gelesen markiert; der Zyklus läuft mit der nächsten Mail weiter, beim
+     Wiederanlauf ist sie ein Duplikat. Logs: `mail_ingest_failed` (ERROR, nur
+     Exception-Klasse und Hash) und `mail_unreadable`.
+  Bewusst **nicht** gelöst: Jenseits von rund 1200 Ebenen scheitert schon der Parser der
+  Standardbibliothek innerhalb von `MailMessage.from_bytes`, also bevor irgendein Code
+  dieses Projekts die Mail sieht. `fetch_unseen` fängt diesen `RecursionError` und meldet
+  ihn als `ImapConnectionError`: Der Runner macht Reconnect mit Backoff und lebt weiter,
+  statt zu sterben — die Mail bleibt aber liegen und muss von Hand entfernt werden. Die
+  Alternative wäre, den Abruf auf Einzel-UIDs umzubauen; das ist eine Änderung der
+  Abrufmechanik und gehört nicht in diesen Fix.
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28

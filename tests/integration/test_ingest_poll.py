@@ -634,3 +634,131 @@ def test_stop_before_the_first_poll_does_nothing(db: StateDB) -> None:
     stats = service.run_forever()
     assert (stats.fetched, stats.processed) == (0, 0)
     assert service.stopped is True
+
+
+# --- O-1: eine einzelne Mail darf den Zyklus nie anhalten -----------------------------------
+
+
+def poison_mail(depth: int = 250) -> bytes:
+    """Die Gift-Mail des Befunds: 16 KB, `depth` verschachtelte `multipart`-Ebenen."""
+    head = (
+        b"Message-ID: <poison@example.org>\r\nFrom: Absender <a@Example.ORG>\r\n"
+        b"Subject: tief\r\nMIME-Version: 1.0\r\n"
+    )
+    body = b"Content-Type: text/plain\r\n\r\nHallo\r\n"
+    for index in range(depth):
+        boundary = b"B%d" % index
+        body = (
+            b"Content-Type: multipart/mixed; boundary="
+            + boundary
+            + b"\r\n\r\n--"
+            + boundary
+            + b"\r\n"
+            + body
+            + b"--"
+            + boundary
+            + b"--\r\n"
+        )
+    return head + body
+
+
+def test_o1_poll_once_ueberlebt_die_giftmail(tmp_path: Path) -> None:
+    """Gift-Mail + normale Mail: beide gebucht, beide gelesen, kein Abbruch — auch nach Neustart.
+
+    Vor dem Fix warf `build_raw_mail` an der Gift-Mail `RecursionError`; `poll_once` brach
+    ohne Status ab, die Mail blieb ungelesen im Postfach und kippte jeden weiteren Poll —
+    die normale Mail dahinter wurde nie verarbeitet.
+    """
+    path = tmp_path / "state.db"
+    box = FakeMailBox(
+        [make_message(poison_mail(), "1"), make_message(make_mail("normal"), "2")]
+    )
+    processor = RecordingProcessor()
+
+    with StateDB(path) as db:
+        stats = poll_once(make_client(box), db, processor)
+
+        assert (stats.fetched, stats.processed, stats.failed) == (2, 2, 0)
+        assert [raw.message_id for raw in processor.seen] == [
+            "<poison@example.org>",
+            "<normal@example.org>",
+        ]
+        assert db.count_by_status(MailState.DELIVERED) == 2
+
+    assert [flag[0] for flag in box.flagged] == ["1", "2"]
+
+    # Neustart auf derselben Datenbank: beide Mails sind Duplikate, der Prozessor schweigt.
+    zweiter = RecordingProcessor()
+    with StateDB(path) as db:
+        stats = poll_once(make_client(box), db, zweiter)
+
+    assert (stats.processed, stats.duplicates, stats.failed) == (0, 2, 0)
+    assert zweiter.seen == []
+
+
+def test_o1_beliebiger_fehler_vor_process_wird_zur_notiz(
+    db: StateDB, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Scheitert `build_raw_mail` (Attrappe, beliebige Exception), läuft der Zyklus weiter.
+
+    Die Mail wird über einen Ersatz-Dedupe-Key beansprucht, als `ingest_failed` in den
+    Fail-closed-Pfad gereicht, mit Fehlerklasse `ingest_error` gebucht und als gelesen
+    markiert — die Mail dahinter wird ganz normal verarbeitet (ADR-020 (e), I6).
+    """
+    from maildigest.ingest import imap_client as modul
+
+    echt = modul.build_raw_mail
+
+    def kaputt(msg: MailMessage) -> RawMail:
+        if msg.uid == "1":
+            raise ValueError("Attrappe: irgendetwas ging schief")
+        return echt(msg)
+
+    monkeypatch.setattr(modul, "build_raw_mail", kaputt)
+    box = FakeMailBox([make_message(make_mail("a"), "1"), make_message(make_mail("b"), "2")])
+    processor = RecordingProcessor()
+
+    with caplog.at_level(logging.INFO, logger="maildigest.ingest"):
+        stats = poll_once(make_client(box), db, processor)
+
+    assert (stats.fetched, stats.processed, stats.failed) == (2, 1, 1)
+    unlesbar = processor.seen[0]
+    assert unlesbar.ingest_failed is True
+    assert unlesbar.dedupe_key == "<a@example.org>"  # Message-ID war noch lesbar
+    assert [raw.message_id for raw in processor.seen[1:]] == ["<b@example.org>"]
+
+    record = db.get(unlesbar.dedupe_key)
+    assert record is not None
+    assert record.status is MailState.FAILED
+    assert record.error_class == "ingest_error"
+    assert [flag[0] for flag in box.flagged] == ["1", "2"]
+
+    meldungen = [entry.message for entry in caplog.records]
+    assert "mail_ingest_failed" in meldungen
+    # I5: kein Mail-Inhalt im Protokoll.
+    assert not any("Hallo" in entry.getMessage() for entry in caplog.records)
+
+    # ADR-019: beim Wiederanlauf ist die Mail ein Duplikat, nicht ein zweiter Versuch.
+    zweiter = RecordingProcessor()
+    zweite_stats = poll_once(make_client(box), db, zweiter)
+    assert (zweite_stats.duplicates, zweite_stats.failed) == (2, 0)
+    assert zweiter.seen == []
+
+
+def test_o1_ersatzkey_ohne_lesbare_header_ist_stabil() -> None:
+    """Ohne lesbare `Message-ID` kommt der Ersatz-Key aus UID, FETCH-Daten und Kopfzeilen.
+
+    Er muss über Neustarts hinweg derselbe sein (ADR-019) und sich von dem einer anderen
+    Mail unterscheiden.
+    """
+    from maildigest.ingest.imap_client import _unreadable_raw_mail
+
+    ohne_id = b"From: a@Example.ORG\r\nSubject: x\r\n\r\nHallo\r\n"
+    erste = _unreadable_raw_mail(make_message(ohne_id, "1"))
+    wieder = _unreadable_raw_mail(make_message(ohne_id, "1"))
+    andere = _unreadable_raw_mail(make_message(ohne_id, "2"))
+
+    assert erste.dedupe_key == wieder.dedupe_key
+    assert erste.dedupe_key != andere.dedupe_key
+    assert erste.ingest_failed is True
+    assert erste.from_domain == ""  # „unbekannt", ADR-020 (b)

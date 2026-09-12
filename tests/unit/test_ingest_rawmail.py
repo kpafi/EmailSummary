@@ -11,6 +11,7 @@ bei fehlender Message-ID, Grenzfälle mit kaputten Headern, Backoff-Kennlinie.
 from __future__ import annotations
 
 import base64
+import email.message
 import hashlib
 import re
 from datetime import datetime
@@ -1117,3 +1118,148 @@ def test_s2_scanner_ist_linear() -> None:
     assert zeiten[32768] < 0.1, zeiten
     if zeiten[4096] > 0.001:
         assert zeiten[32768] / zeiten[4096] < 16, zeiten
+
+
+# --- O-1: tiefe MIME-Verschachtelung --------------------------------------------------------
+
+
+def _poison_bytes(depth: int) -> bytes:
+    """Rohe Mail mit `depth` verschachtelten `multipart/mixed`-Ebenen (die Gift-Mail)."""
+    head = (
+        b"Message-ID: <poison@example.org>\r\nFrom: a@b.example\r\n"
+        b"Subject: tief\r\nMIME-Version: 1.0\r\n"
+    )
+    body = b"Content-Type: text/plain\r\n\r\nHallo\r\n"
+    for index in range(depth):
+        boundary = b"B%d" % index
+        body = (
+            b"Content-Type: multipart/mixed; boundary="
+            + boundary
+            + b"\r\n\r\n--"
+            + boundary
+            + b"\r\n"
+            + body
+            + b"--"
+            + boundary
+            + b"--\r\n"
+        )
+    return head + body
+
+
+def _poison_message(depth: int) -> MailMessage:
+    """Gift-Mail als `MailMessage` — der Baum wird iterativ gebaut, nicht geparst.
+
+    Jenseits von rund 1200 Ebenen scheitert schon `email.message_from_bytes` (rekursiver
+    Parser der Standardbibliothek). Damit die Tiefenreihe bis 5000 überhaupt bei
+    `build_raw_mail` ankommt, wird der Baum hier direkt zusammengesteckt — genau das
+    Objekt, das imap-tools sonst nach dem Parsen hält.
+    """
+    inner = email.message.Message()
+    inner["Content-Type"] = "text/plain"
+    inner.set_payload("Hallo\r\n")
+    for index in range(depth):
+        outer = email.message.Message()
+        outer["Content-Type"] = f'multipart/mixed; boundary="B{index}"'
+        outer.set_payload([inner])
+        inner = outer
+    inner["Message-ID"] = "<poison@example.org>"
+    inner["From"] = "a@b.example"
+    inner["Subject"] = "tief"
+    message = make_message(b"Message-ID: <platzhalter@example.org>\r\n\r\n")
+    message.obj = inner
+    return message
+
+
+def _parsed_depth(mime_bytes: bytes) -> int:
+    """Tiefe des zurückserialisierten Baums (iterativ gemessen)."""
+    stack = [(email.message_from_bytes(mime_bytes), 0)]
+    deepest = 0
+    while stack:
+        part, depth = stack.pop()
+        deepest = max(deepest, depth)
+        payload = part.get_payload() if part.is_multipart() else None
+        if isinstance(payload, list):
+            stack.extend((child, depth + 1) for child in payload)
+    return deepest
+
+
+@pytest.mark.parametrize("depth", [250, 1000, 5000])
+def test_o1_tiefe_verschachtelung_wirft_nicht(depth: int) -> None:
+    """O-1: Eine Mail mit sehr vielen MIME-Ebenen liefert eine `RawMail` statt `RecursionError`.
+
+    Vor dem Fix scheiterte `as_bytes()` ab rund 250 Ebenen mit `RecursionError`; der Rückfall
+    `str(msg.obj)` lief über denselben rekursiven Generator und wurde nicht gefangen —
+    `build_raw_mail` warf entgegen ADR-020 (e) und riss den ganzen Poll-Durchlauf mit.
+    """
+    import time
+
+    from maildigest.ingest.imap_client import MAX_MIME_DEPTH
+
+    message = _poison_message(depth)
+    beginn = time.process_time()
+    raw = build_raw_mail(message)
+    dauer = time.process_time() - beginn
+
+    assert raw.message_id == "<poison@example.org>"
+    assert dauer < 1.0, dauer
+    # Der geleerte Teilbaum serialisiert zu einem leeren Rumpf, den der Parser als einen
+    # (leeren) Kindteil zurückliest — daher die eine Ebene Toleranz.
+    assert _parsed_depth(raw.mime_bytes) <= MAX_MIME_DEPTH + 1
+
+
+def test_o1_geparste_giftmail_wird_gedeckelt_und_bleibt_klein() -> None:
+    """Die Gift-Mail des Befunds (250 Ebenen, 16 KB) aus echten Bytes — wie vom Server."""
+    from maildigest.ingest.imap_client import MAX_MIME_DEPTH
+
+    raw = build_raw_mail(make_message(_poison_bytes(250)))
+
+    assert raw.ingest_failed is False
+    assert _parsed_depth(raw.mime_bytes) <= MAX_MIME_DEPTH + 1
+    assert len(raw.mime_bytes) < len(_poison_bytes(250))
+
+
+def test_o1_normale_mail_bleibt_byteidentisch() -> None:
+    """Gegenprobe: Der Tiefendeckel rührt eine gewöhnliche Mail nicht an (stabiler content_hash)."""
+    message = make_message(FULL_MAIL)
+    erwartet = message.obj.as_bytes()
+
+    raw = build_raw_mail(message)
+
+    assert raw.mime_bytes == erwartet
+    assert raw.content_hash == hashlib.sha256(erwartet).hexdigest()
+
+
+def test_o1_raw_bytes_rueckfall_wirft_nie() -> None:
+    """Auch wenn `as_bytes()` **und** `str()` scheitern, kommt ein gültiger Rohwert heraus."""
+
+    class Bockig(email.message.Message):
+        def as_bytes(self, *args: object, **kwargs: object) -> bytes:
+            raise RecursionError("maximum recursion depth exceeded")
+
+        def __str__(self) -> str:
+            raise RecursionError("maximum recursion depth exceeded")
+
+    message = make_message(b"Message-ID: <a@example.org>\r\n\r\nHallo\r\n")
+    stur = Bockig()
+    stur["Message-ID"] = "<a@example.org>"
+    stur["Subject"] = "Betreff"
+    message.obj = stur
+
+    raw = build_raw_mail(message)
+
+    assert raw.message_id == "<a@example.org>"
+    assert b"could not be serialized" in raw.mime_bytes
+    assert b"Message-ID: <a@example.org>" in raw.mime_bytes
+    # Der Notwert ist parsbares MIME: Der Sanitizer kommt damit durch.
+    assert MailSanitizer().sanitize(raw).subject == "Betreff"
+
+
+def test_o1_sanitizer_parse_der_giftmail_ist_gedeckelt() -> None:
+    """Der zweite Parse im Sanitizer sieht den gedeckelten Baum — kein `RecursionError`."""
+    raw = build_raw_mail(make_message(_poison_bytes(250)))
+
+    mail = MailSanitizer().sanitize(raw)
+
+    assert mail.dedupe_key == "<poison@example.org>"
+    # Jenseits von `limits.max_mime_depth` steht ein Metadatum statt Inhalt (ADR-030).
+    assert any("tiefe" in att.filename_sanitized for att in mail.attachments)

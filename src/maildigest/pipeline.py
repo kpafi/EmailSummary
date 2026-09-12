@@ -79,6 +79,15 @@ class _InaccurateSummaryError(Exception):
     """Interner Marker: Kritiker meldet `summary_accurate = false` (T8, fail-closed)."""
 
 
+class _UnreadableMailError(Exception):
+    """Interner Marker: Der Ingest konnte die Mail nicht auswerten (`RawMail.ingest_failed`).
+
+    Kein Stufenfehler, sondern ein Befund aus Stufe 1 — die Mail hat nie einen auswertbaren
+    Inhalt gehabt. Die Pipeline behandelt sie wie jeden anderen fail-closed-Fall: Metadaten-
+    Notiz aus dem, was lesbar war, Status `failed`, Fehlerklasse `ingest_error` (O-1).
+    """
+
+
 #: Bekannte Exception-Namen → grobe, stabile Fehlerklassen. Bewusst über den Klassennamen
 #: statt über Imports, damit `pipeline.py` nicht von späteren WP-Modulen abhängt.
 #: Fehlerklassen, deren Meldung **per Konstruktion** frei von Mail-Inhalt ist und deshalb
@@ -89,6 +98,7 @@ _LOGGABLE_DETAIL: frozenset[str] = frozenset({"LLMInvalidResponse"})
 
 _ERROR_CLASSES: dict[str, str] = {
     "_InaccurateSummaryError": "summary_inaccurate",
+    "_UnreadableMailError": "ingest_error",
     "SanitizeError": "sanitize_error",
     "LLMTimeout": "llm_timeout",
     "LLMRateLimited": "llm_rate_limited",
@@ -333,6 +343,12 @@ def process_mail(raw: RawMail, deps: PipelineDeps) -> PipelineResult:
         Exception aus einer Stufe nach außen gereicht — jeder Fehler endet fail-closed (I6).
     """
     ref = _mail_ref(raw)
+    if raw.ingest_failed:
+        # O-1: Der Ingest hat diese Mail nicht auswerten können. Sie hat keinen Inhalt, den
+        # der Sanitizer prüfen könnte — der Weg geht direkt in den Fail-closed-Ausgang,
+        # damit nie etwas Unverstandenes zusammengefasst oder zugestellt wird (I6).
+        del raw
+        return _fail_closed(ref, "sanitize", _UnreadableMailError(), deps)
     try:
         mail = deps.sanitizer.sanitize(raw)
         _record(deps, ref, "sanitized")

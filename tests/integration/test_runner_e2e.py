@@ -442,3 +442,64 @@ def test_delivery_failure_keeps_the_mail_in_checked_and_retries(mailbox: FakeMai
         assert stats.delivered == 1
         assert db.count_by_status(MailState.CHECKED) == 0
         assert db.outbox_size() == 0
+
+
+# --- O-1: der Dauerbetrieb überlebt eine Gift-Mail -------------------------------------------
+
+
+def poison_message(uid: str, depth: int = 250) -> MailMessage:
+    """Die Gift-Mail des Befunds O-1: 16 KB mit `depth` verschachtelten MIME-Ebenen."""
+    head = (
+        b"Message-ID: <poison@example.org>\r\nFrom: Absender <a@example.org>\r\n"
+        b"Subject: Newsletter tief\r\nMIME-Version: 1.0\r\n"
+    )
+    body = b"Content-Type: text/plain\r\n\r\nHallo\r\n"
+    for index in range(depth):
+        boundary = b"B%d" % index
+        body = (
+            b"Content-Type: multipart/mixed; boundary="
+            + boundary
+            + b"\r\n\r\n--"
+            + boundary
+            + b"\r\n"
+            + body
+            + b"--"
+            + boundary
+            + b"--\r\n"
+        )
+    return MailMessage([(f"1 (UID {uid} FLAGS ())".encode(), head + body), b")"])
+
+
+def test_o1_run_forever_stirbt_nicht(caplog: pytest.LogCaptureFixture) -> None:
+    """Gift-Mail im Postfach: Der Zyklus endet regulär, der Loop hält bis `runner_stopped`.
+
+    Vor dem Fix warf `poll_once` `RecursionError`; `run_forever` fängt nur `IngestError`,
+    der Daemon starb — und startete er neu, kippte ihn dieselbe Mail sofort wieder.
+    """
+    box = FakeMailBox([poison_message("1")])
+    with StateDB(":memory:") as db:
+        messenger = CollectingMessenger()
+        runner = make_runner(
+            db,
+            box,
+            summarizer=ScriptedSummarizer(low_marker="unmöglich"),
+            critic=ScriptedCritic(),
+            messenger=messenger,
+        )
+        echt = runner.ingest.run_once
+
+        def einmal_dann_stopp() -> Any:
+            try:
+                return echt()
+            finally:
+                runner.stop()
+
+        runner.ingest.run_once = einmal_dann_stopp  # type: ignore[method-assign]
+        with caplog.at_level("INFO", logger="maildigest.runner"):
+            stats = runner.run_forever(handle_signals=False)
+
+        assert stats.cycles == 1
+        assert stats.ingest.fetched == 1
+        assert "runner_stopped" in [entry.message for entry in caplog.records]
+        assert db.count_by_status(MailState.DELIVERED) == 1
+        assert box.flagged == ["1"]

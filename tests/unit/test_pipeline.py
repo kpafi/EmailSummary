@@ -590,3 +590,39 @@ def test_andere_fehlerklassen_liefern_kein_detail() -> None:
 
     assert failure_detail(SanitizeError("mail_zu_gross")) == ""
     assert failure_detail(ValueError("irgendein Text mit Mailinhalt")) == ""
+
+
+# --- O-1: Mail, die der Ingest nicht auswerten konnte ---------------------------------------
+
+
+def test_o1_unlesbare_mail_wird_zur_notiz() -> None:
+    """`RawMail.ingest_failed` geht ohne Umweg in den Fail-closed-Ausgang (I6).
+
+    Der Ingest setzt das Flag, wenn `build_raw_mail` trotz aller Absicherungen gescheitert
+    ist (O-1). Die Mail hat dann keinen Inhalt, den eine Stufe prüfen könnte — es darf weder
+    zusammengefasst noch zugestellt werden, und es muss trotzdem eine Notiz geben.
+    """
+    sanitizer = StubSanitizer()
+    summarizer = StubSummarizer()
+    composer = StubComposer()
+    messenger = StubMessenger()
+    deps = make_deps(
+        sanitizer=sanitizer,
+        summarizer=summarizer,
+        composer=composer,
+        messenger=messenger,
+    )
+    raw = make_raw().model_copy(update={"ingest_failed": True})
+
+    result = process_mail(raw, deps)
+
+    assert isinstance(result, FailedNotice)
+    assert result.status == "failed"
+    assert result.notice.reason_class == "ingest_error"
+    assert result.notice.stage == "sanitize"
+    assert result.notice_delivered is True
+    assert sanitizer.seen_mime_bytes is None
+    assert summarizer.calls == []
+    assert composer.failure_calls == [result.notice]
+    # I5: Die Notiz trägt nur Metadaten, nie Rohinhalt.
+    assert all(MIME_MARKER.decode() not in part for part in messenger.sent[0].parts)

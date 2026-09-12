@@ -67,6 +67,7 @@ from maildigest.state.db import ClaimResult, MailState, StateDB, dedupe_hash
 
 __all__ = [
     "MAX_BACKOFF_SECONDS",
+    "MAX_MIME_DEPTH",
     "MAX_RECIPIENTS",
     "ImapAuthError",
     "ImapClient",
@@ -101,6 +102,20 @@ _FALLBACK_PREFIX: Final = "sha256:"
 
 #: Der Klartext-IMAP-Port; eine Konfiguration darauf ist immer ein Fehler (docs/SECURITY.md §6).
 _PLAINTEXT_IMAP_PORT: Final = 143
+
+#: Höchste Verschachtelungstiefe des geparsten MIME-Baums (S-1/O-1). Alles darunter wird
+#: **vor** jeder Serialisierung abgeschnitten (:func:`_cap_message_depth`). Grund: Jede
+#: Ebene kostet in `Message.as_bytes()`, in `Message.walk()` und im Parser der
+#: Standardbibliothek mehrere Stackframes — eine 16-KB-Mail mit 250 Ebenen reichte, um
+#: `as_bytes()` mit `RecursionError` scheitern zu lassen. 32 Ebenen sind weit jenseits
+#: alles Realen (der Sanitizer wertet ab Werk 10 aus, `limits.max_mime_depth`) und weit
+#: unterhalb der Rekursionsgrenze. Bewusst kein Config-Feld: eine Schranke gegen einen
+#: Angriff, kein Geschmacksparameter.
+MAX_MIME_DEPTH: Final = 32
+
+#: Ersatzinhalt, wenn selbst der Rückfall in :func:`_raw_bytes` scheitert. Nur Text über
+#: die Mail, nie Mail-Inhalt.
+_UNSERIALIZABLE_BODY: Final = b"[maildigest: message body could not be serialized]\r\n"
 
 
 class IngestError(Exception):
@@ -209,6 +224,45 @@ def _cap_header_value_with_length(value: object) -> tuple[object, int]:
     if len(text) > _MAX_HEADER_CHARS:
         return text[:_MAX_HEADER_CHARS], _MAX_HEADER_CHARS
     return value, len(text)
+
+
+def _cap_message_depth(message: Message) -> int:
+    """Deckelt die Verschachtelungstiefe des geparsten MIME-Baums auf :data:`MAX_MIME_DEPTH`.
+
+    Läuft **vor** jeder Serialisierung und vor jedem anderen Baumdurchlauf (O-1): `as_bytes()`,
+    `walk()`, `msg.text`/`msg.html` von imap-tools und der Parser der Standardbibliothek sind
+    allesamt rekursiv, und eine 16 KB grosse Mail mit 250 `multipart`-Ebenen genügt, um sie mit
+    `RecursionError` scheitern zu lassen. Ein Teilbaum jenseits der Schranke wird durch einen
+    **leeren** Payload ersetzt: Der Teil bleibt mit seinen Kopfzeilen stehen (sichtbar für
+    Sanitizer und Nutzer), sein Inhalt ist weg. Alles Nachgelagerte (Serialisierung, `content_hash`,
+    Sanitizer) sieht denselben, konsistenten Baum.
+
+    Bewusst iterativ — die Schranke gegen Rekursion darf nicht selbst rekursiv sein
+    (Vorbild: :func:`_cap_message_headers`). Für gewöhnliche Mails ist die Funktion ein
+    reiner Lesedurchlauf: Sie ändert nichts, die Serialisierung bleibt byteidentisch.
+
+    Returns:
+        Zahl der abgeschnittenen Teilbäume (0 = nichts geändert).
+    """
+    capped = 0
+    stack: list[tuple[Message, int]] = [(message, 0)]
+    while stack:
+        part, depth = stack.pop()
+        try:
+            if not part.is_multipart():
+                continue
+            payload = part.get_payload()
+        except Exception:  # pragma: no cover - defekte email.Message-Implementierungen
+            continue
+        if not isinstance(payload, list):
+            continue
+        if depth >= MAX_MIME_DEPTH:
+            if payload:
+                part.set_payload([])
+                capped += 1
+            continue
+        stack.extend((child, depth + 1) for child in payload if isinstance(child, Message))
+    return capped
 
 
 def _cap_message_headers(message: Message) -> bool:
@@ -752,11 +806,46 @@ def _raw_bytes(msg: MailMessage) -> bytes:
     daraus rekonstruiert. Für defekte Nachrichten, bei denen `as_bytes()` scheitert, wird auf
     die String-Repräsentation zurückgefallen, damit eine kaputte Mail trotzdem als `RawMail`
     in die Pipeline (und damit in den Fail-closed-Pfad) gelangt statt still zu verschwinden.
+
+    Drei Stufen, jede abgesichert (O-1): `as_bytes()`, dann `str()`, dann die Kopfzeilen
+    des obersten Teils plus Hinweiszeile. Der Rückfall `str()` läuft über **denselben**
+    rekursiven Generator wie `as_bytes()` — bei tiefer Schachtelung scheiterte er deshalb
+    genauso, und zwar ungefangen. Hier wirft jetzt keine Stufe mehr nach aussen; die letzte
+    liefert einen minimalen, aber gültigen Rohwert. ADR-020 (e): `build_raw_mail` wirft nie.
     """
     try:
         return msg.obj.as_bytes()
     except Exception:  # defektes MIME ist der Normalfall, nicht die Ausnahme
+        pass
+    try:
         return str(msg.obj).encode("utf-8", "replace")
+    except Exception:  # z. B. RecursionError: derselbe rekursive Generator wie oben
+        pass
+    return _headers_only_bytes(msg)
+
+
+def _headers_only_bytes(msg: MailMessage) -> bytes:
+    """Letzter Rückfall für :func:`_raw_bytes`: Kopfzeilen des obersten Teils + Hinweiszeile.
+
+    Bewusst ohne Generator, ohne `walk()` und ohne Rekursion — genau die Mechanik, die in
+    den Stufen davor scheitert. Die Werte sind bereits gedeckelt (:func:`_cap_message_headers`);
+    Zeilenumbrüche werden entfernt, damit ein Headerwert keine zusätzliche Kopfzeile
+    vortäuschen kann. Das Ergebnis ist parsbares MIME: Der Sanitizer sieht eine Mail mit
+    Kopfzeilen und einem kurzen Klartext-Body, der nichts aus der Mail enthält.
+    """
+    lines: list[bytes] = []
+    try:
+        items = list(msg.obj.raw_items())
+    except Exception:  # pragma: no cover - defekte email.Message-Implementierungen
+        items = []
+    for name, value in items[:_MAX_HEADERS_PER_MAIL]:
+        try:
+            header = _collapse(f"{name}: {value}")
+        except Exception:  # pragma: no cover - kaputte Header-Objekte
+            continue
+        lines.append(header.encode("utf-8", "replace"))
+    lines.append(b"")
+    return b"\r\n".join(lines) + b"\r\n" + _UNSERIALIZABLE_BODY
 
 
 def _content_hash(mime_bytes: bytes) -> str:
@@ -766,6 +855,58 @@ def _content_hash(mime_bytes: bytes) -> str:
     Er ist genau dann gleich, wenn die Mail dieselbe ist.
     """
     return hashlib.sha256(mime_bytes).hexdigest()
+
+
+def _best_effort(read: Callable[[], str]) -> str:
+    """Liest einen Wert, der auch scheitern darf — für den Notpfad :func:`_unreadable_raw_mail`."""
+    try:
+        return read() or ""
+    except Exception:
+        return ""
+
+
+def _unreadable_raw_mail(msg: MailMessage) -> RawMail:
+    """Notfall-`RawMail` für eine Mail, an der :func:`build_raw_mail` gescheitert ist (O-1).
+
+    `build_raw_mail` ist so gebaut, dass es nicht wirft (ADR-020 (e)) — aber „gebaut" ist
+    keine Garantie, und ein Fehler genau hier hielt den gesamten Dienst an: Die Mail bleibt
+    ungelesen im Postfach und kippt jeden weiteren Poll, alle danach eintreffenden Mails
+    werden nie verarbeitet. Deshalb gibt es diesen zweiten Boden: Jedes Feld wird einzeln
+    und abgesichert gelesen, was nicht lesbar ist, bleibt leer („unbekannt", ADR-020 (b)/(c)).
+
+    Der Dedupe-Key ist die `Message-ID`, wenn sie lesbar ist — dann trifft ein späterer,
+    erfolgreicher Lauf denselben Key. Sonst ein Hash aus UID, den rohen FETCH-Flags (die
+    `INTERNALDATE` und `RFC822.SIZE` tragen) und den lesbaren Kopfzeilen; dieser Wert ist
+    über Neustarts hinweg stabil, solange die Mail im Postfach dieselbe ist (ADR-019).
+
+    `mime_bytes` trägt bewusst keinen Mail-Inhalt: Die Mail läuft über
+    `RawMail.ingest_failed` unmittelbar in den Fail-closed-Pfad der Pipeline.
+    """
+    message_id = _best_effort(lambda: _header(msg, "Message-ID") or "")
+    digest = hashlib.sha256()
+    digest.update(_best_effort(lambda: msg.uid or "").encode("utf-8", "replace"))
+    digest.update(b"\x00")
+    try:
+        for flag_data in msg._raw_flag_data:  # INTERNALDATE/RFC822.SIZE aus der FETCH-Antwort
+            digest.update(bytes(flag_data))
+            digest.update(b"\x00")
+    except Exception:  # pragma: no cover - andere imap-tools-Fassung
+        pass
+    digest.update(_headers_only_bytes(msg))
+    return RawMail(
+        message_id=message_id or None,
+        dedupe_key=message_id or f"{_FALLBACK_PREFIX}{digest.hexdigest()}",
+        from_addr=_best_effort(lambda: _header(msg, "From") or ""),
+        from_domain="",
+        subject_raw=_collapse(_best_effort(lambda: _header(msg, "Subject") or "")),
+        mime_bytes=_UNSERIALIZABLE_BODY,
+        size_bytes=0,
+        # Leer heisst „unbekannt" (ADR-079): Der Platzhalter ist kein Inhaltsmerkmal — hätte
+        # er einen Hash, wäre jede andere unlesbare Mail unter demselben Key eine
+        # „Kollision" und ein späterer geglückter Lauf ebenfalls.
+        content_hash="",
+        ingest_failed=True,
+    )
 
 
 def build_raw_mail(msg: MailMessage) -> RawMail:
@@ -783,6 +924,14 @@ def build_raw_mail(msg: MailMessage) -> RawMail:
         Die `RawMail` mit `dedupe_key` = Message-ID, sonst Fallback-Hash aus
         From + Date + Subject + Body-Präfix.
     """
+    try:
+        # Zuerst die Tiefe (O-1): Jeder folgende Baumdurchlauf — Kopfzeilendeckel,
+        # `_body_prefix`, Serialisierung — arbeitet danach auf einem flachen Baum.
+        if _cap_message_depth(msg.obj):
+            # Kein Mail-Inhalt im Log (I5): nur die Tatsache.
+            logger.info("mail_mime_depth_capped")
+    except Exception:  # pragma: no cover - defekte email.Message-Implementierungen
+        pass
     try:
         if _cap_message_headers(msg.obj):
             # Kein Mail-Inhalt im Log (I5): nur die Tatsache.
@@ -1006,6 +1155,13 @@ class ImapClient:
             raise ImapConnectionError(
                 f"Fetching unseen mail failed: {type(exc).__name__}"
             ) from exc
+        except RecursionError as exc:
+            # O-1, Restfall: Schon das Parsen (`email.message_from_bytes` in imap-tools) ist
+            # rekursiv und scheitert jenseits von rund 1200 MIME-Ebenen — vor jedem Code
+            # dieses Projekts. Der Deckel in `build_raw_mail` kann dort nicht mehr greifen.
+            # Ein Verbindungsfehler ist der nächstliegende Ausgang: Der Runner macht
+            # Reconnect mit Backoff und lebt weiter, statt am Ende des Stacks zu sterben.
+            raise ImapConnectionError("Fetching unseen mail failed: RecursionError") from exc
 
     def list_folders(self) -> list[str]:
         """Namen aller Ordner des Postfachs — nur lesend (WP9, `connect-mail`).
@@ -1124,6 +1280,13 @@ def poll_once(
     und läuft regulär durch; das Ereignis steht als `mail_id_collision` (WARNING, nur
     Hashes) im Log.
 
+    Auch ein Fehler **vor** der Verarbeitung beendet den Durchlauf nicht (O-1): Scheitert
+    `build_raw_mail` wider Erwarten (ADR-020 (e)), tritt :func:`_unreadable_raw_mail` an
+    seine Stelle — die Mail wird über einen Ersatz-Dedupe-Key beansprucht, läuft als
+    `ingest_failed` in den Fail-closed-Pfad (Metadaten-Notiz, Status `failed`,
+    Fehlerklasse `ingest_error`) und wird als gelesen markiert. Sonst bliebe sie ungelesen
+    im Postfach und kippte jeden weiteren Poll — mit ihr alle später eintreffenden Mails.
+
     Ein Fehler in der Verarbeitung **einer** Mail beendet den Durchlauf nicht (I6): Die Mail
     bekommt Status `failed`. Ebenso wenig beendet ihn ein abgelehntes Nachbehandlungs-
     Kommando (:class:`MailboxPostProcessError`, z. B. fehlender `move_processed_to`-Ordner):
@@ -1151,7 +1314,19 @@ def poll_once(
     stats = IngestStats()
     for msg in client.fetch_unseen():
         stats.fetched += 1
-        raw = build_raw_mail(msg)
+        try:
+            raw = build_raw_mail(msg)
+        except Exception as exc:  # O-1: keine einzelne Mail darf den Zyklus anhalten
+            raw = _unreadable_raw_mail(msg)
+            # ADR-047/I5: nur die Exception-Klasse, kein Traceback ausserhalb von DEBUG.
+            logger.error(
+                "mail_ingest_failed",
+                extra={
+                    "mail": dedupe_hash(raw.dedupe_key)[:12],
+                    "error": type(exc).__name__,
+                },
+                exc_info=traceback_enabled(logger),
+            )
         key_short = dedupe_hash(raw.dedupe_key)[:12]
 
         outcome = db.claim(raw.dedupe_key, content_hash=raw.content_hash)
@@ -1188,6 +1363,19 @@ def poll_once(
                 exc_info=traceback_enabled(logger),
             )
         else:
+            if raw.ingest_failed:
+                # O-1: Die Pipeline hat die Metadaten-Notiz zugestellt (fail-closed, I6);
+                # verarbeitet ist hier nichts. Der Status ist `failed` mit der Fehlerklasse
+                # der Stufe 1 — im Runner-Betrieb schreibt ihn `_record_result` aus der
+                # Notiz, hier schreiben wir ihn selbst.
+                stats.failed += 1
+                if write_result_status:
+                    db.mark_status(
+                        raw.dedupe_key, MailState.FAILED, error_class="ingest_error"
+                    )
+                logger.info("mail_unreadable", extra={"mail": key_short})
+                _mark_processed_best_effort(client, msg, key_short)
+                continue
             stats.processed += 1
             if write_result_status:
                 db.mark_status(raw.dedupe_key, MailState(result.status))

@@ -33,6 +33,16 @@ Alle nennenswerten Änderungen an MailDigest. Format angelehnt an
 Aus der Abschluss-Testrunde (38 Befunde, docs/TESTING.md §7; Bericht in
 docs/TESTRUNDE-HOT-COLD.md):
 
+- **Eine einzige Mail konnte den Dienst anhalten.** Eine 16 KB grosse Mail mit 250
+  verschachtelten MIME-Ebenen liess die Umwandlung mit `RecursionError` scheitern: Der
+  Dauerbetrieb starb, `maildigest run --once` scheiterte bei jedem Lauf, und weil die Mail
+  nie als gelesen markiert wurde, blieben alle danach eintreffenden Mails unverarbeitet
+  liegen, bis jemand sie von Hand aus dem Postfach nahm. Die Verschachtelungstiefe wird
+  jetzt vor jeder Auswertung auf 32 Ebenen gedeckelt (Log `mail_mime_depth_capped`), und
+  scheitert die Umwandlung einer Mail trotzdem, bekommt der Nutzer die Metadaten-Notiz, die
+  Mail den Status `failed` und der Abruf läuft mit der nächsten Mail weiter (O-1,
+  ADR-020-Nachtrag).
+
 - **Ohne Sprachmodell kam bei einem Betreff über 100 Zeichen keine Zusammenfassung mehr an,
   sondern nur die Metadaten-Notiz** — für eine alltägliche Mailklasse war der
   Auslieferungszustand damit funktionslos. Der Betreff wird jetzt mit `…` gekürzt (HC-1).

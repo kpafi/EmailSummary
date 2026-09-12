@@ -103,6 +103,14 @@ _RAW_TEXT_FACTOR = 16
 #: Anhangs-Metadatum.
 MAX_MIME_PARTS = 500
 
+#: Harte Obergrenze für die Rekursionstiefe von :meth:`Sanitizer._walk` (O-1). Der
+#: Baumlauf ist rekursiv; `limits.max_mime_depth` ist konfigurierbar und nach oben offen,
+#: eine sehr grosse Einstellung würde aus einer tief verschachtelten Mail einen
+#: `RecursionError` machen. Wirksam ist immer der kleinere der beiden Werte. Der Ingest
+#: deckelt den Baum ohnehin früher (`ingest.imap_client.MAX_MIME_DEPTH`); diese Schranke
+#: gilt für `RawMail`-Objekte aus anderen Quellen (Tests, künftige Aufrufer).
+_MAX_MIME_DEPTH_HARD = 64
+
 #: Name des Metadatums für die Teile jenseits von :data:`MAX_MIME_PARTS`.
 _TOO_MANY_PARTS_NAME = "(mime-teile ueberschritten)"
 
@@ -427,7 +435,7 @@ class MailSanitizer:
             # dass es sie gab (ein Metadatum am Ende von `sanitize()`).
             state.parts_skipped += 1
             return
-        if depth > self._limits.max_mime_depth:
+        if depth > min(self._limits.max_mime_depth, _MAX_MIME_DEPTH_HARD):
             self._add_attachment_meta(
                 state,
                 filename="(mime-tiefe ueberschritten)",
