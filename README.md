@@ -129,6 +129,15 @@ den Kritiker, der die Zusammenfassung gegen den Mailtext prüft.
 | **lokales Modell** (Ollama, LM Studio, vLLM) | keine | Ollama installieren, Modell laden (einige GB) — dafür verlässt kein Mailinhalt deinen Rechner |
 | **Anthropic** | kostenpflichtig | Anmeldung + Guthaben |
 
+**Antwortbudget (`max_tokens`):** Ab Werk gibt es **kein Limit** — es gilt die Obergrenze
+des Modells. `connect-llm` fragt am Ende, ob du eines setzen willst, und nennt sinnvolle
+Werte. Der Grund für die Vorgabe: Viele aktuelle Modelle sind „Reasoning-Modelle"
+(DeepSeek, Qwen-Thinking, OpenAI o-Serie, Gemini-Thinking) und ziehen ihre Denk-Tokens vom
+Antwortbudget ab. Mit einem kleinen Limit wird das JSON abgeschnitten, und statt einer
+Zusammenfassung kommt bei jeder Mail die Fail-closed-Notiz „could not be processed safely".
+Ein Limit lohnt sich nur, wenn du die Kosten je Aufruf bewusst deckeln willst — dann sind
+4096 für klassische Modelle ein sicherer Wert.
+
 ### Warum liegt kein Schlüssel bei?
 
 Weil dieses Programm quelloffen ist. Ein mitgelieferter Zugang stünde für jeden lesbar im
@@ -286,6 +295,9 @@ low_digest_time = "18:00"           # wann der Sammel-Digest kommt
 
 [summarizer]
 instructions = "Rechnungen und Termine sind immer wichtig. Werbung ist nie wichtig."
+
+[llm]
+# max_tokens = 4096   # fehlt = kein Limit; nur setzen, wenn du die Kosten je Aufruf deckeln willst
 ```
 
 Die Custom-Instructions steuern Stil, Fokus und Wichtigkeit. Sie können die

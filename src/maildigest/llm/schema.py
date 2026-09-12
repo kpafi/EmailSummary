@@ -34,8 +34,9 @@ __all__ = ["EXTRA_FIELD_PLACEHOLDER", "complete_json", "extract_json_object"]
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
-#: Default-Antwortlänge, falls der Aufrufer keine nennt (entspricht `[llm] max_tokens`).
-DEFAULT_MAX_TOKENS = 1024
+#: Default-Antwortlänge, falls der Aufrufer keine nennt: `None` = kein Limit, wie der
+#: Werkszustand von `[llm] max_tokens` (ADR-085).
+DEFAULT_MAX_TOKENS: int | None = None
 
 #: Höchstzahl der Fehlerzeilen im Reparaturhinweis (hält den Prompt kurz).
 _MAX_REPORTED_ERRORS = 8
@@ -175,7 +176,7 @@ def complete_json(
     user: str,
     schema: type[ModelT],
     *,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
     temperature: float | None = None,
 ) -> ModelT:
     """Ruft das Modell auf und erzwingt eine schema-valide JSON-Antwort.
@@ -185,7 +186,7 @@ def complete_json(
         system: System-Prompt (Code + gelabelte Custom-Instructions, I8).
         user: User-Prompt mit dem delimitierten, untrusted Datenblock.
         schema: pydantic-Modellklasse, gegen die validiert wird.
-        max_tokens: Obergrenze der Antwortlänge.
+        max_tokens: Obergrenze der Antwortlänge; `None` = kein Limit (ADR-085).
         temperature: Sampling-Temperatur; `None` = Provider-Default (Feld wird nicht
             gesendet).
 

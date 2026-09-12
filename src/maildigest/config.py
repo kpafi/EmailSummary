@@ -121,13 +121,20 @@ class LlmConfig(_Section):
     `model` hat bewusst keinen Default: Modell-IDs veralten, ein hartkodierter Default würde
     stillschweigend ein falsches Modell verwenden (docs/ARCHITECTURE.md §5). Bei
     `provider = "none"` bleibt das Feld leer.
+
+    `max_tokens` ist ab Werk **nicht gesetzt** — kein Limit, es gilt die Obergrenze des
+    Anbieters bzw. Modells (ADR-085). Ein kleines festes Budget hat sich als Falle
+    erwiesen: Reasoning-Modelle ziehen ihre Denk-Tokens vom Antwortbudget ab, das JSON wird
+    abgeschnitten und jede Mail endet fail-closed als Metadaten-Notiz. Wer die Kosten je
+    Aufruf deckeln will, setzt das Feld bewusst; `connect-llm` fragt danach und nennt
+    sinnvolle Werte.
     """
 
     provider: Literal["none", "anthropic", "openai_compatible"] = "none"
     model: str = ""
     api_key: SecretStr | None = None
     base_url: str = ""
-    max_tokens: int = Field(default=1024, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1)
     critic: CriticLLMConfig = Field(default_factory=CriticLLMConfig)
 
     @model_validator(mode="after")
@@ -244,8 +251,12 @@ class Config(_Section):
         base_url = self.llm.critic.base_url
         return base_url if base_url is not None else self.llm.base_url
 
-    def critic_max_tokens(self) -> int:
-        """Token-Limit des Kritikers: Override aus `[llm.critic]`, sonst das aus `[llm]`."""
+    def critic_max_tokens(self) -> int | None:
+        """Token-Limit des Kritikers: Override aus `[llm.critic]`, sonst das aus `[llm]`.
+
+        `None` bedeutet: kein Limit (ADR-085). Ein Override kann ein Limit setzen, wo
+        `[llm]` keins hat — nicht umgekehrt.
+        """
         return self.llm.critic.max_tokens or self.llm.max_tokens
 
 

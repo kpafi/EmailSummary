@@ -102,10 +102,10 @@ class FakeProvider:
 
     answer: str = "OK"
     error: Exception | None = None
-    calls: list[tuple[str, str, int]] = field(default_factory=list)
+    calls: list[tuple[str, str, int | None]] = field(default_factory=list)
 
     def complete(
-        self, system: str, user: str, *, max_tokens: int, temperature: float | None = None
+        self, system: str, user: str, *, max_tokens: int | None, temperature: float | None = None
     ) -> str:
         if self.error is not None:
             raise self.error
@@ -286,8 +286,9 @@ def test_connect_llm_interaktiv_mit_testaufruf(config_path: Path) -> None:
     hooks = Hooks(build_provider=lambda **kwargs: provider)
     code, out, _err = run(
         ["connect-llm", "--config", str(config_path)],
-        # 6 = Anthropic in der Auswahlliste (providers.LLM_PRESETS)
-        stdin="6\nclaude-modell\nschluessel\n",
+        # 6 = Anthropic in der Auswahlliste (providers.LLM_PRESETS); die leere fünfte
+        # Antwort = kein Antwortbudget (ADR-085)
+        stdin="6\nclaude-modell\nschluessel\n\n",
         hooks=hooks,
     )
     assert code == EXIT_OK
@@ -620,7 +621,7 @@ def test_connect_llm_testaufruf_wiederholt_ratenlimits_nicht(config_path: Path) 
 
     run(
         ["connect-llm", "--config", str(config_path)],
-        stdin="6\nclaude-modell\nschluessel\n",
+        stdin="6\nclaude-modell\nschluessel\n\n",
         hooks=Hooks(build_provider=fake_build),
     )
     assert gesehen["max_attempts"] == 1
@@ -1062,3 +1063,98 @@ def test_hc4_eigener_api_key_wird_im_anbietertext_maskiert(
     assert key not in err
     assert key[:12] not in err
     assert "***" in err
+
+
+# --- connect-llm: Antwortbudget (ADR-085) ------------------------------------------------
+
+
+def _llm_section(config_path: Path) -> dict[str, Any]:
+    return dict(read(config_path)["llm"])
+
+
+def test_adr085_leere_antwort_setzt_kein_limit(config_path: Path) -> None:
+    """Frage 5: leer = kein Limit — das Feld steht danach nicht in der Datei."""
+    hooks = Hooks(build_provider=lambda **kwargs: FakeProvider())
+    code, out, _err = run(
+        ["connect-llm", "--config", str(config_path)],
+        stdin="6\nclaude-modell\nschluessel\n\n",
+        hooks=hooks,
+    )
+    assert code == EXIT_OK
+    assert "Response token limit (max_tokens)" in out  # die Empfehlung steht vor der Frage
+    assert "Response token limit per call (empty = no limit)" in out
+    assert "max_tokens" not in _llm_section(config_path)
+
+
+def test_adr085_zahl_wird_als_limit_gespeichert(config_path: Path) -> None:
+    hooks = Hooks(build_provider=lambda **kwargs: FakeProvider())
+    code, _out, _err = run(
+        ["connect-llm", "--config", str(config_path)],
+        stdin="6\nclaude-modell\nschluessel\n4096\n",
+        hooks=hooks,
+    )
+    assert code == EXIT_OK
+    assert _llm_section(config_path)["max_tokens"] == 4096
+
+
+def test_adr085_none_entfernt_ein_bestehendes_limit(config_path: Path) -> None:
+    """Ein früher gesetztes Limit wird mit `none` wieder gelöst; der Default zeigt es an."""
+    with_limit = CONFIG_TEMPLATE.replace(
+        'provider = "anthropic"', 'provider = "anthropic"\nmax_tokens = 1024'
+    )
+    config_path.write_text(with_limit, encoding="utf-8")
+    hooks = Hooks(build_provider=lambda **kwargs: FakeProvider())
+    code, out, _err = run(
+        ["connect-llm", "--config", str(config_path)],
+        stdin="6\nclaude-modell\nschluessel\nnone\n",
+        hooks=hooks,
+    )
+    assert code == EXIT_OK
+    assert "(empty = no limit) [1024]" in out
+    assert "max_tokens" not in _llm_section(config_path)
+
+
+def test_adr085_ungueltige_eingabe_wird_neu_gefragt(config_path: Path) -> None:
+    hooks = Hooks(build_provider=lambda **kwargs: FakeProvider())
+    code, _out, err = run(
+        ["connect-llm", "--config", str(config_path)],
+        stdin="6\nclaude-modell\nschluessel\nviel\n-5\n2048\n",
+        hooks=hooks,
+    )
+    assert code == EXIT_OK
+    assert err.count("whole number of at least 1") == 2
+    assert _llm_section(config_path)["max_tokens"] == 2048
+
+
+def test_adr085_option_max_tokens_nicht_interaktiv(config_path: Path) -> None:
+    hooks = Hooks(build_provider=lambda **kwargs: FakeProvider())
+    args = ["connect-llm", "--config", str(config_path), "--non-interactive",
+            "--provider", "openai_compatible", "--model", "m", "--no-test"]
+    assert run([*args, "--max-tokens", "2048"], hooks=hooks)[0] == EXIT_OK
+    assert _llm_section(config_path)["max_tokens"] == 2048
+    # Ohne die Option bleibt der Dateiwert — wie bei jeder anderen Frage.
+    assert run(args, hooks=hooks)[0] == EXIT_OK
+    assert _llm_section(config_path)["max_tokens"] == 2048
+    # 0 = kein Limit: das Feld verschwindet.
+    assert run([*args, "--max-tokens", "0"], hooks=hooks)[0] == EXIT_OK
+    assert "max_tokens" not in _llm_section(config_path)
+
+
+def test_adr085_max_tokens_bereichsfehler_ist_bedienfehler(config_path: Path) -> None:
+    """ADR-069: die Bereichsprüfung sitzt im Parser — Exit-Code 2, nichts gespeichert."""
+    for bad in ("-1", "viele"):
+        code, _out, err = run(
+            ["connect-llm", "--config", str(config_path), "--non-interactive",
+             "--provider", "openai_compatible", "--model", "m", "--no-test",
+             "--max-tokens", bad],
+        )
+        assert code == EXIT_USAGE
+        assert "--max-tokens" in err
+    assert "model" not in _llm_section(config_path)
+
+
+def test_adr085_frage_entfaellt_ohne_modell(config_path: Path) -> None:
+    """Bei `provider = none` gibt es weder Testaufruf noch Antwortbudget-Frage."""
+    code, out, _err = run(["connect-llm", "--config", str(config_path)], stdin="1\n")
+    assert code == EXIT_OK
+    assert "Response token limit" not in out

@@ -90,7 +90,7 @@ class LLMProvider(Protocol):
         system: str,
         user: str,
         *,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float | None = None,
     ) -> str:
         """Erzeugt eine Textantwort.
@@ -100,7 +100,9 @@ class LLMProvider(Protocol):
                 Custom-Instructions, I8). Nie Mail-Inhalt.
             user: Nutzer-Anteil, enthält den delimitierten, als untrusted markierten
                 Datenblock (I8).
-            max_tokens: Obergrenze der Antwortlänge (aus der Config, `[llm] max_tokens`).
+            max_tokens: Obergrenze der Antwortlänge (`[llm] max_tokens`). `None` = kein
+                Limit (ADR-085): das Feld wird nicht gesendet, es gilt die Obergrenze des
+                Anbieters; der Anthropic-Provider setzt stattdessen seine Pflicht-Obergrenze.
             temperature: Sampling-Temperatur. `None` (Default) bedeutet: Feld wird nicht
                 gesendet, der Provider-Default gilt. Das ist bewusst so, weil aktuelle
                 Modelle das Feld ablehnen können (siehe ADR zu WP4).

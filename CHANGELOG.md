@@ -196,6 +196,12 @@ docs/TESTRUNDE-2.md):
   Teil-Limit des Messengers (ADR-062/ADR-040, Nachträge).
 - Neue Logereignisse: `mail_id_collision`, `outbox_clock_skew_corrected`, `low_digest_failed`,
   `command_ignored_once`, `command_handling_failed` (docs/BETRIEB.md §5).
+- **Antwortbudget ab Werk unbegrenzt** (ADR-085): `[llm] max_tokens` hat keinen Default
+  mehr; fehlt das Feld, gilt die Obergrenze des Modells. Grund: Reasoning-Modelle ziehen
+  ihre Denk-Tokens vom Budget ab — mit dem alten Default 1024 endete bei einem echten
+  Postfach fast jede Mail als Fail-closed-Notiz. `connect-llm` fragt jetzt als fünfte
+  Frage nach einem Limit und zeigt vorher Empfehlungen; neue Option `--max-tokens`
+  (`0` = kein Limit). Wer ein Limit will, setzt es bewusst.
 
 ### Bekannte Grenzen
 - Die Aussage „keine Antworten aus dem Messenger heraus" aus 0.1.0 gilt eingeschränkt

@@ -463,6 +463,11 @@ _PLACEHOLDERS: dict[str, tuple[tuple[str, str], ...]] = {
     "llm": (
         ("model", '"..."   # required unless provider = "none"; no default on purpose'),
         ("api_key", f'"..."   # or environment variable {ENV_LLM_API_KEY}'),
+        (
+            "max_tokens",
+            "4096   # absent = no limit (the model's own maximum, ADR-085); "
+            "connect-llm explains what is sensible",
+        ),
     ),
     # Der Kritiker erbt alles von `[llm]`; die Datei zeigt trotzdem den vollständigen
     # Feldsatz aus SPEC-CLI.md §5, damit ein Override nicht nachgeschlagen werden muss.
@@ -470,7 +475,7 @@ _PLACEHOLDERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("provider", '"openai_compatible"   # empty/absent = inherits from [llm]'),
         ("model", '"..."   # empty/absent = inherits from [llm]'),
         ("base_url", '"http://localhost:11434/v1"   # empty/absent = inherits from [llm]'),
-        ("max_tokens", "1024   # empty/absent = inherits from [llm]"),
+        ("max_tokens", "4096   # empty/absent = inherits from [llm]"),
     ),
     "messenger.telegram": (
         ("token", f'"..."   # or environment variable {ENV_TELEGRAM_TOKEN}'),
@@ -766,7 +771,7 @@ def cmd_init(ctx: Context) -> int:
             "poll_interval_seconds": 120,
             "move_processed_to": "",
         },
-        "llm": {"provider": "none", "model": "", "base_url": "", "max_tokens": 1024, "critic": {}},
+        "llm": {"provider": "none", "model": "", "base_url": "", "critic": {}},
         "summarizer": {"instructions": instructions},
         "links": {"footnote": False},
         "messenger": {
@@ -1178,6 +1183,8 @@ def cmd_connect_llm(ctx: Context) -> int:
             llm["api_key"] = entered
         api_key = entered or str(llm.get("api_key", ""))
 
+    _choose_token_limit(ctx, llm)
+
     probe = dict(llm)
     if api_key:
         probe["api_key"] = api_key
@@ -1191,6 +1198,51 @@ def cmd_connect_llm(ctx: Context) -> int:
     config_file.save()
     console.out(f"Saved to {config_file.path} (file mode 0600).")
     return EXIT_OK
+
+
+#: Eingaben, die bei Frage 5 „kein Limit" bedeuten (neben der leeren Eingabe).
+_NO_LIMIT_WORDS = frozenset({"0", "none", "no", "unlimited", "-"})
+
+
+def _choose_token_limit(ctx: Context, llm: dict[str, Any]) -> None:
+    """Frage 5 von `connect-llm`: Antwortbudget je Aufruf — ab Werk keins (ADR-085).
+
+    Nicht-interaktiv entscheidet `--max-tokens` (`0` = kein Limit); ohne die Option bleibt
+    der Dateiwert, wie bei jeder anderen Frage. Interaktiv steht vor der Frage die
+    Empfehlung aus der Anbieter-Wissensbasis, damit die Entscheidung informiert fällt.
+    """
+    console, args = ctx.console, ctx.args
+    if args.max_tokens is not None:
+        _apply_token_limit(llm, args.max_tokens or None)
+        return
+    if not console.interactive:
+        return
+    current = llm.get("max_tokens")
+    default = str(current) if isinstance(current, int) and current > 0 else ""
+    console.out("")
+    console.out(providers.LLM_TOKEN_LIMIT_GUIDE)
+    console.out("")
+    for _attempt in range(3):
+        raw = console.ask(
+            "Response token limit per call (empty = no limit)", default=default,
+            flag="--max-tokens",
+        ).strip().lower()
+        if not raw or raw in _NO_LIMIT_WORDS:
+            _apply_token_limit(llm, None)
+            return
+        if raw.isdigit() and int(raw) >= 1:
+            _apply_token_limit(llm, int(raw))
+            return
+        console.err("Please enter a whole number of at least 1, or leave it empty for no limit.")
+    raise CliError("Too many invalid entries — aborted.", EXIT_USAGE)
+
+
+def _apply_token_limit(llm: dict[str, Any], limit: int | None) -> None:
+    """Schreibt das Limit in die Sektion; `None` entfernt den Schlüssel (= kein Limit)."""
+    if limit is None:
+        llm.pop("max_tokens", None)
+    else:
+        llm["max_tokens"] = limit
 
 
 def _known_secrets(section: LlmConfig) -> list[str]:
@@ -1823,6 +1875,28 @@ _PORT_MIN = 1
 _PORT_MAX = 65535
 
 
+def _token_limit_value(raw: str) -> int:
+    """Wert von `--max-tokens`: ganze Zahl ≥ 0; `0` bedeutet „kein Limit" (ADR-085).
+
+    Die Bereichsprüfung gehört in den Parser (ADR-069): ein falscher Wert ist ein
+    Bedienfehler mit Exit-Code 2, kein Konfigurationsfehler.
+
+    Raises:
+        argparse.ArgumentTypeError: Keine Zahl oder negativ.
+    """
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid --max-tokens value {raw!r}: expected a whole number (0 = no limit)"
+        ) from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError(
+            f"invalid --max-tokens value {raw!r}: must be 0 (no limit) or a positive number"
+        )
+    return value
+
+
 def _port_value(raw: str) -> int:
     """Prüft `--port` schon im Parser, damit ein Bereichsfehler Exit-Code 2 ergibt.
 
@@ -1915,6 +1989,12 @@ def build_parser() -> argparse.ArgumentParser:
     llm.add_argument("--provider", choices=list(_PROVIDERS), help="provider")
     llm.add_argument("--model", metavar="ID", help="model ID of the provider")
     llm.add_argument("--base-url", metavar="URL", help="endpoint for openai_compatible")
+    llm.add_argument(
+        "--max-tokens",
+        type=_token_limit_value,
+        metavar="N",
+        help="response token limit per call; 0 = no limit (the default after init)",
+    )
     llm.add_argument("--no-test", action="store_true", help="save without a test call")
     llm.set_defaults(func=cmd_connect_llm)
 

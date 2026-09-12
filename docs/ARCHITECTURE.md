@@ -187,7 +187,9 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
 **Stand WP4 (ADR-021 bis ADR-025):**
 
 - `base.py`: Protokoll
-  `LLMProvider.complete(system, user, *, max_tokens: int, temperature: float | None = None) -> str`.
+  `LLMProvider.complete(system, user, *, max_tokens: int | None, temperature: float | None = None) -> str`.
+  `max_tokens=None` = kein Limit (ADR-085): `openai.py` sendet das Feld dann nicht,
+  `anthropic.py` setzt die Pflicht-Obergrenze `ANTHROPIC_MAX_TOKENS_CEILING` (32 000).
   Kein Tool-Use im Interface (I2). `temperature=None` (Default) bedeutet: Feld wird nicht
   gesendet — aktuelle Modelle lehnen es mit HTTP 400 ab (ADR-022). Fehlerklassen: `LLMError`
   (Basis), `LLMTimeout`, `LLMRateLimited`, `LLMInvalidResponse`, `LLMTransportError`
@@ -210,7 +212,8 @@ Fehler in Stufe 2–5 ⇒ `FailureNotice` (Metadaten-Notiz) statt Zusammenfassun
   `LLMInvalidResponse` (I6). Der Reparaturhinweis steht im System-Prompt und enthält
   Feldpfade, Fehlertypen und das JSON-Schema — nie die verworfene Modellantwort (ADR-024).
 - `factory.py`: `build_provider(config, role)` mit `role = "summarizer" | "critic"`
-  (Override-Vererbung aus `[llm.critic]`), dazu `max_tokens_for(config, role)`. Fehlender
+  (Override-Vererbung aus `[llm.critic]`), dazu `max_tokens_for(config, role)` (`None` =
+  kein Limit, der Werkszustand seit ADR-085). Fehlender
   API-Key bei Provider `anthropic` ⇒ `ConfigError` mit Hinweis auf `MAILDIGEST_LLM_API_KEY`.
 - `prompts.py`: alle Prompt-Texte zentral, versioniert über `PROMPT_VERSION` (Schema
   `wp<NR>/<YYYY-MM-DD>[.n]`; jede inhaltliche Änderung erhöht sie). Stand WP5: die
@@ -692,7 +695,7 @@ provider = "anthropic"       # anthropic | openai_compatible
 model = "…"                  # Pflichtfeld, kein hartkodierter Default im Code
 # api_key via MAILDIGEST_LLM_API_KEY
 base_url = ""                # für openai_compatible / lokale Server
-max_tokens = 1024
+# max_tokens = 4096          # fehlt = kein Limit (ADR-085); nur zum Deckeln der Kosten je Aufruf
 
 [llm.critic]                 # optionaler Override, sonst wie [llm]
 # model = "…"

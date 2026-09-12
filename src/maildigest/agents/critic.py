@@ -397,14 +397,14 @@ class CriticAgent:
         provider: LLMProvider,
         *,
         language: str = "de",
-        max_tokens: int = 1024,
+        max_tokens: int | None = None,
         token_source: prompts.TokenSource = prompts.default_token_source,
     ) -> None:
         """
         Args:
             provider: Text-in/Text-out-Provider (WP4).
             language: `[general] language` — Sprache der Verdict-Textfelder.
-            max_tokens: Antwort-Budget des Providers.
+            max_tokens: Antwort-Budget des Providers; `None` = kein Limit (ADR-085).
             token_source: Zufallsquelle der Datenblock-Kennung. Default ist ein CSPRNG;
                 Tests injizieren eine deterministische Quelle.
         """

@@ -275,6 +275,14 @@ Abfragen in dieser Reihenfolge:
    — ohne Bildschirmecho. Ist `MAILDIGEST_LLM_API_KEY` gesetzt, entfällt die Frage, es
    erscheint `API key: from MAILDIGEST_LLM_API_KEY (not written to the file)` und es wird
    kein Key in die Datei geschrieben.
+5. `Response token limit per call (empty = no limit) [<bisheriger Wert>]: ` — davor steht
+   die Empfehlung aus der Anbieter-Wissensbasis (Block mit der Überschrift
+   `Response token limit (max_tokens) — optional`). Leere Eingabe, `0`, `none`, `no`,
+   `unlimited` oder `-` bedeuten **kein Limit**: das Feld `[llm] max_tokens` wird aus der
+   Datei entfernt. Eine ganze Zahl ≥ 1 wird als Limit gespeichert. Ab Werk gilt kein Limit
+   (ADR-085); Reasoning-Modelle ziehen ihre Denk-Tokens vom Budget ab, ein kleines Limit
+   schneidet dort die Antwort ab. Bei einer anderen Eingabe wird bis zu dreimal neu
+   gefragt, danach Exit-Code 2.
 
 Ist die Basis-URL weder `https://` noch `http://localhost`/`http://127.`, erscheint eine
 Warnung auf stderr; das Kommando läuft weiter.
@@ -297,6 +305,7 @@ this command again at any time to connect one.`
 | `--provider` | `none` \| `anthropic` \| `openai_compatible` | Setzt `[llm] provider`; überspringt die Auswahlliste. Belegt **keine** anbieterspezifische `base_url` vor — dafür ist `--base-url` da |
 | `--model` | ID | Antwort auf Frage 2 |
 | `--base-url` | URL | Antwort auf Frage 3 |
+| `--max-tokens` | N | Antwort auf Frage 5: ganze Zahl ≥ 1 als Limit, `0` = kein Limit. Ohne die Option bleibt nicht-interaktiv der Dateiwert. Negativ oder keine Zahl: Exit-Code 2 |
 | `--no-test` | – | Ohne Testaufruf speichern |
 
 Für den API-Key gibt es keine Option; er kommt aus der Abfrage oder aus
@@ -542,11 +551,11 @@ Alle Felder mit ihren Defaults:
 | `[llm] model` | Text | `""` | **Pflicht, sobald `provider` nicht `none` ist.** Exakte Modell-ID; bewusst kein Default |
 | `[llm] api_key` | Text | — | Alternativ `MAILDIGEST_LLM_API_KEY`. Für `anthropic` erforderlich, für lokale Server meist nicht |
 | `[llm] base_url` | URL | `""` | Endpunkt für `openai_compatible` |
-| `[llm] max_tokens` | ≥ 1 | `1024` | Obergrenze je Antwort |
+| `[llm] max_tokens` | ≥ 1 | — | Obergrenze je Antwort und Aufruf. **Fehlt das Feld, gilt kein Limit** — die Obergrenze des Anbieters bzw. Modells (ADR-085; bei `anthropic` die Pflicht-Obergrenze der API, 32 000). `connect-llm` fragt danach und nennt sinnvolle Werte |
 | `[llm.critic] provider` | wie `[llm]` | erbt | Override für den Kritiker |
 | `[llm.critic] model` | Text | erbt | Override |
 | `[llm.critic] base_url` | URL | erbt | Override |
-| `[llm.critic] max_tokens` | ≥ 1 | erbt | Override |
+| `[llm.critic] max_tokens` | ≥ 1 | erbt | Override; kann ein Limit setzen, wo `[llm]` keins hat |
 | `[summarizer] instructions` | Text | `""` | Custom-Instructions: was ist wichtig, worauf achten. Steuert Stil und Wichtigkeit, kann die Sicherheitsregeln nicht abschalten |
 | `[links] footnote` | `true`/`false` | `false` | Defangte Link-Liste als Fußnote an die Nachricht hängen |
 | `[messenger] active` | `telegram`/`discord`/`signal` | `"telegram"` | Aktiver Zustellweg |

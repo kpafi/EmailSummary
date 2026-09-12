@@ -30,6 +30,7 @@ __all__ = [
     "LLM_ANTHROPIC_GUIDE",
     "LLM_LOCAL_GUIDE",
     "LLM_PRESETS",
+    "LLM_TOKEN_LIMIT_GUIDE",
     "MIRROR_RECOMMENDATION",
     "PROVIDERS",
     "SIGNAL_GUIDE",
@@ -447,6 +448,28 @@ plain HTTP on a network, it would travel in the clear.
 """.strip()
 
 # --- Messenger -------------------------------------------------------------------------------
+
+#: Frage 5 von `connect-llm` (ADR-085): Antwortbudget je Aufruf. Ab Werk keins — die
+#: Empfehlungen stehen hier, damit der Nutzer die Entscheidung mit Wissen trifft.
+LLM_TOKEN_LIMIT_GUIDE = """
+Response token limit (max_tokens) — optional
+--------------------------------------------
+MailDigest makes two model calls per mail (summary + critic); the limit applies to
+each call. Leave it empty unless you have a reason to cap it:
+
+  * no limit (default)  The model's own maximum applies. Recommended for "reasoning"
+                        models (DeepSeek, Qwen "thinking", OpenAI o-series, Gemini
+                        "thinking", Claude with extended thinking): they spend tokens
+                        on thinking BEFORE answering, and a small limit cuts the
+                        answer off — the mail is then delivered as a fail-closed
+                        notice instead of a summary.
+  * 4096                A safe cap for classic chat models if you want to bound the
+                        cost per mail. Still too small for some reasoning models.
+  * 1024                Only for classic (non-reasoning) models with short summaries.
+
+A summary itself needs roughly 300-800 tokens; anything above that is headroom for
+thinking. You can change the value later under [llm] max_tokens in the configuration.
+""".strip()
 
 TELEGRAM_GUIDE = """
 Setting up a Telegram bot

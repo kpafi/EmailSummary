@@ -99,7 +99,7 @@ def test_minimal_config_uses_documented_defaults(tmp_path: Path) -> None:
     assert config.imap.poll_interval_seconds == 120
     assert config.imap.password is None
     assert config.llm.provider == "none"  # Standard: läuft ohne Modell (ADR-076)
-    assert config.llm.max_tokens == 1024
+    assert config.llm.max_tokens is None  # ab Werk kein Limit (ADR-085)
     assert config.links.footnote is False
     assert config.messenger.active == "telegram"
 
@@ -148,7 +148,7 @@ def test_critic_without_override_inherits_everything(tmp_path: Path) -> None:
 
     assert config.critic_model() == "test-model-1"
     assert config.critic_provider() == "none"
-    assert config.critic_max_tokens() == 1024
+    assert config.critic_max_tokens() is None
     assert config.critic_base_url() == ""
 
 

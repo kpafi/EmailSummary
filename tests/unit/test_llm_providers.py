@@ -14,7 +14,11 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from maildigest.llm.anthropic import ANTHROPIC_API_VERSION, AnthropicProvider
+from maildigest.llm.anthropic import (
+    ANTHROPIC_API_VERSION,
+    ANTHROPIC_MAX_TOKENS_CEILING,
+    AnthropicProvider,
+)
 from maildigest.llm.base import (
     LLMInvalidResponse,
     LLMProvider,
@@ -682,3 +686,31 @@ def test_hc4_auch_metadata_und_koerperfehler_sind_gefiltert() -> None:
     message = str(excinfo.value)
     assert "\x1b" not in message and "\x07" not in message
     assert "upstream provider: X" in message
+
+
+# --- ADR-085: kein Limit -----------------------------------------------------------
+
+
+def test_adr085_openai_sendet_ohne_limit_kein_max_tokens() -> None:
+    """`max_tokens=None` = kein Limit: das Feld fehlt im Request, der Anbieter entscheidet."""
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, json=openai_body("ok"))
+
+    assert make_openai(handler).complete("s", "u", max_tokens=None) == "ok"
+    assert "max_tokens" not in seen["payload"]
+    assert set(seen["payload"]) == {"model", "messages"}
+
+
+def test_adr085_anthropic_setzt_ohne_limit_die_pflicht_obergrenze() -> None:
+    """Die Messages-API verlangt `max_tokens`; „kein Limit" ist dort der größte sichere Wert."""
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, json=anthropic_body("ok"))
+
+    assert make_anthropic(handler).complete("s", "u", max_tokens=None) == "ok"
+    assert seen["payload"]["max_tokens"] == ANTHROPIC_MAX_TOKENS_CEILING == 32_000

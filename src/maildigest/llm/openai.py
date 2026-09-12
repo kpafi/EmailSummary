@@ -101,18 +101,22 @@ class OpenAICompatibleProvider:
         system: str,
         user: str,
         *,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float | None = None,
     ) -> str:
         """Siehe :meth:`maildigest.llm.base.LLMProvider.complete`."""
         payload: dict[str, Any] = {
             "model": self._model,
-            "max_tokens": max_tokens,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
+        # `max_tokens` nur senden, wenn ein Limit gesetzt ist (ADR-085): ohne das Feld
+        # gilt die Obergrenze des Anbieters bzw. Modells — für Reasoning-Modelle, die ihre
+        # Denk-Tokens vom Budget abziehen, ist das der einzige Wert, der nie abschneidet.
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if temperature is not None:
             payload["temperature"] = temperature
 

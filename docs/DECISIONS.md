@@ -2810,3 +2810,40 @@ ihre *Erkennung* zu eng.
   3-s-Marke des Auftrags gilt weiterhin für die eigenen Pässe des Sanitizers (1,7 bis
   2,2 s), nicht für die Bibliothek. Die Zahl in SPEC-CLI §5, SECURITY §4 und TESTING §7
   ist entsprechend korrigiert.
+
+## ADR-085: Antwortbudget ab Werk unbegrenzt — der Nutzer setzt ein Limit bewusst
+- Status: accepted
+- WP / Datum: Betrieb nach der Fixrunde, 2026-09-12
+- Kontext: Der erste Lauf gegen ein echtes Postfach (web.de, `deepseek/deepseek-v4-flash`
+  über OpenRouter) endete mit 18 von 21 Mails als Fail-closed-Notiz
+  (`llm_invalid_response`). Ursache war nicht das Modell, sondern der Default
+  `[llm] max_tokens = 1024`: Reasoning-Modelle ziehen ihre Denk-Tokens vom Antwortbudget
+  ab (gemessen 694–743 Reasoning-Tokens des Kritikers bei einer 476-Zeichen-Mail, 926 von
+  1024 verbraucht), bei längeren Mails wird das JSON abgeschnitten und fällt durch die
+  Schema-Prüfung. Ein fester kleiner Default ist damit für eine wachsende Modellklasse
+  eine Falle, die sich als „das Programm funktioniert nicht" zeigt.
+- Entscheidung: `[llm] max_tokens` hat **keinen Default** mehr (`int | None`, ab Werk
+  `None`). `None` heißt: `openai.py` sendet das Feld nicht, es gilt die Obergrenze des
+  Anbieters bzw. Modells; `anthropic.py` setzt die Pflicht-Obergrenze der Messages-API
+  auf `ANTHROPIC_MAX_TOKENS_CEILING = 32_000` (größter Wert, den alle aktuellen
+  Claude-Modelle annehmen — das Feld ist ein Deckel, kein Ziel). `connect-llm` stellt als
+  fünfte Frage, ob ein Limit gewünscht ist, und zeigt vorher die Empfehlung
+  `LLM_TOKEN_LIMIT_GUIDE` (kein Limit für Reasoning-Modelle; 4096 als sicherer Deckel für
+  klassische Modelle; 1024 nur für klassische Modelle mit kurzen Zusammenfassungen).
+  Nicht-interaktiv entscheidet `--max-tokens N` (`0` = kein Limit), ohne Option bleibt der
+  Dateiwert. `init` schreibt das Feld als Kommentarzeile. `[llm.critic] max_tokens` bleibt
+  ein Override (`None` = erbt); ein Override kann ein Limit setzen, wo `[llm]` keins hat.
+- Alternativen: Default auf 4096 anheben — verschiebt die Falle nur (Kritiker-Reasoning
+  überschreitet auch das bei langen Mails); Reasoning-Modelle am Namen erkennen und
+  automatisch das Limit lösen — Namensraten, veraltet schnell; `reasoning`-Parameter des
+  Anbieters senden — würde den geschlossenen Feldsatz des Request-Körpers (I2, SECURITY
+  §7.1) erweitern und ist anbieterspezifisch; `finish_reason = "length"` als eigenen
+  Fehler melden — sinnvoll, aber eine Diagnosehilfe, kein Ersatz für einen tragfähigen
+  Default (offen, siehe TESTING §7).
+- Konsequenzen: Die Kosten je Aufruf sind ohne Limit nur durch die Obergrenze des Modells
+  gedeckelt; für den Nutzer, der sie begrenzen will, ist das eine bewusste Entscheidung im
+  Setup statt einer stillen Vorgabe. T10 bleibt gewahrt: die Länge der Modellausgabe ist
+  nachgelagert durch `enforce_output_policy` (Feldkappung) begrenzt, und `_redact_tokens`
+  ist seit HC-29 linear. Der Testaufruf von `connect-llm` behält sein festes Limit von 16
+  Tokens. SPEC-CLI §4 (Frage 5, `--max-tokens`) und §5, ARCHITECTURE §2/§5, README und
+  CHANGELOG nachgezogen.

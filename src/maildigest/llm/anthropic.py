@@ -28,13 +28,24 @@ from maildigest.llm.base import (
     LLMInvalidResponse,
 )
 
-__all__ = ["ANTHROPIC_API_VERSION", "ANTHROPIC_DEFAULT_BASE_URL", "AnthropicProvider"]
+__all__ = [
+    "ANTHROPIC_API_VERSION",
+    "ANTHROPIC_DEFAULT_BASE_URL",
+    "ANTHROPIC_MAX_TOKENS_CEILING",
+    "AnthropicProvider",
+]
 
 #: Default-Endpunkt der Anthropic-API (per Config überschreibbar, z. B. für Proxys).
 ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
 
 #: Pflicht-Header `anthropic-version` der Messages-API.
 ANTHROPIC_API_VERSION = "2023-06-01"
+
+#: `max_tokens` ist in der Messages-API ein Pflichtfeld. „Kein Limit" (`[llm] max_tokens`
+#: nicht gesetzt, ADR-085) heißt hier deshalb: die größte Obergrenze, die alle aktuellen
+#: Claude-Modelle annehmen (Opus 4/4.1: 32 000, neuere Modelle mehr). Das Feld ist ein
+#: Deckel, kein Ziel — eine kurze JSON-Antwort wird dadurch weder länger noch teurer.
+ANTHROPIC_MAX_TOKENS_CEILING = 32_000
 
 
 class AnthropicProvider:
@@ -105,13 +116,13 @@ class AnthropicProvider:
         system: str,
         user: str,
         *,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float | None = None,
     ) -> str:
         """Siehe :meth:`maildigest.llm.base.LLMProvider.complete`."""
         payload: dict[str, Any] = {
             "model": self._model,
-            "max_tokens": max_tokens,
+            "max_tokens": ANTHROPIC_MAX_TOKENS_CEILING if max_tokens is None else max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user}],
         }

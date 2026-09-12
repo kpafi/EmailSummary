@@ -30,8 +30,12 @@ __all__ = ["LLMRole", "build_provider", "build_provider_from_settings", "max_tok
 LLMRole = Literal["summarizer", "critic"]
 
 
-def max_tokens_for(config: Config, role: LLMRole = "summarizer") -> int:
-    """Liefert das Token-Limit der Rolle (Override aus `[llm.critic]`, sonst `[llm]`)."""
+def max_tokens_for(config: Config, role: LLMRole = "summarizer") -> int | None:
+    """Liefert das Token-Limit der Rolle (Override aus `[llm.critic]`, sonst `[llm]`).
+
+    `None` = kein Limit (ADR-085): das Feld wird nicht gesendet bzw. beim Anthropic-Provider
+    auf dessen Pflicht-Obergrenze gesetzt.
+    """
     return config.critic_max_tokens() if role == "critic" else config.llm.max_tokens
 
 
