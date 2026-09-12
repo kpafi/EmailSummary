@@ -720,3 +720,27 @@ höchstens **einen** Zyklus. Belegt durch
 1627 nach der dritten, 1644 nach der vierten Iteration), Laufzeit rund 145 bis 180 s je
 nach Maschinenlast — der Zuwachs kommt aus den Zeitmessungen der zweiten bis fünften
 Iteration.
+
+### Offen nach Ende der Nachfixrunde (Skeptiker der fünften Iteration, Fable 5.1, 2026-09-12)
+
+Die Nachfixrunde wurde nach fünf Iterationen auf Nutzerentscheid beendet. Die beiden
+Release-Blocker HC2-1 und HC2-2 sind in ihrer gemeldeten Form seit der ersten Iteration
+behoben und über alle fünf Skeptiker-Läufe stabil geblieben (alle Repro-Skripte der
+Iterationen 1–5 laufen auf `a2feda2` ohne Rückfall in die gefährliche Richtung). Der letzte
+Skeptiker hat fünf Punkte belegt, die **nicht** bearbeitet wurden; sie stehen hier, damit
+sie nicht nur im Workflow-Journal liegen. Die Repro-Skripte (`sk5_*.py`) liegen im
+Scratchpad der Sitzung, nicht im Repo.
+
+| Nr. | Severity | Befund | Herkunft | Fix-Richtung |
+|-----|----------|--------|----------|--------------|
+| O-1 | hoch | Gift-Mail mit ≥ 250 verschachtelten multipart-Ebenen (16 KB): `as_bytes()` scheitert mit `RecursionError`, der Rückfall `str(msg.obj)` in `_raw_bytes` rekursiert erneut und wird nicht gefangen; `build_raw_mail` wirft entgegen ADR-020 (e), `poll_once` hat kein try darum — der Dauerbetrieb stirbt, `run --once` scheitert bei jedem Lauf, spätere Mails bleiben liegen, bis die Mail aus dem Spiegelpostfach entfernt ist | vorbestehend (auch auf `649a9b8`) | Verschachtelungstiefe vor der Serialisierung iterativ deckeln (wie `_cap_message_headers`), `RecursionError` im Rückfall fangen, `build_raw_mail` in `poll_once` fail-closed absichern (Metadaten-Notiz statt Abbruch) |
+| O-2 | hoch | Teile-Flut ohne Kopfzeilen: 2 Mio. leere MIME-Teile in 20 MB kosten 34 s CPU (Parser 12,6 s vor jedem Budget, `build_raw_mail` 8,4 s, Sanitizer-Parse 13,2 s), linear und ungedeckelt — der Kopfzeilen-Deckel greift nicht, weil Teile ohne Kopfzeile kein Budget verbrauchen | vorbestehend | Nur vor dem Parsen abwendbar: Boundary-Zählung auf den Rohbytes des Abrufs (Eingriff in den Fetch-Pfad, ADR nötig) oder kleinerer Default für `max_mail_bytes`; bis dahin als Grenze dokumentiert |
+| O-3 | hoch | HC2-2-Rest: ein regelwidrig kodiertes Wort mit `?` oder `(` im encoded-text (`=?utf-8?Q?Support?(?=`) wird maskiert und versteckt so die Klammer vor Kommentar-Scanner und `getaddresses`; das Werkzeug zeigt `bank.example` ohne Warnung, das Orakel `real@evil.example` | seit `b7d093d` | Maske strikt nach RFC 2047 (encoded-text ohne `?` und ohne Leerzeichen, Wort durch Whitespace oder Anfang abgetrennt) — oder den Kommentar-Scanner vor der Maskierung auf dem Rohtext laufen lassen |
+| O-4 | mittel | Gesamt-Worst-Case 3,6–4,1 s CPU im Sanitizer ist dokumentiert, aber die Ende-zu-Ende-Zusage „rund 8 s" (ADR-084, vierter Nachtrag) wird von O-2 um das Siebenfache überschritten | Doku | Nach O-2 neu messen und die Zusage in ADR-084 auf die teuerste zulässige Mail setzen |
+| O-5 | niedrig | Demaskierung: `MDENCWORD1` ersetzt auch den Präfix von `MDENCWORD10…19`; Anzeigenamen mit mehr als zehn kodierten Wörtern werden verstümmelt (kein Sicherheitsbezug, die Adresse steht vorher fest) | seit `649a9b8` | Längste Tokens zuerst ersetzen oder ein Trennzeichen hinter der Nummer |
+
+Bewertung: Mit dem Maßstab der Skeptiker („fixed nur, wenn kein Weg mehr existiert, der
+das Schutzziel verletzt") fand jede Iteration an der neu gezogenen Naht oder in einer bisher
+ungemessenen Klasse ein weiteres Loch. Die Runde wurde deshalb beendet, statt weiter zu
+iterieren. **O-1 sollte vor einem Release behoben werden**; O-2 ist eine Designentscheidung
+am Abruf, O-3 und O-5 sind kleine Korrekturen an der Maske.

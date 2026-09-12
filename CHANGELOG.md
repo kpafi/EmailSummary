@@ -200,6 +200,11 @@ docs/TESTRUNDE-2.md):
 ### Bekannte Grenzen
 - Die Aussage „keine Antworten aus dem Messenger heraus" aus 0.1.0 gilt eingeschränkt
   weiter: kein Dialog, keine Aktionen — außer der festen Befehlsliste oben.
+- Nach der Nachfixrunde offen (docs/TESTING.md §7, O-1 … O-5): Eine Mail mit über 250
+  verschachtelten MIME-Ebenen lässt `build_raw_mail` mit `RecursionError` scheitern und
+  stoppt den Abruf, bis die Mail aus dem Spiegelpostfach entfernt ist (O-1). Eine Mail aus
+  Millionen leerer MIME-Teile kostet bis zu rund 35 s je Zyklus (O-2). Ein regelwidrig
+  kodiertes Wort im Absendernamen kann die angezeigte Absender-Domain noch verfälschen (O-3).
 
 ## [0.1.0] — 2026-09-08
 
