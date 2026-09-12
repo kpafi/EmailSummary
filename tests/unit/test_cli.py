@@ -338,6 +338,7 @@ def test_alle_kommandos_haben_eine_funktion() -> None:
         "connect-messenger",
         "test",
         "run",
+        "instructions",
     }
     for sub in subparsers.choices.values():
         assert sub.get_default("func") is not None

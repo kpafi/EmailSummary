@@ -19,6 +19,10 @@ Alle nennenswerten Änderungen an MailDigest. Format angelehnt an
 - **Anbieter-Wissensbasis** für die Einrichtung (ADR-075): `connect-mail` erklärt den Begriff
   IMAP-Host, übersetzt eine eingetippte Mailadresse in den Host und bricht bei Anbietern ohne
   Passwort-Anmeldung (Outlook.com, Proton) sofort mit Begründung ab.
+- **`maildigest instructions`** (ADR-086): zeigt die Custom-Instructions für den
+  Summarizer oder ändert sie mit `--set`, `--add`, `--edit` (im `$VISUAL`/`$EDITOR`) und
+  `--clear` — ohne die Stelle in der Konfigurationsdatei zu suchen. Mehrzeilig, bis 2000
+  Zeichen; Steuerzeichen werden abgewiesen. Der Kritiker sieht den Text weiterhin nie.
 
 ### Behoben
 

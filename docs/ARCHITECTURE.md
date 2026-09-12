@@ -461,6 +461,7 @@ wieder rein additiv und wird beim Öffnen still vollzogen — neue Tabellen legt
 [SPEC-CLI.md](SPEC-CLI.md) — dieser Abschnitt beschreibt nur den inneren Aufbau.
 
 - Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`,
+  `instructions` (Custom-Instructions anzeigen/ändern, ADR-086),
   `run [--once]`; Exit-Codes 0/1/2. Einstiegspunkte: `[project.scripts] maildigest` und
   `python -m maildigest`.
 - `argparse` mit einem `parents=`-Parser für `--config`/`--non-interactive`, sodass beide

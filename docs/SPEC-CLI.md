@@ -19,7 +19,8 @@ maildigest <KOMMANDO> [OPTIONEN]
 python -m maildigest <KOMMANDO> [OPTIONEN]
 ```
 
-Sechs Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`, `run`.
+Sieben Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`,
+`run`, `instructions`.
 
 Ein Aufruf ohne Kommando gibt die Hilfe auf **stdout** aus und endet mit Exit-Code 2.
 `maildigest --help` und `maildigest <KOMMANDO> --help` geben Hilfe aus und enden mit
@@ -523,6 +524,44 @@ verbunden.
 | Option | Wert | Bedeutung |
 |---|---|---|
 | `--once` | – | Einen Zyklus ausführen und beenden |
+
+### `maildigest instructions`
+
+Zeigt oder ändert die Custom-Instructions (`[summarizer] instructions`, F-SUM-3), ohne dass
+die Datei von Hand gesucht werden muss (ADR-086). Setzt eine vorhandene Konfigurationsdatei
+voraus. Der Text geht als klar gelabelter Block in den System-Prompt des Summarizers (I8);
+der Kritiker sieht ihn nie (ADR-042), und die Sicherheitsregeln lassen sich damit nicht
+abschalten.
+
+Ohne Option wird der aktuelle Text gezeigt: `Custom instructions (<N> characters):`, gefolgt
+vom Text (jede Zeile um zwei Leerzeichen eingerückt), bzw. `Custom instructions: (none)`.
+Danach die beiden Zeilen
+`They reach the summarizer as a labelled block; the critic never sees them.` und
+`Change them with: maildigest instructions --set "..." | --add "..." | --edit | --clear`.
+
+Mit einer Option wird der Text geändert und gespeichert: `Saved to <pfad> (file mode 0600).`,
+danach der neue Text wie oben (ohne die beiden Hinweiszeilen). Ist der Text unverändert,
+lautet die einzige Ausgabe `Custom instructions unchanged.` und nichts wird geschrieben.
+Normalisierung vor dem Speichern: Windows-Zeilenenden werden zu `\n`, Leerzeichen am
+Zeilenende und am Rand entfernt. Mehr als 2000 Zeichen oder Steuerzeichen außer
+Zeilenumbruch und Tab: Exit-Code 2, nichts gespeichert.
+
+`--edit` öffnet den Text im Editor aus `$VISUAL`, sonst `$EDITOR`, sonst `nano` oder `vi`
+aus dem Suchpfad (`Opening <editor> ... (save and close the editor to apply)`). Die
+Bearbeitungsdatei liegt so lange im Verzeichnis der Konfiguration (Rechte 0600) und beginnt
+mit Kommentarzeilen (`#`), die beim Übernehmen verworfen werden. Endet der Editor mit einem
+anderen Status als 0, wird nichts gespeichert (Exit-Code 1). Ohne Terminal
+(`--non-interactive`) oder ohne auffindbaren Editor: Exit-Code 2 mit dem Hinweis auf `--set`
+bzw. `--add`.
+
+**Optionen** (höchstens eine)
+
+| Option | Wert | Bedeutung |
+|---|---|---|
+| `--set` | TEXT | Ersetzt den Text durch TEXT |
+| `--add` | TEXT | Hängt TEXT als neue Zeile an |
+| `--edit` | – | Öffnet den Text im Editor |
+| `--clear` | – | Entfernt den Text |
 
 ## 5. Konfigurationsdatei
 

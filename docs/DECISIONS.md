@@ -2847,3 +2847,28 @@ ihre *Erkennung* zu eng.
   ist seit HC-29 linear. Der Testaufruf von `connect-llm` behält sein festes Limit von 16
   Tokens. SPEC-CLI §4 (Frage 5, `--max-tokens`) und §5, ARCHITECTURE §2/§5, README und
   CHANGELOG nachgezogen.
+
+## ADR-086: Custom-Instructions über ein eigenes Kommando statt per Hand in der Datei
+- Status: accepted
+- WP / Datum: Betrieb nach der Fixrunde, 2026-09-12
+- Kontext: `[summarizer] instructions` ist der einzige Ort, an dem der Nutzer dem Modell
+  sagt, was ihm wichtig ist (F-SUM-3, I8). Bisher fragte nur `init` einmal danach; jede
+  spätere Änderung hieß: Datei öffnen, Sektion suchen, TOML-String korrekt quoten. Beim
+  ersten echten Betrieb war das der Wunsch: eine Stelle, die man ohne Suchen pflegt.
+- Entscheidung: Neues Kommando `maildigest instructions` — ohne Option anzeigen, `--set`
+  ersetzen, `--add` eine Zeile anhängen, `--edit` im Editor des Nutzers (`$VISUAL`,
+  `$EDITOR`, sonst `nano`/`vi`), `--clear` entfernen. Die Bearbeitungsdatei liegt im
+  Verzeichnis der Konfiguration mit Rechten 0600 und trägt `#`-Kommentarzeilen mit der
+  Erklärung, die beim Übernehmen verworfen werden. Der Text wird normalisiert (Zeilenenden,
+  Ränder), auf 2000 Zeichen begrenzt und lehnt Steuerzeichen außer Zeilenumbruch und Tab
+  ab — beides mit Exit-Code 2 und ohne zu speichern. Der Editor-Aufruf läuft über
+  `Hooks.run_editor` (`subprocess.run` im Vordergrund), damit Tests ihn ersetzen.
+- Alternativen: Nur die README verbessern — löst das Suchen nicht; eine eigene
+  Instructions-Datei neben der Konfiguration — zweiter Ort, zweite Rechteverwaltung, und
+  `init` müsste sie anlegen; ein interaktiver Dialog im Kommando statt Optionen — für ein
+  Cron-/SSH-Setup unpraktisch, die Optionen decken Skript und Mensch ab.
+- Konsequenzen: Der Vertrauensrahmen bleibt: Der Text stammt vom Nutzer (SECURITY §1), geht
+  unverändert in den gelabelten Block des Summarizer-Prompts und erreicht den Kritiker nie
+  (ADR-042). `subprocess` in `cli.py` betrifft ausschließlich den Editor des Nutzers; I7
+  (PDF-Kindprozess) ist davon unberührt. SPEC-CLI §1/§4, ARCHITECTURE §2, README und
+  CHANGELOG nachgezogen; `init` fragt weiterhin einmal, der Rest läuft über das Kommando.

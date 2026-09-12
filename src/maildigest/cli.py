@@ -35,6 +35,9 @@ import getpass
 import json
 import os
 import re
+import shlex
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -667,6 +670,16 @@ def _set_or_clear(section: dict[str, Any], key: str, value: str) -> None:
         section.pop(key, None)
 
 
+def _run_editor(command: list[str]) -> int:
+    """Startet den Editor des Nutzers im Vordergrund und liefert seinen Exit-Status.
+
+    Der einzige Aufrufer ist `maildigest instructions --edit` (ADR-086). Der Befehl kommt
+    aus `$VISUAL`/`$EDITOR` des Nutzers — also aus derselben Vertrauenszone wie die
+    Konfiguration selbst; Mail-Inhalt oder Modellantworten erreichen diesen Pfad nie.
+    """
+    return subprocess.run(command, check=False).returncode
+
+
 # --- Injizierbare Bausteine -----------------------------------------------------------------
 
 
@@ -697,6 +710,7 @@ class Hooks:
     discover_chat_ids: Callable[..., list[ChatCandidate]] = discover_chat_ids
     configure_logging: Callable[..., Any] = configure_logging
     sleep: Callable[[float], None] = time.sleep
+    run_editor: Callable[[list[str]], int] = _run_editor
 
 
 @dataclass
@@ -1875,6 +1889,145 @@ _PORT_MIN = 1
 _PORT_MAX = 65535
 
 
+# --- Kommando: instructions --------------------------------------------------------------
+
+#: Vorspann der Bearbeitungsdatei bei `instructions --edit`; `#`-Zeilen werden verworfen.
+_INSTRUCTIONS_EDIT_HEADER = (
+    "# Custom instructions for the summarizer: what matters to you, what to watch for.\n"
+    "# Lines starting with # are ignored. Save and close the editor to apply.\n"
+    "# Example: Invoices and appointments are always important. Newsletters never are.\n"
+)
+
+#: Steuerzeichen, die in den Custom-Instructions erlaubt sind.
+_INSTRUCTIONS_ALLOWED_CONTROL = frozenset({"\n", "\t"})
+
+
+def cmd_instructions(ctx: Context) -> int:
+    """Zeigt oder ändert `[summarizer] instructions` ohne Suche in der Datei (ADR-086).
+
+    Der Text geht als klar gelabelter Block in den System-Prompt des Summarizers (I8); der
+    Kritiker sieht ihn nie (ADR-042), die Sicherheitsregeln kann er nicht abschalten.
+    """
+    console, args = ctx.console, ctx.args
+    config_file = ConfigFile.load(ctx.config_path)
+    section = config_file.section("summarizer")
+    current = str(section.get("instructions", ""))
+
+    if args.set is not None:
+        proposed = args.set
+    elif args.add is not None:
+        proposed = f"{current.rstrip()}\n{args.add}" if current.strip() else args.add
+    elif args.clear:
+        proposed = ""
+    elif args.edit:
+        proposed = _edit_instructions(ctx, current)
+    else:
+        _print_instructions(console, current, show_hint=True)
+        return EXIT_OK
+
+    new = _normalize_instructions(proposed)
+    if new == current:
+        console.out("Custom instructions unchanged.")
+        return EXIT_OK
+    section["instructions"] = new
+    config_file.save()
+    console.out(f"Saved to {config_file.path} (file mode 0600).")
+    _print_instructions(console, new, show_hint=False)
+    return EXIT_OK
+
+
+def _print_instructions(console: Console, text: str, *, show_hint: bool) -> None:
+    """Gibt den Text (eingerückt) oder `(none)` aus; im Anzeigemodus dazu den Änderungsweg."""
+    if text:
+        console.out(f"Custom instructions ({len(text)} characters):")
+        for line in text.split("\n"):
+            console.out(f"  {line}")
+    else:
+        console.out("Custom instructions: (none)")
+    if show_hint:
+        console.out(
+            "They reach the summarizer as a labelled block; the critic never sees them.\n"
+            'Change them with: maildigest instructions --set "..." | --add "..." | --edit | '
+            "--clear"
+        )
+
+
+def _normalize_instructions(text: str) -> str:
+    """Zeilenenden vereinheitlichen, Ränder trimmen, Länge und Steuerzeichen prüfen.
+
+    Raises:
+        CliError: Zu lang oder mit Steuerzeichen außer Zeilenumbruch/Tab (Exit-Code 2).
+    """
+    normalized = "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n"))
+    normalized = normalized.strip()
+    bad = sorted(
+        {ch for ch in normalized if ord(ch) < 32 and ch not in _INSTRUCTIONS_ALLOWED_CONTROL}
+    )
+    if bad:
+        raise CliError(
+            "Custom instructions must not contain control characters (found "
+            + ", ".join(f"U+{ord(ch):04X}" for ch in bad)
+            + "). Nothing saved.",
+            EXIT_USAGE,
+        )
+    if len(normalized) > _MAX_INSTRUCTIONS_CHARS:
+        raise CliError(
+            f"Custom instructions are too long ({len(normalized)} characters, at most "
+            f"{_MAX_INSTRUCTIONS_CHARS}). Nothing saved.",
+            EXIT_USAGE,
+        )
+    return normalized
+
+
+def _edit_instructions(ctx: Context, current: str) -> str:
+    """Öffnet den Text im Editor des Nutzers und liefert das Ergebnis ohne `#`-Zeilen.
+
+    Raises:
+        CliError: Kein Terminal, kein Editor gefunden (Exit-Code 2) oder Editor mit
+            Fehlerstatus beendet (Exit-Code 1) — in allen Fällen wird nichts gespeichert.
+    """
+    console = ctx.console
+    if not console.interactive:
+        raise CliError(
+            "--edit needs a terminal. In non-interactive mode use --set or --add.",
+            EXIT_USAGE,
+        )
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or ""
+    if not editor:
+        found = shutil.which("nano") or shutil.which("vi")
+        editor = found or ""
+    if not editor:
+        raise CliError(
+            "No editor found: set $VISUAL or $EDITOR, or use --set / --add instead.",
+            EXIT_USAGE,
+        )
+    command = [*shlex.split(editor)]
+    if not command:
+        raise CliError("Empty editor command in $VISUAL/$EDITOR.", EXIT_USAGE)
+
+    directory = ctx.config_path.resolve().parent
+    # `mkstemp` legt die Datei bereits mit Rechten 0600 an — wie die Konfiguration selbst.
+    descriptor, name = tempfile.mkstemp(
+        prefix=".maildigest-instructions-", suffix=".txt", dir=directory, text=True
+    )
+    scratch = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(_INSTRUCTIONS_EDIT_HEADER)
+            handle.write(current)
+            if current and not current.endswith("\n"):
+                handle.write("\n")
+        console.out(f"Opening {command[0]} ... (save and close the editor to apply)")
+        status = ctx.hooks.run_editor([*command, str(scratch)])
+        if status != 0:
+            raise CliError(f"The editor exited with status {status}. Nothing saved.", EXIT_ERROR)
+        edited = scratch.read_text(encoding="utf-8")
+    finally:
+        with contextlib.suppress(OSError):
+            scratch.unlink()
+    return "\n".join(line for line in edited.split("\n") if not line.lstrip().startswith("#"))
+
+
 def _token_limit_value(raw: str) -> int:
     """Wert von `--max-tokens`: ganze Zahl ≥ 0; `0` bedeutet „kein Limit" (ADR-085).
 
@@ -2018,6 +2171,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="only show the message, do not deliver it"
     )
     test.set_defaults(func=cmd_test)
+
+    instructions = subparsers.add_parser(
+        "instructions",
+        parents=[common],
+        help="show or change the custom instructions for the summarizer",
+    )
+    choice = instructions.add_mutually_exclusive_group()
+    choice.add_argument("--set", metavar="TEXT", help="replace the instructions with TEXT")
+    choice.add_argument("--add", metavar="TEXT", help="append TEXT as a new line")
+    choice.add_argument(
+        "--edit", action="store_true", help="open the instructions in $VISUAL / $EDITOR"
+    )
+    choice.add_argument("--clear", action="store_true", help="remove the instructions")
+    instructions.set_defaults(func=cmd_instructions)
 
     run = subparsers.add_parser("run", parents=[common], help="continuous operation (polling)")
     run.add_argument("--once", action="store_true", help="process once and exit")

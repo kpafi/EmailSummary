@@ -303,6 +303,18 @@ instructions = "Rechnungen und Termine sind immer wichtig. Werbung ist nie wicht
 Die Custom-Instructions steuern Stil, Fokus und Wichtigkeit. Sie können die
 Sicherheitsregeln nicht abschalten — der Kritiker sieht sie gar nicht erst.
 
+Du musst dafür nicht in der Datei suchen. Das Kommando `maildigest instructions` zeigt den
+aktuellen Text, und so änderst du ihn:
+
+```bash
+maildigest instructions --add "Alles von meiner Uni ist wichtig."   # Zeile anhängen
+maildigest instructions --edit                                     # im Editor bearbeiten
+maildigest instructions --set "Nur Rechnungen und Termine zählen."  # komplett ersetzen
+maildigest instructions --clear                                    # löschen
+```
+
+Der Text gilt ab dem nächsten Lauf; bis zu 2000 Zeichen, mehrere Zeilen sind erlaubt.
+
 ## FAQ
 
 **Warum bekomme ich keine Links?**
