@@ -2872,3 +2872,30 @@ ihre *Erkennung* zu eng.
   (ADR-042). `subprocess` in `cli.py` betrifft ausschließlich den Editor des Nutzers; I7
   (PDF-Kindprozess) ist davon unberührt. SPEC-CLI §1/§4, ARCHITECTURE §2, README und
   CHANGELOG nachgezogen; `init` fragt weiterhin einmal, der Rest läuft über das Kommando.
+
+## ADR-087: Hilfe und Handbuchseite aus einer Quelle — dem Argumentparser
+- Status: accepted
+- WP / Datum: Betrieb nach der Fixrunde, 2026-09-12
+- Kontext: Die CLI hatte nur die einzeiligen argparse-Kurzhilfen; wer wissen wollte, was
+  ein Kommando fragt und wann es mit welchem Exit-Code endet, musste SPEC-CLI lesen. Der
+  Nutzer wünschte eine ordentliche `-h`-Hilfe und eine `man`-Seite für das ganze Werkzeug.
+  Eine von Hand geschriebene Handbuchseite veraltet aber so still wie jede zweite Kopie —
+  genau die Drift, die HC-14 und HC-18 für SPEC und `init`-Vorlage gezeigt haben.
+- Entscheidung: Beschreibung und Beispiele je Kommando stehen als `description`/`epilog`
+  im Parser (`RawDescriptionHelpFormatter`, Absätze durch Leerzeilen, eingerückte Zeilen
+  wörtlich). `manpage.render_manpage(parser)` erzeugt daraus troff (Abschnitt 1) mit
+  NAME, SYNOPSIS, DESCRIPTION, COMMANDS samt Optionen, GLOBAL OPTIONS und den statischen
+  Abschnitten CONFIGURATION, EXIT STATUS, ENVIRONMENT, FILES, EXAMPLES, SECURITY, SEE
+  ALSO. Die globale Option `--man` gibt die Seite auf stdout aus (`maildigest --man |
+  man -l -`); `man/maildigest.1` ist die erzeugte Datei im Repository, per hatch
+  `shared-data` nach `share/man/man1` verpackt. `tests/unit/test_manpage.py` vergleicht
+  die Datei mit dem Parser, prüft, dass jedes Kommando und jede Option vorkommt, und
+  rendert sie mit `man`, wo es installiert ist.
+- Alternativen: `argparse-manpage` oder Sphinx — neue Abhängigkeit für ein Dutzend Zeilen
+  troff (NF-1); Handbuch nur als Markdown (README/SPEC) — kein `man`; Handbuch von Hand —
+  Drift ohne Test.
+- Konsequenzen: Wer eine Option ändert, ändert Hilfe und Handbuch an einer Stelle; der
+  Test zwingt zum Neuerzeugen der Datei. Die Hilfetexte sind Erklärung, nicht Vertrag —
+  der Vertrag bleibt SPEC-CLI (Wortlaut der Fragen, Zeilen, Exit-Codes); `test_spec_cli`
+  hält weiterhin Optionen und Kommandos zwischen Parser und Spezifikation synchron.
+  `--man` ist eine reine Ausgabeoption ohne Kommando und ohne Nebenwirkung.

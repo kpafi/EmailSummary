@@ -52,7 +52,7 @@ import httpx
 from imap_tools import MailMessage
 from pydantic import BaseModel, SecretStr
 
-from maildigest import providers
+from maildigest import __version__, providers
 from maildigest.agents.critic import CriticAgent
 from maildigest.agents.offline import OfflineCritic, OfflineSummarizer
 from maildigest.agents.summarizer import SummarizerAgent
@@ -2073,6 +2073,130 @@ def _port_value(raw: str) -> int:
     return value
 
 
+#: Hilfetexte (ADR-087): `description` erklärt das Kommando, `epilog` zeigt Beispiele.
+#: Absätze sind durch Leerzeilen getrennt; Zeilen mit zwei führenden Leerzeichen bleiben
+#: wörtlich (Beispiele). Dieselben Texte speisen die Handbuchseite (`maildigest --man`).
+_HELP_DESCRIPTION = """\
+MailDigest reads a mirror mailbox over IMAPS, turns every mail into plain text, lets a
+language model summarise it (optional), lets a second model check it for phishing and
+delivers text-only messages to Telegram, Discord or Signal. The messenger never gets a
+link, an attachment or HTML: whoever wants to click opens the real mailbox."""
+
+_HELP_EPILOG = """\
+typical workflow:
+  maildigest init                 create config.toml (file mode 0600)
+  maildigest connect-mail         mirror mailbox: test access, pick the folder
+  maildigest connect-llm          optional: language model (free tiers available)
+  maildigest connect-messenger    Telegram / Discord / Signal, test message
+  maildigest test --dry-run       run an example mail through the pipeline
+  maildigest run                  continuous operation; run --once for cron
+
+configuration: config.toml in the current directory, or --config PATH, or the environment
+variable MAILDIGEST_CONFIG. Secrets can stay out of the file: MAILDIGEST_IMAP_PASSWORD,
+MAILDIGEST_LLM_API_KEY, MAILDIGEST_TELEGRAM_TOKEN.
+
+exit status: 0 ok, 1 error (connection, configuration, delivery), 2 usage error.
+manual: maildigest --man | man -l -        specification: docs/SPEC-CLI.md"""
+
+_COMMAND_HELP: dict[str, tuple[str, str]] = {
+    "init": (
+        """\
+Creates the configuration file (file mode 0600) and asks five questions: language of the
+summaries, summary length, importance threshold for individual delivery, time of the daily
+digest for the rest, and one line of custom instructions. Every question has an option, so
+the command also works without a terminal (--non-interactive). An existing file is only
+overwritten with --force. The output ends with the next steps: connect-mail,
+connect-messenger, test, run; connect-llm is optional.""",
+        """\
+examples:
+  maildigest init
+  maildigest --config ~/.config/maildigest/config.toml init --non-interactive --language en""",
+    ),
+    "connect-mail": (
+        """\
+Asks for the IMAP host (a mail address is accepted and translated for known providers),
+port, username and password, connects over IMAPS with certificate check, lists the folders
+and stores the choice. Providers without password login (Outlook.com, Proton) are rejected
+with an explanation before anything is asked. Nothing is written unless the connection
+test succeeds (--no-test skips it). The password can stay out of the file: set
+MAILDIGEST_IMAP_PASSWORD instead. Prints how to set up forwarding into the mirror mailbox
+for Gmail, posteo and mailbox.org.""",
+        """\
+examples:
+  maildigest connect-mail
+  MAILDIGEST_IMAP_PASSWORD=... maildigest connect-mail --non-interactive \\
+      --host imap.example.org --username me@example.org --folder INBOX""",
+    ),
+    "connect-llm": (
+        """\
+Chooses how mail is summarised: without a language model (the default after init: a
+labelled excerpt plus all deterministic warnings), a free tier (Groq, OpenRouter,
+Cerebras), a local model (Ollama, LM Studio, vLLM) or Anthropic. Asks for the model ID,
+the endpoint (openai_compatible only), the API key (or MAILDIGEST_LLM_API_KEY) and an
+optional response token limit. Leave the limit empty unless you want to cap the cost per
+call: reasoning models spend tokens on thinking first and need the headroom. Makes a
+16-token test call before saving (--no-test skips it).""",
+        """\
+examples:
+  maildigest connect-llm
+  maildigest connect-llm --non-interactive --provider openai_compatible \\
+      --model llama3.1 --base-url http://localhost:11434/v1 --no-test""",
+    ),
+    "connect-messenger": (
+        """\
+Sets up the delivery channel: Telegram (bot token, chat ID found via getUpdates, so write
+to your bot first), Discord (webhook URL) or Signal (signal-cli socket). Sends a test
+message unless --no-test is given. With Telegram the chat can trigger runs with /digest
+and /status; set accept_commands = false in the configuration for group chats.""",
+        """\
+examples:
+  maildigest connect-messenger
+  MAILDIGEST_TELEGRAM_TOKEN=... maildigest connect-messenger --non-interactive \\
+      --messenger telegram --chat-id 123456789""",
+    ),
+    "test": (
+        """\
+Runs one mail through the real pipeline (sanitizer, summarizer, critic, output sanitizer)
+with a temporary state database, so it can be repeated at will and never touches the
+mailbox or the dedupe state. By default the bundled example mail is used; --eml runs your
+own .eml file, which is the documented way to try attack mails. --dry-run prints the
+finished message instead of delivering it. Five numbered step lines report what happened;
+exit status 1 means the pipeline ended fail-closed or the delivery did not succeed.""",
+        """\
+examples:
+  maildigest test --dry-run
+  maildigest test --eml suspicious.eml --dry-run""",
+    ),
+    "instructions": (
+        """\
+Shows or changes the custom instructions for the summarizer ([summarizer] instructions):
+what matters to you, what to watch for, how to weigh importance. Without an option the
+current text is printed. --set replaces it, --add appends a line, --edit opens it in
+$VISUAL or $EDITOR (lines starting with # are ignored), --clear removes it. Up to 2000
+characters, several lines allowed. The text reaches the summarizer as a labelled block;
+the critic never sees it, and the security rules cannot be switched off.""",
+        """\
+examples:
+  maildigest instructions
+  maildigest instructions --add "Invoices and appointments are always important."
+  maildigest instructions --edit""",
+    ),
+    "run": (
+        """\
+Continuous operation: polls the mirror mailbox every poll_interval_seconds, processes new
+mail, delivers the results, sends the daily digest of low-importance mail at
+low_digest_time and answers /digest and /status from the Telegram chat. Ends cleanly on
+SIGINT and SIGTERM. --once runs a single cycle and exits (for cron); chat commands are
+then answered at the end of that run. Exit status 1 if the configuration is incomplete
+or, with --once, the mailbox is unreachable.""",
+        """\
+examples:
+  maildigest run
+  maildigest --config /etc/maildigest.toml run --once""",
+    ),
+}
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Baut den vollständigen Argumentparser (Vertrag: docs/SPEC-CLI.md, Abschnitte 3 und 4)."""
     # `default=argparse.SUPPRESS` ist hier der ganze Trick (SPEC-CLI.md §3): Der
@@ -2098,17 +2222,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = _ArgumentParser(
         prog="maildigest",
-        description=(
-            "Summarises mail from a mirror mailbox, checks it for phishing and sends "
-            "plain text to a messenger."
-        ),
+        description=_HELP_DESCRIPTION,
+        epilog=_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[common],
+    )
+    parser.add_argument(
+        "--man",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="print the manual page in troff format (maildigest --man | man -l -)",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    init = subparsers.add_parser(
-        "init", parents=[common], help="create the configuration file (0600)"
-    )
+    def command(name: str, summary: str) -> argparse.ArgumentParser:
+        """Ein Unterkommando mit Kurzhilfe, Beschreibung und Beispielen (ADR-087)."""
+        description, epilog = _COMMAND_HELP[name]
+        return subparsers.add_parser(
+            name,
+            parents=[common],
+            help=summary,
+            description=description,
+            epilog=epilog,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+
+    init = command("init", "create the configuration file (0600)")
     init.add_argument("--force", action="store_true", help="overwrite an existing file")
     init.add_argument("--language", choices=list(_LANGUAGES), help="language of the summaries")
     init.add_argument(
@@ -2121,9 +2260,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--instructions", metavar="TEXT", help="custom instructions")
     init.set_defaults(func=cmd_init)
 
-    mail = subparsers.add_parser(
-        "connect-mail", parents=[common], help="connect and test the mirror mailbox"
-    )
+    mail = command("connect-mail", "connect and test the mirror mailbox")
     mail.add_argument("--host", metavar="HOST", help="IMAP host")
     mail.add_argument(
         "--port", type=_port_value, metavar="PORT", help="IMAP port (default 993)"
@@ -2136,9 +2273,7 @@ def build_parser() -> argparse.ArgumentParser:
     mail.add_argument("--no-test", action="store_true", help="save without a connection test")
     mail.set_defaults(func=cmd_connect_mail)
 
-    llm = subparsers.add_parser(
-        "connect-llm", parents=[common], help="connect and test the language model"
-    )
+    llm = command("connect-llm", "connect and test the language model")
     llm.add_argument("--provider", choices=list(_PROVIDERS), help="provider")
     llm.add_argument("--model", metavar="ID", help="model ID of the provider")
     llm.add_argument("--base-url", metavar="URL", help="endpoint for openai_compatible")
@@ -2151,9 +2286,7 @@ def build_parser() -> argparse.ArgumentParser:
     llm.add_argument("--no-test", action="store_true", help="save without a test call")
     llm.set_defaults(func=cmd_connect_llm)
 
-    messenger = subparsers.add_parser(
-        "connect-messenger", parents=[common], help="connect and test the messenger"
-    )
+    messenger = command("connect-messenger", "connect and test the messenger")
     messenger.add_argument("--messenger", choices=list(_MESSENGERS), help="target system")
     messenger.add_argument(
         "--chat-id", metavar="ID", help="Telegram chat ID (instead of getUpdates)"
@@ -2163,19 +2296,15 @@ def build_parser() -> argparse.ArgumentParser:
     messenger.add_argument("--no-test", action="store_true", help="save without a test message")
     messenger.set_defaults(func=cmd_connect_messenger)
 
-    test = subparsers.add_parser(
-        "test", parents=[common], help="end-to-end self-test with an example mail"
-    )
+    test = command("test", "end-to-end self-test with an example mail")
     test.add_argument("--eml", metavar="PATH", help="your own .eml file instead of the example")
     test.add_argument(
         "--dry-run", action="store_true", help="only show the message, do not deliver it"
     )
     test.set_defaults(func=cmd_test)
 
-    instructions = subparsers.add_parser(
-        "instructions",
-        parents=[common],
-        help="show or change the custom instructions for the summarizer",
+    instructions = command(
+        "instructions", "show or change the custom instructions for the summarizer"
     )
     choice = instructions.add_mutually_exclusive_group()
     choice.add_argument("--set", metavar="TEXT", help="replace the instructions with TEXT")
@@ -2186,7 +2315,7 @@ def build_parser() -> argparse.ArgumentParser:
     choice.add_argument("--clear", action="store_true", help="remove the instructions")
     instructions.set_defaults(func=cmd_instructions)
 
-    run = subparsers.add_parser("run", parents=[common], help="continuous operation (polling)")
+    run = command("run", "continuous operation (polling)")
     run.add_argument("--once", action="store_true", help="process once and exit")
     run.set_defaults(func=cmd_run)
 
@@ -2212,6 +2341,11 @@ def main(
 
     try:
         args = parser.parse_args(list(argv) if argv is not None else None)
+        if getattr(args, "man", False):
+            from maildigest.manpage import render_manpage
+
+            streams_out.write(render_manpage(parser, version=__version__))
+            return EXIT_OK
         if getattr(args, "command", None) is None:
             parser.print_help(streams_out)
             return EXIT_USAGE

@@ -1,0 +1,281 @@
+.\" Generated from the argparse definition by `maildigest --man`. Do not edit by hand.
+.TH MAILDIGEST 1 "MailDigest 0.1.0" "MailDigest 0.1.0" "User Commands"
+.SH NAME
+maildigest \- summarise mail from a mirror mailbox and deliver text\-only digests to a messenger
+.SH SYNOPSIS
+.B maildigest
+[\fB\-\-config\fR \fIPATH\fR] [\fB\-\-non\-interactive\fR] \fICOMMAND\fR [\fIOPTIONS\fR]
+.br
+.B maildigest
+\fB\-\-help\fR | \fB\-\-man\fR
+.SH DESCRIPTION
+MailDigest reads a mirror mailbox over IMAPS, turns every mail into plain text, lets a language model summarise it (optional), lets a second model check it for phishing and delivers text\-only messages to Telegram, Discord or Signal. The messenger never gets a link, an attachment or HTML: whoever wants to click opens the real mailbox.
+.PP
+Commands: \fBinit\fR, \fBconnect\-mail\fR, \fBconnect\-llm\fR, \fBconnect\-messenger\fR, \fBtest\fR, \fBinstructions\fR, \fBrun\fR. Global options may be given before or after the command name.
+.SH COMMANDS
+.SS "maildigest init"
+Create the configuration file (0600).
+.PP
+Creates the configuration file (file mode 0600) and asks five questions: language of the summaries, summary length, importance threshold for individual delivery, time of the daily digest for the rest, and one line of custom instructions. Every question has an option, so the command also works without a terminal (\-\-non\-interactive). An existing file is only overwritten with \-\-force. The output ends with the next steps: connect\-mail, connect\-messenger, test, run; connect\-llm is optional.
+.PP
+Options:
+.TP
+\fB\-\-force\fR
+overwrite an existing file
+.TP
+\fB\-\-language\fR \fI{de,en}\fR
+language of the summaries
+.TP
+\fB\-\-summary\-length\fR \fI{short,medium,long}\fR
+length of the summaries
+.TP
+\fB\-\-min\-importance\fR \fI{low,normal,high}\fR
+threshold for individual delivery
+.TP
+\fB\-\-low\-digest\-time\fR \fIHH:MM\fR
+time of the daily digest
+.TP
+\fB\-\-instructions\fR \fITEXT\fR
+custom instructions
+.PP
+examples: maildigest init maildigest \-\-config ~/.config/maildigest/config.toml init \-\-non\-interactive \-\-language en
+.SS "maildigest connect\-mail"
+Connect and test the mirror mailbox.
+.PP
+Asks for the IMAP host (a mail address is accepted and translated for known providers), port, username and password, connects over IMAPS with certificate check, lists the folders and stores the choice. Providers without password login (Outlook.com, Proton) are rejected with an explanation before anything is asked. Nothing is written unless the connection test succeeds (\-\-no\-test skips it). The password can stay out of the file: set MAILDIGEST_IMAP_PASSWORD instead. Prints how to set up forwarding into the mirror mailbox for Gmail, posteo and mailbox.org.
+.PP
+Options:
+.TP
+\fB\-\-host\fR \fIHOST\fR
+IMAP host
+.TP
+\fB\-\-port\fR \fIPORT\fR
+IMAP port (default 993)
+.TP
+\fB\-\-username\fR \fINAME\fR
+IMAP username
+.TP
+\fB\-\-folder\fR \fIFOLDER\fR
+folder to read
+.TP
+\fB\-\-move\-processed\-to\fR \fIFOLDER\fR
+move processed mail there
+.TP
+\fB\-\-no\-test\fR
+save without a connection test
+.PP
+examples: maildigest connect\-mail MAILDIGEST_IMAP_PASSWORD=... maildigest connect\-mail \-\-non\-interactive \e \-\-host imap.example.org \-\-username me@example.org \-\-folder INBOX
+.SS "maildigest connect\-llm"
+Connect and test the language model.
+.PP
+Chooses how mail is summarised: without a language model (the default after init: a labelled excerpt plus all deterministic warnings), a free tier (Groq, OpenRouter, Cerebras), a local model (Ollama, LM Studio, vLLM) or Anthropic. Asks for the model ID, the endpoint (openai_compatible only), the API key (or MAILDIGEST_LLM_API_KEY) and an optional response token limit. Leave the limit empty unless you want to cap the cost per call: reasoning models spend tokens on thinking first and need the headroom. Makes a 16\-token test call before saving (\-\-no\-test skips it).
+.PP
+Options:
+.TP
+\fB\-\-provider\fR \fI{none,anthropic,openai_compatible}\fR
+provider
+.TP
+\fB\-\-model\fR \fIID\fR
+model ID of the provider
+.TP
+\fB\-\-base\-url\fR \fIURL\fR
+endpoint for openai_compatible
+.TP
+\fB\-\-max\-tokens\fR \fIN\fR
+response token limit per call; 0 = no limit (the default after init)
+.TP
+\fB\-\-no\-test\fR
+save without a test call
+.PP
+examples: maildigest connect\-llm maildigest connect\-llm \-\-non\-interactive \-\-provider openai_compatible \e \-\-model llama3.1 \-\-base\-url http://localhost:11434/v1 \-\-no\-test
+.SS "maildigest connect\-messenger"
+Connect and test the messenger.
+.PP
+Sets up the delivery channel: Telegram (bot token, chat ID found via getUpdates, so write to your bot first), Discord (webhook URL) or Signal (signal\-cli socket). Sends a test message unless \-\-no\-test is given. With Telegram the chat can trigger runs with /digest and /status; set accept_commands = false in the configuration for group chats.
+.PP
+Options:
+.TP
+\fB\-\-messenger\fR \fI{telegram,discord,signal}\fR
+target system
+.TP
+\fB\-\-chat\-id\fR \fIID\fR
+Telegram chat ID (instead of getUpdates)
+.TP
+\fB\-\-webhook\-url\fR \fIURL\fR
+Discord webhook URL
+.TP
+\fB\-\-signal\-socket\fR \fIPATH\fR
+path of the signal\-cli socket
+.TP
+\fB\-\-no\-test\fR
+save without a test message
+.PP
+examples: maildigest connect\-messenger MAILDIGEST_TELEGRAM_TOKEN=... maildigest connect\-messenger \-\-non\-interactive \e \-\-messenger telegram \-\-chat\-id 123456789
+.SS "maildigest test"
+End\-to\-end self\-test with an example mail.
+.PP
+Runs one mail through the real pipeline (sanitizer, summarizer, critic, output sanitizer) with a temporary state database, so it can be repeated at will and never touches the mailbox or the dedupe state. By default the bundled example mail is used; \-\-eml runs your own .eml file, which is the documented way to try attack mails. \-\-dry\-run prints the finished message instead of delivering it. Five numbered step lines report what happened; exit status 1 means the pipeline ended fail\-closed or the delivery did not succeed.
+.PP
+Options:
+.TP
+\fB\-\-eml\fR \fIPATH\fR
+your own .eml file instead of the example
+.TP
+\fB\-\-dry\-run\fR
+only show the message, do not deliver it
+.PP
+examples: maildigest test \-\-dry\-run maildigest test \-\-eml suspicious.eml \-\-dry\-run
+.SS "maildigest instructions"
+Show or change the custom instructions for the summarizer.
+.PP
+Shows or changes the custom instructions for the summarizer ([summarizer] instructions): what matters to you, what to watch for, how to weigh importance. Without an option the current text is printed. \-\-set replaces it, \-\-add appends a line, \-\-edit opens it in $VISUAL or $EDITOR (lines starting with # are ignored), \-\-clear removes it. Up to 2000 characters, several lines allowed. The text reaches the summarizer as a labelled block; the critic never sees it, and the security rules cannot be switched off.
+.PP
+Options:
+.TP
+\fB\-\-set\fR \fITEXT\fR
+replace the instructions with TEXT
+.TP
+\fB\-\-add\fR \fITEXT\fR
+append TEXT as a new line
+.TP
+\fB\-\-edit\fR
+open the instructions in $VISUAL / $EDITOR
+.TP
+\fB\-\-clear\fR
+remove the instructions
+.PP
+examples: maildigest instructions maildigest instructions \-\-add "Invoices and appointments are always important." maildigest instructions \-\-edit
+.SS "maildigest run"
+Continuous operation (polling).
+.PP
+Continuous operation: polls the mirror mailbox every poll_interval_seconds, processes new mail, delivers the results, sends the daily digest of low\-importance mail at low_digest_time and answers /digest and /status from the Telegram chat. Ends cleanly on SIGINT and SIGTERM. \-\-once runs a single cycle and exits (for cron); chat commands are then answered at the end of that run. Exit status 1 if the configuration is incomplete or, with \-\-once, the mailbox is unreachable.
+.PP
+Options:
+.TP
+\fB\-\-once\fR
+process once and exit
+.PP
+examples: maildigest run maildigest \-\-config /etc/maildigest.toml run \-\-once
+.SH GLOBAL OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+show this help message and exit
+.TP
+\fB\-\-config\fR \fIPATH\fR
+path of the configuration file
+.TP
+\fB\-\-non\-interactive\fR
+ask nothing; use defaults and options
+.TP
+\fB\-\-man\fR
+print the manual page in troff format (maildigest \-\-man | man \-l \-)
+.SH CONFIGURATION
+The configuration is a TOML file with file mode 0600. Without \fB\-\-config\fR the
+environment variable \fBMAILDIGEST_CONFIG\fR is used, otherwise \fIconfig.toml\fR in the
+current directory. \fBmaildigest init\fR writes it with the complete field set; the
+\fBconnect\-*\fR commands fill in the sections they own. The full field reference is
+docs/SPEC\-CLI.md section 5. The sections in short:
+.TP
+.B [general]
+language and length of the summaries, importance threshold, time of the daily digest,
+state database, log level.
+.TP
+.B [imap]
+host, port (IMAPS only), username, password (better: environment variable), folder, poll
+interval, optional target folder for processed mail.
+.TP
+.B [llm], [llm.critic]
+provider (none, anthropic, openai_compatible), model ID, API key, base URL, optional
+response token limit (absent = no limit); [llm.critic] overrides fields for the critic.
+.TP
+.B [summarizer]
+custom instructions, editable with \fBmaildigest instructions\fR.
+.TP
+.B [links]
+whether a defanged link list is appended as a footnote.
+.TP
+.B [messenger], [messenger.telegram], [messenger.discord], [messenger.signal]
+active channel and its credentials; Telegram may accept /digest and /status from the chat.
+.TP
+.B [limits]
+size, count and time limits of the sanitizer (mail size, text length, attachments, PDF
+extraction, HTML conversion).
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Error: connection, login, invalid configuration, failed test call, delivery failure, or a
+self\-test that ended fail\-closed.
+.TP
+.B 2
+Usage error: unknown command or option, value out of range, missing required input in
+non\-interactive mode, end of input while a question was pending.
+.SH ENVIRONMENT
+.TP
+.B MAILDIGEST_CONFIG
+Path of the configuration file when \fB\-\-config\fR is not given.
+.TP
+.B MAILDIGEST_IMAP_PASSWORD
+IMAP password; takes precedence over the file and keeps the secret out of it.
+.TP
+.B MAILDIGEST_LLM_API_KEY
+API key of the language model provider; same rule.
+.TP
+.B MAILDIGEST_TELEGRAM_TOKEN
+Telegram bot token; same rule.
+.TP
+.B VISUAL, EDITOR
+Editor used by \fBmaildigest instructions \-\-edit\fR (fallback: nano, then vi).
+.SH FILES
+.TP
+.I config.toml
+Configuration, file mode 0600. Location: see CONFIGURATION.
+.TP
+.I state.db
+SQLite state next to the configuration (path configurable in [general]): which mail was
+seen, delivery queue, daily\-digest queue. Contains hashes and status values, never mail
+content or secrets. Deleting it makes every unread mail in the mirror mailbox new again.
+.TP
+.I man/maildigest.1
+This manual page as shipped in the repository; regenerate with
+\fBmaildigest \-\-man > man/maildigest.1\fR.
+.SH EXAMPLES
+.nf
+maildigest init
+maildigest connect\-mail
+maildigest connect\-messenger
+maildigest test \-\-dry\-run
+maildigest run
+.fi
+.PP
+Cron instead of continuous operation:
+.PP
+.nf
+*/5 * * * *  maildigest \-\-config /etc/maildigest.toml \-\-non\-interactive run \-\-once
+.fi
+.PP
+Tell the summariser what matters to you:
+.PP
+.nf
+maildigest instructions \-\-add "Invoices and appointments are always important."
+.fi
+.PP
+Read this manual without installing it:
+.PP
+.nf
+maildigest \-\-man | man \-l \-
+.fi
+.SH SECURITY
+MailDigest never forwards a link, an attachment or HTML to the messenger: URLs appear as
+\fB[Link #n: domain]\fR with the dots broken, attachments as name and size only. The two
+model stages see plain text prepared in code and can do nothing but answer with text: no
+actions, no network or file access. Their output is treated as untrusted: schema check,
+critic, output sanitizer. Anything
+that fails is delivered as a metadata notice instead of content. Secrets never reach a
+prompt, a log or the state database. The full threat model and the invariants are in
+docs/SECURITY.md.
+.SH SEE ALSO
+docs/SPEC\-CLI.md (the contract for every command, question and message line),
+docs/SECURITY.md, docs/BETRIEB.md (systemd and cron), README.md.

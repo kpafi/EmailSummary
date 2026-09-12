@@ -23,6 +23,10 @@ Alle nennenswerten Änderungen an MailDigest. Format angelehnt an
   Summarizer oder ändert sie mit `--set`, `--add`, `--edit` (im `$VISUAL`/`$EDITOR`) und
   `--clear` — ohne die Stelle in der Konfigurationsdatei zu suchen. Mehrzeilig, bis 2000
   Zeichen; Steuerzeichen werden abgewiesen. Der Kritiker sieht den Text weiterhin nie.
+- **Hilfe und Handbuch** (ADR-087): `maildigest <kommando> --help` erklärt jedes Kommando
+  mit Beschreibung und Beispielen, `maildigest --help` den typischen Ablauf. `maildigest
+  --man` gibt eine Handbuchseite im troff-Format aus (`| man -l -`); `man/maildigest.1`
+  ist daraus erzeugt, ein Test hält sie mit dem Parser synchron.
 
 ### Behoben
 

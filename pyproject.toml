@@ -36,6 +36,11 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/maildigest"]
 
+# Handbuchseite (ADR-087): landet bei `pip`/`pipx` unter <prefix>/share/man/man1 — bei
+# pipx innerhalb des venv, also nicht im Manpfad; README nennt den Weg nach ~/.local.
+[tool.hatch.build.targets.wheel.shared-data]
+"man/maildigest.1" = "share/man/man1/maildigest.1"
+
 # --- Ruff (Linter + Import-Sortierung), Begründung des Regelsatzes: ADR-010 ---
 [tool.ruff]
 line-length = 100

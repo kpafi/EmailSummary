@@ -24,7 +24,7 @@ from maildigest.cli import build_parser
 SPEC_PATH = Path(__file__).resolve().parents[2] / "docs" / "SPEC-CLI.md"
 
 #: Optionen, die jedes Kommando erbt und die nur im globalen Abschnitt stehen.
-GLOBAL_OPTIONS = {"--config", "--non-interactive", "--help"}
+GLOBAL_OPTIONS = {"--config", "--non-interactive", "--help", "--man"}
 
 _COMMAND_HEADING = re.compile(r"^### `maildigest ([a-z-]+)`\s*$")
 _GLOBAL_HEADING = re.compile(r"^## 3\. Globale Optionen\s*$")

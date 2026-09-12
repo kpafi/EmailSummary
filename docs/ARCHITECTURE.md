@@ -462,6 +462,7 @@ wieder rein additiv und wird beim Öffnen still vollzogen — neue Tabellen legt
 
 - Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`,
   `instructions` (Custom-Instructions anzeigen/ändern, ADR-086),
+  dazu `--man` (Handbuchseite aus dem Parser, `manpage.py`, ADR-087),
   `run [--once]`; Exit-Codes 0/1/2. Einstiegspunkte: `[project.scripts] maildigest` und
   `python -m maildigest`.
 - `argparse` mit einem `parents=`-Parser für `--config`/`--non-interactive`, sodass beide

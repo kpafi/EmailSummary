@@ -188,6 +188,26 @@ den Suchpfad. Entweder `pipx install .` nachholen oder — unabhängig von der I
 python3 -m maildigest --help
 ```
 
+### Hilfe und Handbuch
+
+Jedes Kommando erklärt sich selbst: `maildigest --help` zeigt den typischen Ablauf,
+`maildigest <kommando> --help` Beschreibung, Optionen und Beispiele. Die vollständige
+Handbuchseite gibt es ohne Installation:
+
+```bash
+maildigest --man | man -l -
+```
+
+Wer `man maildigest` tippen will, kopiert die mitgelieferte Seite in den eigenen Manpfad:
+
+```bash
+mkdir -p ~/.local/share/man/man1 && cp man/maildigest.1 ~/.local/share/man/man1/
+```
+
+Die Seite wird aus derselben Quelle erzeugt wie die Hilfe (`maildigest --man`), ein Test
+hält sie mit dem Programm synchron. Der Vertrag für jede Frage und jede Ausgabezeile bleibt
+[docs/SPEC-CLI.md](docs/SPEC-CLI.md).
+
 ## Quickstart
 
 ```bash

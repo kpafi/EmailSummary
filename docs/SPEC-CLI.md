@@ -24,7 +24,11 @@ Sieben Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `t
 
 Ein Aufruf ohne Kommando gibt die Hilfe auf **stdout** aus und endet mit Exit-Code 2.
 `maildigest --help` und `maildigest <KOMMANDO> --help` geben Hilfe aus und enden mit
-Exit-Code 0.
+Exit-Code 0. Die Hilfe jedes Kommandos enthält eine Beschreibung, die Optionen und
+Beispiele (ADR-087). `maildigest --man` gibt die vollständige Handbuchseite im
+troff-Format auf stdout aus (Exit-Code 0), lesbar mit `maildigest --man | man -l -`; die
+Datei `man/maildigest.1` im Repository ist daraus erzeugt und kann nach
+`~/.local/share/man/man1/` kopiert werden, danach genügt `man maildigest`.
 
 ## 2. Exit-Codes
 
@@ -80,6 +84,7 @@ stehen (`maildigest --config x init` und `maildigest init --config x` sind gleic
 | `--config` | PFAD | Pfad der Konfigurationsdatei. Ohne Angabe gilt die Umgebungsvariable `MAILDIGEST_CONFIG`, sonst `config.toml` im aktuellen Verzeichnis. |
 | `--non-interactive` | – | Stellt keine Rückfragen. Es gelten die Optionen der Kommandozeile, die bisherigen Werte der Datei und die Defaults. Fehlt dann eine Pflichtangabe, endet das Kommando mit Exit-Code 2 und nennt die zuständige Option. |
 | `--help` | – | Hilfe anzeigen und mit Exit-Code 0 beenden. |
+| `--man` | – | Handbuchseite (troff, Abschnitt 1) auf stdout ausgeben und mit Exit-Code 0 beenden. Nur ohne Kommandonamen sinnvoll; ein Kommando dahinter wird nicht ausgeführt. |
 
 ## 4. Kommandos
 
