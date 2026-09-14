@@ -740,6 +740,22 @@ Anzeigename und Adresse laufen jetzt durch denselben Pfad, und eine Anzeige begi
 mit `/` oder `:` (sonst fräste `From: //…` das Strukturpräfix an). (3) Die Outlook-Anzeige
 übernahm Lokalteile wie `https://evil.example/x` als Namen — nur schlichte Wörter zählen.
 
+**Nachtrag (Release 0.2.0, 2026-09-14, O-3 sechster Griff):** Der fünfte Skeptiker fand eine
+Regression des fünften Griffs: `reply_to_addresses` führte nur brauchbare Angaben, also
+schaltete `Reply-To: Foo <y@[evil.example]>, x@bank.example` die Warnung stumm — die Liste
+bestand nur noch aus der Absenderadresse, der leere Marker der unlesbaren ersten Angabe ging
+verloren (vorher warnte „eine Unbekannte neben einer Bekannten"). Jetzt führt die Liste
+jede Angabe mit Domain-Teil, unbrauchbare (Domain-Literal, IDN, Unterstrich) als `""`; damit
+zählt auch eine solche Fremdadresse hinter der Absenderadresse (vorbestehend). Angaben ohne
+Domain-Teil — Wörter, quotierte Lokalteile, die Null-Adresse `<>` aus defekten Token — sind
+keine Adressaten, wie beim Orakel `email.policy.default` und wie S-2 (`<x@…> (Support) TOKEN`
+bleibt ohne Warnung); eine unlesbare erste Angabe bleibt eine Unbekannte, auch wenn dahinter
+die Absenderadresse steht. Die Outlook-Form bleibt eine Angabe ohne Unbekannte. Zweitens lösen `_from_display` und der
+Composer HTML-Entities auf, bevor führende `/` und `:` entfernt werden: `&#47;&#47;evil.example`
+wurde erst im Composer zu `//…`, und der Wächter brach `From:` zu `From[:]` auf (vorbestehend,
+CT-8). Offen und niedrig: ein nachgebauter Marker `[Link #9]` ohne Doppelpunkt im Anzeigenamen
+wird weder neutralisiert noch gezählt (O-9 in docs/TESTING.md).
+
 ## ADR-021: Anthropic- und OpenAI-Zugriff direkt über httpx, kein Provider-SDK
 - Status: accepted
 - WP / Datum: WP4, 2026-08-28

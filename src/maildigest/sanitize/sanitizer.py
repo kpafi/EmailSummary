@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass, field
 from email.message import Message
 from email.utils import parseaddr
+from html import unescape as _html_unescape
 
 from maildigest.config import Config, LimitsConfig
 from maildigest.models import (
@@ -602,8 +603,14 @@ class MailSanitizer:
         # gefälschter `[Link #n:]`-Marker aus einem quotierten Lokalteil in den Prompt.
         # Ein Anzeigename darf nicht mit `/` oder `:` beginnen: `From: //…` fräse sonst
         # das Strukturpräfix der Zustellzeile an (Skeptiker O-3, vierter Durchgang).
+        # HTML-Entities zuerst: `&#47;&#47;evil.example` überstünde das Abschneiden hier
+        # und würde erst im Composer zu `//…` — der Wächter bräche dann `From:` auf
+        # (Skeptiker O-3, fünfter Durchgang). Aufgelöst sehen Link-Scrub und Tag-Stripper
+        # zudem die echten Zeichen.
         text = display or address or raw.from_address or raw.from_addr
-        cleaned = self._sanitize_header(text, links, state, _MAX_DISPLAY_CHARS)
+        cleaned = self._sanitize_header(
+            _unescape_entities(text), links, state, _MAX_DISPLAY_CHARS
+        )
         return cleaned.lstrip("/:. ") or "(unknown sender)"
 
     def _build_report(
@@ -648,6 +655,26 @@ class MailSanitizer:
 def _strip_tag_like(text: str) -> str:
     """Neutralisiert HTML-Tag-artige Sequenzen in bereits konvertiertem Klartext."""
     return _RE_TAG_LIKE.sub(" ", text)
+
+
+#: Runden für :func:`_unescape_entities` — gedeckelt gegen `&amp;amp;amp;…`-Ketten (T10).
+_MAX_UNESCAPE_ROUNDS = 8
+
+
+def _unescape_entities(text: str) -> str:
+    """Löst HTML-Entities auf, bis sich nichts mehr ändert (max. :data:`_MAX_UNESCAPE_ROUNDS`).
+
+    Gegenstück zu `output.sanitizer._unescape`, das der Composer auf jedes Feld anwendet:
+    Was der Composer später decodiert, muss der Sanitizer hier schon gesehen haben, sonst
+    entsteht nach seinem Scrub neuer Text (`&#47;` → `/`), den keine Schicht mehr prüft.
+    """
+    current = text
+    for _ in range(_MAX_UNESCAPE_ROUNDS):
+        decoded = _html_unescape(current)
+        if decoded == current:
+            return current
+        current = decoded
+    return current
 
 
 def neutralize_forged_markers(text: str) -> tuple[str, int]:
@@ -787,6 +814,11 @@ def _reply_to_mismatch(raw: RawMail) -> bool:
         # `Reply-To: x@bank.example, y@evil.example` ist ein Mismatch, auch wenn die
         # erste Adresse der Absender ist.
         replies = [r.strip().lower() for r in (raw.reply_to_addresses or [raw.reply_to_address])]
+        if raw.reply_to_address == "" and "" not in replies:
+            # Die erste Angabe war unlesbar — die Anzeige sagt `(unreadable)` — und bleibt
+            # eine Unbekannte, auch wenn der Parser dahinter die Absenderadresse fand
+            # (Regel (b), Skeptiker O-3, fünfter Durchgang).
+            replies.append("")
     sender = (raw.from_address or _safe_parseaddr(raw.from_addr)[1]).strip().lower()
     if not any(replies) and not sender:
         # ADR-020 (b): zwei Unbekannte sind weder Übereinstimmung noch Mismatch-Beweis.

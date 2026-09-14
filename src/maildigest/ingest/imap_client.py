@@ -552,8 +552,16 @@ _HEADER_REGISTRY = HeaderRegistry()
 def _parse_address_header(raw_text: str) -> tuple[str, str, str, list[str], bool]:
     """Erste Angabe eines Adress-Headers: ``(anzeigename, adresse, domain, alle, lesbar)``.
 
-    `alle` sind die Adressen (`addr_spec`) sämtlicher brauchbarer Angaben — bei `Reply-To`
-    antworten Mailprogramme an alle, der Sanitizer vergleicht deshalb jede mit dem Absender.
+    `alle` führt die Adressaten des Headers: brauchbare Angaben mit ihrer `addr_spec`,
+    Angaben mit unbrauchbarer Domain (Domain-Literal, IDN, Unterstrich) als leerer Eintrag
+    `""`. Angaben **ohne** Domain-Teil — Wörter, quotierte Lokalteile, die Null-Adresse `<>`,
+    die der Parser aus defekten Token bildet — sind keine Adressaten, wie beim Orakel
+    `email.policy.default` (S-2: `<x@bank.example> (Support) TOKEN` bleibt ohne Warnung).
+    Bei `Reply-To` antworten Mailprogramme an alle, der Sanitizer vergleicht deshalb jede
+    mit dem Absender; ein leerer Eintrag neben der bekannten Absenderadresse bleibt eine
+    Unbekannte, die warnt. Nur die brauchbaren zu führen, schaltete eine Fremdadresse mit
+    Domain-Literal stumm, sobald dahinter die Absenderadresse stand (Skeptiker O-3, fünfter
+    Durchgang: `Foo <y@[evil.example]>, x@bank.example`).
 
     `lesbar = False`, wenn der Parser die Kopfzeile nicht verarbeiten kann (auch ein
     `RecursionError` bei tief verschachtelten Kommentaren) — der Aufrufer führt den Header
@@ -588,13 +596,19 @@ def _parse_address_header(raw_text: str) -> tuple[str, str, str, list[str], bool
             _HOSTNAME_RE.fullmatch((entry.domain or "").lower())
         )
 
+    def listed(entry: Address) -> str | None:
+        if usable(entry):
+            return entry.addr_spec
+        return "" if entry.domain else None
+
     chosen = addresses[0]
     display = chosen.display_name or ""
-    all_usable = [entry.addr_spec for entry in addresses if usable(entry)]
+    all_addresses = [spec for spec in map(listed, addresses) if spec is not None]
     if not usable(chosen):
         outlook_form = raw_text.count("@") == 1 and raw_text.count("<") <= 1
-        if len(all_usable) == 1 and outlook_form:
-            chosen = next(entry for entry in addresses if usable(entry))
+        usable_entries = [entry for entry in addresses if usable(entry)]
+        if len(usable_entries) == 1 and outlook_form:
+            chosen = usable_entries[0]
             # Die Wörter vor der Adresse legt der Parser als Lokalteile ohne Domain ab
             # (`Mueller` in `Mueller, Hans <h@…>`). Sie zählen nur als Name, wenn sie ein
             # schlichtes Wort sind — `https://evil.example/x, Hans <…>` oder
@@ -608,9 +622,11 @@ def _parse_address_header(raw_text: str) -> tuple[str, str, str, list[str], bool
                 elif _PLAIN_WORD_RE.fullmatch(word):
                     parts.append(word)
             display = " ".join(part for part in parts if part)
+            # Die Outlook-Form ist EINE Angabe; ihre Wortfragmente sind keine Unbekannten.
+            all_addresses = [chosen.addr_spec]
         else:
-            return display, "", "", all_usable, True
-    return display, chosen.addr_spec, chosen.domain, all_usable, True
+            return display, "", "", all_addresses, True
+    return display, chosen.addr_spec, chosen.domain, all_addresses, True
 
 
 def _compose_display_address(name: str, address: str) -> str:

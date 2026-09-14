@@ -367,6 +367,10 @@ class DigestComposer:
     def _sender_line(self, mail: SanitizedMail) -> str:
         """`From: <Anzeigename> (<domain>) · <TT.MM. HH:MM>`."""
         display = _one_line(scrub_plain(mail.from_display, max_chars=_MAX_DISPLAY_CHARS))
+        # Die Zeile beginnt immer mit `From: ` — ein Anzeigename, der nach dem Decodieren
+        # mit `/` oder `:` anfängt, liesse den Wächter `From: //…` als Schema aufbrechen
+        # (Skeptiker O-3, fünfter Durchgang; erste Schicht: sanitize._from_display).
+        display = display.lstrip("/:. ")
         domain = _one_line(scrub_plain(mail.from_domain, max_chars=_MAX_DOMAIN_CHARS))
         if display and domain and display.lower() != domain.lower():
             sender = f"{display} ({domain})"

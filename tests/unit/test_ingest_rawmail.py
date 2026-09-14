@@ -1573,3 +1573,100 @@ def test_o3_outlook_anzeige_nimmt_keine_url_als_namen() -> None:
         sanitized = MailSanitizer().sanitize(raw)
         assert sanitized.from_display == "Hans", sanitized.from_display
         assert not sanitized.from_display.startswith(("/", ":"))
+
+
+def _o3_reply_mail(reply_to: bytes) -> bytes:
+    return (
+        b"Return-Path: <x@bank.example>\r\nMessage-ID: <mr@y>\r\n"
+        b"From: Bank <x@bank.example>\r\nReply-To: " + reply_to + b"\r\n"
+        b"To: m@example.org\r\nSubject: Hi\r\nDate: Mon, 01 Sep 2026 10:00:00 +0200\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nHallo.\r\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "reply_to",
+    [
+        b"Foo <y@[evil.example]>, x@bank.example",
+        b"y@\xc3\xabvil.example, x@bank.example",
+        b"Support <y@evil_example.com>, x@bank.example",
+        b"g: Foo <y@[1.2.3.4]>, x@bank.example;",
+        b'"y@evil.example", <x@bank.example>',
+        b"x@bank.example, Foo <y@[evil.example]>",
+        b"x@bank.example, y@\xc3\xabvil.example",
+        b"x@bank.example, y@-evil.example",
+    ],
+)
+def test_o3_unbrauchbare_reply_to_angabe_bleibt_eine_unbekannte(reply_to: bytes) -> None:
+    """Fünfter Skeptiker: die spätere Absenderadresse schaltete die unlesbare Fremdadresse stumm."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_reply_mail(reply_to)))
+    assert "x@bank.example" in raw.reply_to_addresses
+    assert "" in raw.reply_to_addresses or raw.reply_to_address == ""
+    assert MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch
+
+
+def test_o3_outlook_form_im_reply_to_ist_kein_fehlalarm() -> None:
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_reply_mail(b"Mueller, Hans <x@bank.example>")))
+    assert raw.reply_to_addresses == ["x@bank.example"]
+    assert not MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch
+    literal = _o3_reply_mail(b"Foo <y@[evil.example]>, x@bank.example")
+    raw = build_raw_mail(MailMessage.from_bytes(literal))
+    assert raw.reply_to_addresses == ["", "x@bank.example"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        b"&#47;&#47;evil.example",
+        b"&sol;&sol;evil.example",
+        b"&#x2F;&#x2F;evil.example",
+        b"&amp;#47;&amp;#47;evil.example",
+        b"=?utf-8?B?JiM0NzsmIzQ3O2V2aWwuZXhhbXBsZQ==?=",
+    ],
+)
+def test_o3_entities_im_anzeigenamen_brechen_die_from_zeile_nicht(name: bytes) -> None:
+    """Fünfter Skeptiker: `&#47;&#47;` wurde erst im Composer zu `//`, der Wächter brach `From:`."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.models import CriticVerdict, Summary
+    from maildigest.output.composer import DigestComposer
+    from maildigest.sanitize import MailSanitizer
+
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(b'"' + name + b'" <x@bank.example>')))
+    sanitized = MailSanitizer().sanitize(raw)
+    assert not sanitized.from_display.startswith(("/", ":", "&"))
+    summary = Summary(headline="Hi", summary_text="Hallo.", importance="normal")
+    message = DigestComposer().compose(sanitized, summary, CriticVerdict(phishing_risk="low"))
+    lines = [line for line in "\n".join(message.parts).splitlines() if line.startswith("From")]
+    assert lines and all(line.startswith("From: ") for line in lines)
+
+
+@pytest.mark.parametrize(
+    "reply_to",
+    [
+        b"x@bank.example, TOKEN",
+        b"x@bank.example, y@evil.example.",
+        b"<x@bank.example> (Support) TOKEN",
+    ],
+)
+def test_o3_angaben_ohne_domain_sind_keine_adressaten(reply_to: bytes) -> None:
+    """Wie das Orakel `email.policy.default` (S-2): Wörter und Null-Adressen zählen nicht."""
+    from imap_tools import MailMessage
+
+    from maildigest.ingest.imap_client import build_raw_mail
+    from maildigest.sanitize import MailSanitizer
+
+    raw = build_raw_mail(MailMessage.from_bytes(_o3_reply_mail(reply_to)))
+    assert raw.reply_to_addresses == ["x@bank.example"]
+    assert not MailSanitizer().sanitize(raw).sanitization_report.reply_to_mismatch
