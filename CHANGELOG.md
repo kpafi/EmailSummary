@@ -4,7 +4,7 @@ Alle nennenswerten Änderungen an MailDigest. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die Versionsnummern folgen
 [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.2.0] — 2026-09-12
+## [0.2.0] — 2026-09-14
 
 Erstes öffentliches Release. Seit 0.1.0 ist MailDigest erstmals gegen echte Gegenstellen
 gelaufen (ein Spiegelpostfach bei web.de, ein Modell über OpenRouter, ein Telegram-Bot) und
@@ -205,6 +205,17 @@ docs/TESTRUNDE-2.md):
   Ausserdem konnte eine Antwortadresse mit angehängtem Text die Warnung „abweichende
   Antwortadresse" zum Schweigen bringen; ein vorhandener, aber unlesbarer `Reply-To` gilt
   jetzt als Warnfall (HC2-2, ADR-020).
+- **Nachgezogen (Nachfixrunde O-3, sechs Griffe):** Die Absender-Erkennung aus den Iterationen
+  zwei bis fünf liess sich mit regelwidrig kodierten Wörtern (`=?utf-8?Q?Support?(?=`) weiter
+  täuschen: Das Werkzeug zeigte `bank.example` ohne Warnung, wo das Mailprogramm
+  `real@evil.example` zeigt. Absender und Antwortadresse liest jetzt der RFC-5322-Parser der
+  Standardbibliothek; Maske, Klammer-Rückfall und Kommentar-Scanner sind entfernt. Die Regel,
+  in sechs Skeptiker-Durchgängen über mehr als 60 000 Header-Formen gegen
+  `email.policy.default` geprüft: nie eine Domain, die das Mailprogramm nicht zeigt, nie
+  „unbekannt" ohne Warnung, keine Ausnahme, keine Blockade. Mailprogramme antworten an
+  **alle** Reply-To-Adressen, deshalb zählt jede; eine unlesbare Antwortadresse neben einem
+  bekannten Absender warnt; HTML-Entities im Anzeigenamen werden vor der Prüfung aufgelöst
+  (O-3, ADR-020-Nachträge).
 - **Nachgezogen (fünfte Iteration):** Die teuerste zulässige Mail kostet nicht 2,7, sondern
   3,6 bis 5,1 Sekunden CPU in der Sanitisierung — mehr als die Hälfte davon im MIME-Parser
   der Standardbibliothek, den kein eigenes Budget erreicht. Die Zahl ist in der Dokumentation
