@@ -1554,7 +1554,8 @@ def test_o3_adress_rueckfall_der_anzeige_wird_gescrubbt() -> None:
     marker_local = _o3_mail(b'"[Link #1: https://evil.example]"@bank.example')
     raw = build_raw_mail(MailMessage.from_bytes(marker_local))
     sanitized = MailSanitizer().sanitize(raw)
-    assert sanitized.sanitization_report.forged_markers >= 1 or "https://" not in sanitized.from_display
+    report = sanitized.sanitization_report
+    assert report.forged_markers >= 1 or "https://" not in sanitized.from_display
 
 
 def test_o3_outlook_anzeige_nimmt_keine_url_als_namen() -> None:
@@ -1563,7 +1564,10 @@ def test_o3_outlook_anzeige_nimmt_keine_url_als_namen() -> None:
     from maildigest.ingest.imap_client import build_raw_mail
     from maildigest.sanitize import MailSanitizer
 
-    forms = (b"https://evil.example/x, Hans <x@bank.example>", b"bank.example, Hans <x@evil.example>")
+    forms = (
+        b"https://evil.example/x, Hans <x@bank.example>",
+        b"bank.example, Hans <x@evil.example>",
+    )
     for header in forms:
         raw = build_raw_mail(MailMessage.from_bytes(_o3_mail(header)))
         sanitized = MailSanitizer().sanitize(raw)
