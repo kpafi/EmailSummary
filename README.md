@@ -481,3 +481,5 @@ docs/TESTING.md §7). Die verbindlichen Anforderungen stehen in
 [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), das Sicherheitsmodell samt Invarianten-Review
 in [docs/SECURITY.md](docs/SECURITY.md). Fehler und Befunde bitte als GitHub-Issue mit
 Repro-Schritten, gern im Format aus docs/TESTING.md §3.
+
+Lizenz: MIT, siehe [LICENSE](LICENSE).
