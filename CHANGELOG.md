@@ -249,8 +249,8 @@ docs/TESTRUNDE-2.md):
   Abrufzyklus, weil der Parser der Standardbibliothek vor jeder Schranke läuft (O-2). Der
   Platzhalter einer unparsbaren Mail kann eine spätere echte Mail mit gleicher Message-ID
   als Duplikat unterdrücken (O-6). Antwortet der Server auf den Abruf einer einzelnen Mail
-  dauerhaft mit `NO`, blockiert diese Mail den Abruf (O-7). Dazu vier niedrige Punkte
-  (O-4, O-5, O-8, O-9) und die Nachfix-Pakete NF-2 bis NF-7 aus docs/ABNAHME-FIXRUNDE.md §8.
+  dauerhaft mit `NO`, blockiert diese Mail den Abruf (O-7). Dazu sechs niedrige Punkte
+  (O-4, O-5, O-8 bis O-11) und die Nachfix-Pakete NF-2 bis NF-7 aus docs/ABNAHME-FIXRUNDE.md §8.
   Die beiden zuvor hohen Befunde O-1 (Gift-Mail stoppt den Abruf) und O-3 (Absender-Domain
   fälschbar) sind vor diesem Release behoben.
 
