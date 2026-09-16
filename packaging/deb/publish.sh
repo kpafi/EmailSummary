@@ -48,10 +48,14 @@ apt-ftparchive \
 mv dists/stable/Release.tmp dists/stable/Release
 
 if [ -n "$key" ]; then
+  # --pinentry-mode loopback because a CI runner has no pinentry: without it
+  # gpg tries to open a prompt on a terminal that is not there and fails with
+  # "Inappropriate ioctl for device", even though the key has no passphrase.
+  sign="gpg --batch --yes --pinentry-mode loopback --default-key $key"
   # InRelease (embedded signature) is what current apt versions fetch;
   # Release.gpg stays next to it for older clients.
-  gpg --batch --yes --default-key "$key" --clearsign -o dists/stable/InRelease dists/stable/Release
-  gpg --batch --yes --default-key "$key" -abs -o dists/stable/Release.gpg dists/stable/Release
+  $sign --clearsign -o dists/stable/InRelease dists/stable/Release
+  $sign -abs -o dists/stable/Release.gpg dists/stable/Release
   echo "==> signed with $key"
 else
   echo "==> WARNING: not signed (no key id given)" >&2
