@@ -1,0 +1,26 @@
+Package: maildigest
+Architecture: all
+Version: 0.2.0
+Priority: optional
+Section: mail
+Maintainer: Samuel Krapf <samukrapf@gmail.com>
+Installed-Size: 730
+Depends: python3-bs4, python3-httpx, python3-imap-tools, python3-lxml, python3-pydantic, python3:any
+Filename: pool/main/m/maildigest/maildigest_0.2.0_all.deb
+Size: 201916
+MD5sum: c30f5a0f1ea2e7e76557ed36ba7de7ef
+SHA1: 2d14ec712eb677c4bb59c13ee22a86dc887e4625
+SHA256: 3b4f83b3be461569ccaba6a74b85dacb08895b6fa1a8fdfce42eee3123ae1c73
+SHA512: e537a68bb53141cf4e2598c451d16c735b818b7b83ee6c06bc1d49fcfbe8b61efb61829959ece343d8a0ac6e8cd03c6db8b26147bf6f6a39183c2a2bc308ee74
+Homepage: https://github.com/kpafi/maildigest
+Description: summarises mail from a mirror mailbox into text-only digests
+ MailDigest reads a mirror mailbox over IMAP, strips every message down to plain
+ text, filters it by importance, checks it for phishing traits and delivers a
+ text-only digest to a messenger such as Telegram or Discord.
+ .
+ Nothing that arrives by mail is ever rendered, executed or followed: HTML is
+ converted to text, attachments are read only as text, links are shown as bare
+ strings and the digest itself is plain text. A language model is optional --
+ without one MailDigest still delivers a labelled extract and every
+ deterministic warning.
+

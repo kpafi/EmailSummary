@@ -1,0 +1,20 @@
+Architectures: all
+Codename: stable
+Components: main
+Date: Wed, 16 Sep 2026 23:09:40 +0000
+Description: MailDigest — own package repository
+Label: MailDigest
+Origin: MailDigest
+Suite: stable
+MD5Sum:
+ 9f2f6526cd75c2b3b754858c8b12d13d             1295 main/binary-all/Packages
+ 99cafa0078e1f8a04d69044b85fead76              801 main/binary-all/Packages.gz
+SHA1:
+ 04b31ede58eb94b48e0de390801edc6bc36516c8             1295 main/binary-all/Packages
+ ded1b29589afbaf99ae2e1b22a09b0b3bd25a8a2              801 main/binary-all/Packages.gz
+SHA256:
+ f29d23e7453f500069dab0fbe51f02d0706173580425944aee21318c5caccde7             1295 main/binary-all/Packages
+ 4c70fbec537c80ffc014730b1ab03ea0bd58d8af16f868740b78e04931ef47aa              801 main/binary-all/Packages.gz
+SHA512:
+ 7beb98f059255a89eecdafe836e3a06198af9e68616cc10c8e7a0b1e151df45f72030a7ff6c587e8c41bceaac26a0172ae69f70ebfa4163746bbf77be04486e1             1295 main/binary-all/Packages
+ 89e77ef283e760519d72bd0c8fe38f2a6eca5db8971cc1e78a6b8d6d81744b0a5995266f237a8b16d05807ebcc36958dc18174720cf962e7a109031c9e09eeea              801 main/binary-all/Packages.gz
