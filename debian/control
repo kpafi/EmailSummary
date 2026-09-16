@@ -1,0 +1,27 @@
+Source: maildigest
+Section: mail
+Priority: optional
+Maintainer: Samuel Krapf <samukrapf@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               pybuild-plugin-pyproject,
+               python3-all,
+               python3-hatchling,
+Standards-Version: 4.7.0
+Homepage: https://github.com/kpafi/EmailSummary
+Rules-Requires-Root: no
+
+Package: maildigest
+Architecture: all
+Depends: ${python3:Depends},
+         ${misc:Depends},
+Description: summarises mail from a mirror mailbox into text-only digests
+ MailDigest reads a mirror mailbox over IMAP, strips every message down to plain
+ text, filters it by importance, checks it for phishing traits and delivers a
+ text-only digest to a messenger such as Telegram or Discord.
+ .
+ Nothing that arrives by mail is ever rendered, executed or followed: HTML is
+ converted to text, attachments are read only as text, links are shown as bare
+ strings and the digest itself is plain text. A language model is optional --
+ without one MailDigest still delivers a labelled extract and every
+ deterministic warning.

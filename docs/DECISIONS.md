@@ -3122,3 +3122,37 @@ lokaler Cache ist (ADR-058).
   der Vertrag bleibt SPEC-CLI (Wortlaut der Fragen, Zeilen, Exit-Codes); `test_spec_cli`
   hält weiterhin Optionen und Kommandos zwischen Parser und Spezifikation synchron.
   `--man` ist eine reine Ausgabeoption ohne Kommando und ohne Nebenwirkung.
+
+## ADR-088: Auslieferung über eigene Paketquellen statt über die Distributionen
+- Status: accepted
+- WP / Datum: Auslieferung, 2026-09-16
+- Kontext: `pipx install .` verlangt vom Nutzer, das Repository zu kennen, zu klonen und
+  Aktualisierungen von Hand nachzuziehen. Gewünscht war Installation und vor allem
+  *Aktualisierung* über die gewohnten Systemwerkzeuge `apt` und `dnf`. Die Aufnahme in
+  Debian oder Fedora selbst kostet ITP-Bug, Sponsor und Policy-Konformität und friert die
+  Version danach am Release-Zyklus der Distribution ein.
+- Entscheidung: Eine **eigene, signierte Apt-Paketquelle** auf GitHub Pages (Zweig
+  `gh-pages`, Suite `stable`, Komponente `main`, Architektur `all`) und ein
+  **COPR-Projekt** für dnf. Beide werden vom selben Git-Tag ausgelöst, der schon heute das
+  Release markiert (`.github/workflows/release.yml`): `.deb` bauen, in Debian, Kali und
+  Ubuntu einbauen und aufrufen, erst dann signieren und veröffentlichen; COPR baut das
+  RPM aus `packaging/rpm/maildigest.spec` über `.copr/Makefile`. Einzige Wahrheitsquelle
+  für die Version bleibt `pyproject.toml`; `debian/changelog` und die Versionszeile im
+  Spec werden im Lauf erzeugt. Die Indizes der Paketquelle berechnet `apt-ftparchive` bei
+  jedem Lauf neu aus dem Pool, der im Zweig `gh-pages` liegt. Signiert wird mit einem
+  eigenen Schlüsselpaar, das ausschließlich diese Paketquelle signiert; der öffentliche
+  Teil wird per `signed-by` genau dieser Quelle zugeordnet.
+- Alternativen: Aufnahme in Debian/Fedora — Missverhältnis aus Aufwand und Nutzen, und
+  Einfrieren in Stable; `reprepro`/`aptly` — führen eine Zustandsdatenbank, die ein
+  zustandsloser Runner künstlich wiederherstellen müsste; alle Abhängigkeiten als venv
+  unter `/opt` bündeln — verrät den Sinn eines Distributionspakets, weil
+  Sicherheitsupdates von `lxml` oder `httpx` am Programm vorbeigingen; `apt-key`
+  beziehungsweise der globale Vertrauensvorrat — abgekündigt, ein Schlüssel für alles.
+- Konsequenzen: Der private Signierschlüssel liegt ohne Passphrase als
+  GitHub-Actions-Secret; eine unbeaufsichtigte CI kann keine Passphrase eingeben, und
+  genau deshalb darf dieser Schlüssel nichts anderes als diese Paketquelle signieren. Die
+  Abhängigkeiten kommen aus der Distribution, nicht aus PyPI — in Debian sind alle sechs
+  vorhanden, in Fedora fehlt `imap-tools` und kommt als PyPI-Paket ins selbe COPR-Projekt.
+  Getragen wird nur, was die Einbauprobe bestätigt (Debian 13+ verbindlich, Kali und
+  Ubuntu 24.04 als nicht-blockierende Probe); ältere Systeme bleiben bei `pipx`. Der
+  Handbuchseiten-Umweg über `~/.local/share/man` entfällt für Paketnutzer.

@@ -4,6 +4,19 @@ All notable changes to MailDigest. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the version numbers follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Distribution
+- **Our own package repositories for apt and dnf** (ADR-088): MailDigest will become
+  installable from a signed apt repository on GitHub Pages (`apt install maildigest`) and
+  from a COPR project (`dnf install maildigest`). Both hang off the release tag:
+  `.github/workflows/release.yml` builds the `.deb`, test-installs it on Debian, Kali and
+  Ubuntu, signs it and triggers the COPR build. The plan with all steps is in
+  [docs/PLAN-PAKETE.md](docs/PLAN-PAKETE.md) (German); the instructions in the README will
+  only be switched over once the repository really carries packages.
+- Package users get the manual page under `/usr/share/man/man1` — `man maildigest` works
+  without the copy step from the README.
+
 ## [0.2.0] — 2026-09-14
 
 The first public release. Since 0.1.0, MailDigest has run against real counterparts for the

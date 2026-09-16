@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="de">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MailDigest — Paketquellen</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 46rem; margin: 3rem auto; padding: 0 1.2rem;
+         font: 16px/1.6 system-ui, sans-serif; }
+  h1 { margin-bottom: .2rem; }
+  p.sub { margin-top: 0; opacity: .75; }
+  pre { padding: .9rem 1rem; overflow-x: auto; border-radius: 6px;
+        background: rgba(127,127,127,.14); }
+  code { font-family: ui-monospace, monospace; }
+  footer { margin-top: 3rem; font-size: .9rem; opacity: .7; }
+</style>
+
+<h1>MailDigest</h1>
+<p class="sub">Version @VERSION@ — Paketquellen für apt und dnf.
+<a href="https://github.com/kpafi/EmailSummary">Quelltext auf GitHub</a></p>
+
+<h2>Debian, Ubuntu, Kali (apt)</h2>
+<p>Einmalig Schlüssel und Quelle eintragen:</p>
+<pre><code>curl -fsSL https://kpafi.github.io/EmailSummary/apt/maildigest-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/maildigest-archive-keyring.gpg &gt; /dev/null
+
+echo "deb [signed-by=/usr/share/keyrings/maildigest-archive-keyring.gpg] \
+https://kpafi.github.io/EmailSummary/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/maildigest.list
+
+sudo apt update &amp;&amp; sudo apt install maildigest</code></pre>
+<p>Danach liefert <code>apt upgrade</code> neue Versionen automatisch mit.
+Getragen werden Debian 13 und neuer, Kali Rolling und Ubuntu 24.04 und neuer.</p>
+
+<h2>Fedora (dnf)</h2>
+<pre><code>sudo dnf copr enable kpafi/maildigest
+sudo dnf install maildigest</code></pre>
+
+<h2>Ohne Paketquelle</h2>
+<pre><code>pipx install git+https://github.com/kpafi/EmailSummary</code></pre>
+
+<footer>Die Pakete sind mit dem Repository-Schlüssel signiert; apt prüft die
+Signatur bei jedem Abruf. Der Schlüssel wird per <code>signed-by</code> genau
+dieser Quelle zugeordnet und gilt für nichts sonst im System.</footer>
+</html>

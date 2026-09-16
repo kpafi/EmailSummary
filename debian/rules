@@ -1,0 +1,8 @@
+#!/usr/bin/make -f
+# Bauregel für das Debian-Paket. pybuild erkennt das PEP-517-Backend (Hatchling)
+# und das src-Layout aus pyproject.toml von selbst; der Konsoleneinstiegspunkt
+# [project.scripts] wird dabei zu /usr/bin/maildigest.
+export PYBUILD_NAME = maildigest
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
