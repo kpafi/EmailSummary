@@ -145,8 +145,29 @@ whoever wants summaries connects their own (free options included) in two minute
 
 ## Installation
 
-**Recommended — with `pipx`.** This puts the `maildigest` command on your path so it can be
-called from any directory:
+**Recommended on Debian 13+ and Kali — with `apt`.** MailDigest has its own signed package
+repository, so installation *and updates* run through the tool you already use. Add the key
+and the repository once:
+
+```bash
+curl -fsSL https://kpafi.github.io/maildigest/apt/maildigest-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/maildigest-archive-keyring.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/maildigest-archive-keyring.gpg] https://kpafi.github.io/maildigest/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/maildigest.list
+sudo apt update && sudo apt install maildigest
+```
+
+From then on `apt upgrade` carries new versions along, and `man maildigest` works without
+the copy step below. The packages are signed with the repository key; `signed-by` binds
+that key to this one repository and to nothing else on your system.
+
+**Which systems this covers.** Verified on every release: **Debian 13 (trixie) and newer**
+and **Kali Rolling**. Ubuntu is *not* covered — 24.04 LTS ships pydantic 1.10 where the
+code needs pydantic 2, and 25.04 dropped `python3-imap-tools` altogether. On Ubuntu, and on
+anything else, use `pipx` below; it works the same and updates with one command.
+
+**Everywhere else — with `pipx`.** This puts the `maildigest` command on your path so it can
+be called from any directory:
 
 ```bash
 pipx install .
@@ -154,9 +175,7 @@ pipx install .
 
 If `pipx` is missing, your system package manager has it: `sudo apt install pipx`
 (Debian/Ubuntu/Kali), `sudo dnf install pipx` (Fedora/RHEL), on macOS `brew install pipx`.
-Then run `pipx ensurepath` once and open a new terminal. MailDigest itself is not in any
-distribution repository — there is no `apt install maildigest` or `dnf install
-maildigest`; it is always installed from this directory.
+Then run `pipx ensurepath` once and open a new terminal.
 
 **Careful when you change the source:** `pipx install .` creates a *copy* of the package.
 Changes to the source then **do not** affect the installed command — you keep working with

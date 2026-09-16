@@ -16,6 +16,9 @@ All notable changes to MailDigest. The format follows
   only be switched over once the repository really carries packages.
 - Package users get the manual page under `/usr/share/man/man1` — `man maildigest` works
   without the copy step from the README.
+- Supported through apt: **Debian 13 and newer** and **Kali Rolling**, both verified on
+  every release by installing the built package and running it. Ubuntu is not covered —
+  see the installation section of the README; `pipx` remains the way there.
 
 ### Changed
 - **Lower bounds on two dependencies**: `pydantic>=2` (the code uses `ConfigDict` and

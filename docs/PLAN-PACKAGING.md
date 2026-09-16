@@ -108,12 +108,11 @@ A `.deb` is not portable across distributions, even though `Architecture: all` s
 is. What is supported is what the install test confirms; the list goes into the README
 afterwards:
 
-- **Debian 13 (trixie) and newer** — carries all six dependencies.
-- **Kali Rolling** — same base, verified locally here.
-- **Ubuntu 26.04 LTS and newer** — in the install test as a non-blocking probe. It is the
-  first Ubuntu that carries every dependency in a usable version.
-- **Ubuntu 25.04 and older, Debian 12** — explicitly **not** supported. Measured on the
-  first two runs and then checked against the Ubuntu archive:
+- **Debian 13 (trixie) and newer** — carries all six dependencies, blocking in the
+  install test.
+- **Kali Rolling** — same base, green in every run so far.
+- **No Ubuntu release** — not through apt. Measured on the first runs and then checked
+  against the Ubuntu archive:
 
   | Ubuntu | `imap-tools` | `pydantic` | usable |
   |---|---|---|---|
@@ -126,8 +125,14 @@ afterwards:
   24.04 installed cleanly in the first run and then failed to start: it ships pydantic
   1.10, and the code needs pydantic 2 (`ConfigDict`, `model_validator`). That is what the
   lower bounds in `debian/control` are for — apt now refuses the installation instead of
-  creating one that cannot run. Older systems keep `pipx`, where pip enforces the same
-  bounds from `pyproject.toml`.
+  creating one that cannot run.
+
+  26.04 LTS carries every dependency in a usable version and should work, but the probe was
+  red and the reason was **not investigated** — a deliberate decision, not a finding. Until
+  someone reads that log, Ubuntu is not claimed as supported and goes through `pipx`, where
+  pip enforces the same bounds from `pyproject.toml`. The probe was taken out of the matrix
+  rather than left permanently red, because a check that is always red teaches people to
+  ignore red.
 
 A single suite directory `stable` is enough as long as one package serves every supported
 system. Should that fall apart later (because Ubuntu needs an older dependency, say), it
