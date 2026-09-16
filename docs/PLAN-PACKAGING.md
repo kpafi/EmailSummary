@@ -14,9 +14,9 @@ can take, and the alternatives deliberately not chosen. The decision itself is A
 Debian, Ubuntu, Kali — add the repository once, then live with `apt` from there on:
 
 ```bash
-curl -fsSL https://kpafi.github.io/EmailSummary/apt/maildigest-archive-keyring.gpg \
+curl -fsSL https://kpafi.github.io/maildigest/apt/maildigest-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/maildigest-archive-keyring.gpg > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/maildigest-archive-keyring.gpg] https://kpafi.github.io/EmailSummary/apt stable main" \
+echo "deb [signed-by=/usr/share/keyrings/maildigest-archive-keyring.gpg] https://kpafi.github.io/maildigest/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/maildigest.list
 sudo apt update && sudo apt install maildigest
 ```
@@ -241,7 +241,7 @@ more than a release that did not happen.
 Until the first **green** release run, the installation section of the README keeps `pipx`
 as the only way. Instructions pointing at a still-empty repository produce a `404` for the
 user and the suspicion that something is being promised here that does not exist. As soon
-as `https://kpafi.github.io/EmailSummary/apt/dists/stable/InRelease` can be fetched, the
+as `https://kpafi.github.io/maildigest/apt/dists/stable/InRelease` can be fetched, the
 blocks from section 1 of this plan move to the top of the installation section, `pipx` moves
 to second place ("for systems without the repository, and for development"), and the
 supported distributions from section 4 are named there.

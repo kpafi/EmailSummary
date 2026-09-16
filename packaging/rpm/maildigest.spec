@@ -7,7 +7,7 @@ Release:        1%{?dist}
 Summary:        Summarises mail from a mirror mailbox into text-only digests
 
 License:        MIT
-URL:            https://github.com/kpafi/EmailSummary
+URL:            https://github.com/kpafi/maildigest
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      noarch
 

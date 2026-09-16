@@ -17,15 +17,15 @@
 
 <h1>MailDigest</h1>
 <p class="sub">Version @VERSION@ — package repositories for apt and dnf.
-<a href="https://github.com/kpafi/EmailSummary">Source on GitHub</a></p>
+<a href="https://github.com/kpafi/maildigest">Source on GitHub</a></p>
 
 <h2>Debian, Ubuntu, Kali (apt)</h2>
 <p>Add the key and the repository once:</p>
-<pre><code>curl -fsSL https://kpafi.github.io/EmailSummary/apt/maildigest-archive-keyring.gpg \
+<pre><code>curl -fsSL https://kpafi.github.io/maildigest/apt/maildigest-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/maildigest-archive-keyring.gpg &gt; /dev/null
 
 echo "deb [signed-by=/usr/share/keyrings/maildigest-archive-keyring.gpg] \
-https://kpafi.github.io/EmailSummary/apt stable main" \
+https://kpafi.github.io/maildigest/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/maildigest.list
 
 sudo apt update &amp;&amp; sudo apt install maildigest</code></pre>
@@ -37,7 +37,7 @@ Supported are Debian 13 and newer, Kali Rolling and Ubuntu 24.04 and newer.</p>
 sudo dnf install maildigest</code></pre>
 
 <h2>Without a package repository</h2>
-<pre><code>pipx install git+https://github.com/kpafi/EmailSummary</code></pre>
+<pre><code>pipx install git+https://github.com/kpafi/maildigest</code></pre>
 
 <footer>The packages are signed with the repository key; apt verifies the
 signature on every fetch. The key is bound to this one repository via

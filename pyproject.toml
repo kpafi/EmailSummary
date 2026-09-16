@@ -21,8 +21,8 @@ dependencies = [
 
 # Konsolen-Einstiegspunkt der CLI (WP9, ADR-052); gleichwertig: `python -m maildigest`.
 [project.urls]
-Homepage = "https://github.com/kpafi/EmailSummary"
-Changelog = "https://github.com/kpafi/EmailSummary/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/kpafi/maildigest"
+Changelog = "https://github.com/kpafi/maildigest/blob/main/CHANGELOG.md"
 
 [project.scripts]
 maildigest = "maildigest.cli:run_cli"

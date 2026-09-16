@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: maildigest
-Upstream-Contact: https://github.com/kpafi/EmailSummary
-Source: https://github.com/kpafi/EmailSummary
+Upstream-Contact: https://github.com/kpafi/maildigest
+Source: https://github.com/kpafi/maildigest
 
 Files: *
 Copyright: 2026 kpafi
