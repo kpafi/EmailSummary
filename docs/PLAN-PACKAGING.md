@@ -79,6 +79,13 @@ Whether the distribution versions really carry the program is not assumed but **
 the workflow installs the built `.deb` in every target container and runs `maildigest --help`
 and `maildigest --man` there. If that fails, there is no release.
 
+That install test is also the reason `debian/rules` switches pybuild's own test step off.
+pybuild would run `python3 -m unittest discover` right after the build, which imports the
+package — but the runtime dependencies are `Depends`, not `Build-Depends`, so they are
+absent from the build container and that import can only fail. Adding them as build
+dependencies would buy an import check in the build directory, where nothing is being
+measured that the install test does not measure better on the real, installed package.
+
 ## 4. Reach and limits
 
 A `.deb` is not portable across distributions, even though `Architecture: all` suggests it
@@ -156,7 +163,7 @@ and not by a tool — a private key someone else generated is not a private key.
 | File | Purpose |
 |---|---|
 | `debian/control` | package name, dependencies, description |
-| `debian/rules` | build rule (`dh` + `pybuild`, detects Hatchling on its own) |
+| `debian/rules` | build rule (`dh` + `pybuild`, detects Hatchling on its own; the build-time test step is off, see section 3) |
 | `debian/copyright` | machine-readable format 1.0, MIT, copyright holder kpafi |
 | `debian/maildigest.manpages` | puts `man/maildigest.1` into `/usr/share/man/man1` |
 | `debian/source/format` | `3.0 (native)` — upstream and downstream are the same project |
