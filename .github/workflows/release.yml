@@ -1,9 +1,9 @@
 name: Release
 
-# Ausgelöst vom Release-Tag. Ein Tag, drei Ziele: GitHub-Release, Apt-Paketquelle
-# auf GitHub Pages, COPR für dnf. Schlägt ein Schritt fehl, wird nichts
-# veröffentlicht — ein kaputtes Paket in einer Paketquelle ist teurer als ein
-# ausgefallenes Release. Begründung der Architektur: docs/PLAN-PAKETE.md, ADR-088.
+# Triggered by the release tag. One tag, three destinations: the GitHub release,
+# the apt repository on GitHub Pages, COPR for dnf. If one step fails nothing is
+# published — a broken package in a repository costs more than a release that did
+# not happen. Rationale: docs/PLAN-PACKAGING.md, ADR-088.
 
 on:
   push:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   version:
-    name: Version prüfen
+    name: Check the version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -27,13 +27,13 @@ jobs:
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "Tag $GITHUB_REF_NAME passt nicht zu pyproject.toml ($version)" >&2
+            echo "tag $GITHUB_REF_NAME does not match pyproject.toml ($version)" >&2
             exit 1
           fi
           echo "MailDigest $version"
 
   python:
-    name: sdist und Wheel
+    name: sdist and wheel
     needs: version
     runs-on: ubuntu-latest
     steps:
@@ -49,12 +49,12 @@ jobs:
           path: dist/*
 
   deb:
-    name: .deb bauen
+    name: Build the .deb
     needs: version
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
-      - name: Bauwerkzeuge
+      - name: Build tools
         run: |
           set -eux
           apt-get update
@@ -62,15 +62,15 @@ jobs:
             build-essential debhelper dh-python pybuild-plugin-pyproject \
             python3-all python3-hatchling devscripts git ca-certificates
       - uses: actions/checkout@v4
-      - name: Bauen
+      - name: Build
         run: bash packaging/deb/build.sh "${{ needs.version.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
           name: deb
           path: dist/deb/*.deb
 
-  einbauprobe:
-    name: Einbauprobe ${{ matrix.image }}
+  install-test:
+    name: Install test ${{ matrix.image }}
     needs: [version, deb]
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.optional }}
@@ -89,12 +89,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: deb
-      - name: Installieren und aufrufen
+      - name: Install and run
         run: |
           set -eux
           apt-get update
-          # Der Punkt vor dem Dateinamen ist Absicht: So löst apt die
-          # Abhängigkeiten der lokalen Datei aus der Distribution auf.
+          # The leading ./ is deliberate: that is what makes apt resolve the
+          # dependencies of the local file from the distribution.
           apt-get install -y ./maildigest_*.deb
           maildigest --help > /dev/null
           maildigest --man | head -5
@@ -102,8 +102,8 @@ jobs:
           python3 -m maildigest --help > /dev/null
 
   apt-repo:
-    name: Apt-Paketquelle veröffentlichen
-    needs: [version, deb, einbauprobe]
+    name: Publish the apt repository
+    needs: [version, deb, install-test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -113,21 +113,21 @@ jobs:
         with:
           name: deb
           path: dist/deb
-      - name: Werkzeuge
+      - name: Tools
         run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
-      - name: Signierschlüssel einlesen
+      - name: Import the signing key
         env:
           KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
         run: |
           set -eu
           if [ -z "${KEY:-}" ]; then
-            echo "Secret APT_GPG_PRIVATE_KEY fehlt — ohne Signatur wird nicht veröffentlicht." >&2
+            echo "secret APT_GPG_PRIVATE_KEY missing — nothing is published unsigned." >&2
             exit 1
           fi
           printf '%s' "$KEY" | gpg --batch --import
           keyid="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')"
           echo "KEYID=$keyid" >> "$GITHUB_ENV"
-      - name: gh-pages auschecken
+      - name: Check out gh-pages
         run: |
           set -eux
           git config user.name "github-actions[bot]"
@@ -140,57 +140,57 @@ jobs:
             git -C ../pages checkout --orphan gh-pages
             git -C ../pages rm -rf --quiet . || true
           fi
-      - name: Einsortieren und signieren
+      - name: File in and sign
         run: |
           set -eux
           mkdir -p ../pages/apt
           bash packaging/deb/publish.sh ../pages/apt dist/deb/maildigest_*.deb "$KEYID"
-          # Der veröffentlichte Schlüssel stammt aus demselben Schlüsselpaar wie
-          # die Signatur — sie können nicht auseinanderlaufen.
+          # The published key comes from the same key pair as the signature —
+          # the two cannot drift apart.
           gpg --export "$KEYID" > ../pages/apt/maildigest-archive-keyring.gpg
           touch ../pages/.nojekyll
           sed -e "s/@VERSION@/${{ needs.version.outputs.version }}/g" \
               packaging/deb/index.html.in > ../pages/index.html
-      - name: Veröffentlichen
+      - name: Publish
         run: |
           set -eux
           cd ../pages
           git add -A
-          git commit -m "Apt-Paketquelle: MailDigest ${{ needs.version.outputs.version }}" || {
-            echo "Nichts zu veröffentlichen"; exit 0; }
+          git commit -m "Apt repository: MailDigest ${{ needs.version.outputs.version }}" || {
+            echo "nothing to publish"; exit 0; }
           git push origin gh-pages
 
   copr:
-    name: COPR anstoßen (dnf)
-    needs: [version, einbauprobe]
+    name: Trigger COPR (dnf)
+    needs: [version, install-test]
     runs-on: ubuntu-latest
     steps:
-      - name: Webhook rufen
+      - name: Call the webhook
         env:
           HOOK: ${{ secrets.COPR_WEBHOOK_URL }}
         run: |
           set -eu
           if [ -z "${HOOK:-}" ]; then
-            echo "Secret COPR_WEBHOOK_URL fehlt — dnf-Auslieferung übersprungen."
+            echo "secret COPR_WEBHOOK_URL missing — dnf delivery skipped."
             exit 0
           fi
           curl -fsSL -X POST "$HOOK" -o /dev/null
-          echo "COPR-Bau angestoßen."
+          echo "COPR build triggered."
 
   github-release:
-    name: GitHub-Release
-    needs: [version, python, deb, einbauprobe]
+    name: GitHub release
+    needs: [version, python, deb, install-test]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: anhaenge
-      # Bewusst mit dem mitgelieferten gh statt mit einer fremden Action: Ein
-      # Release-Lauf, der signiert und veröffentlicht, soll von so wenig fremdem
-      # Code wie möglich abhängen.
-      - name: Release anlegen
+          path: assets
+      # Deliberately the preinstalled gh rather than a third-party action: a
+      # release run that signs and publishes should depend on as little foreign
+      # code as possible.
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -198,4 +198,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "MailDigest ${{ needs.version.outputs.version }}" \
             --generate-notes \
-            anhaenge/python-dist/* anhaenge/deb/*.deb
+            assets/python-dist/* assets/deb/*.deb

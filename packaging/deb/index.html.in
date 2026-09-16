@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MailDigest — Paketquellen</title>
+<title>MailDigest — package repositories</title>
 <style>
   :root { color-scheme: light dark; }
   body { max-width: 46rem; margin: 3rem auto; padding: 0 1.2rem;
@@ -16,11 +16,11 @@
 </style>
 
 <h1>MailDigest</h1>
-<p class="sub">Version @VERSION@ — Paketquellen für apt und dnf.
-<a href="https://github.com/kpafi/EmailSummary">Quelltext auf GitHub</a></p>
+<p class="sub">Version @VERSION@ — package repositories for apt and dnf.
+<a href="https://github.com/kpafi/EmailSummary">Source on GitHub</a></p>
 
 <h2>Debian, Ubuntu, Kali (apt)</h2>
-<p>Einmalig Schlüssel und Quelle eintragen:</p>
+<p>Add the key and the repository once:</p>
 <pre><code>curl -fsSL https://kpafi.github.io/EmailSummary/apt/maildigest-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/maildigest-archive-keyring.gpg &gt; /dev/null
 
@@ -29,17 +29,17 @@ https://kpafi.github.io/EmailSummary/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/maildigest.list
 
 sudo apt update &amp;&amp; sudo apt install maildigest</code></pre>
-<p>Danach liefert <code>apt upgrade</code> neue Versionen automatisch mit.
-Getragen werden Debian 13 und neuer, Kali Rolling und Ubuntu 24.04 und neuer.</p>
+<p>From then on <code>apt upgrade</code> carries new versions along on its own.
+Supported are Debian 13 and newer, Kali Rolling and Ubuntu 24.04 and newer.</p>
 
 <h2>Fedora (dnf)</h2>
 <pre><code>sudo dnf copr enable kpafi/maildigest
 sudo dnf install maildigest</code></pre>
 
-<h2>Ohne Paketquelle</h2>
+<h2>Without a package repository</h2>
 <pre><code>pipx install git+https://github.com/kpafi/EmailSummary</code></pre>
 
-<footer>Die Pakete sind mit dem Repository-Schlüssel signiert; apt prüft die
-Signatur bei jedem Abruf. Der Schlüssel wird per <code>signed-by</code> genau
-dieser Quelle zugeordnet und gilt für nichts sonst im System.</footer>
+<footer>The packages are signed with the repository key; apt verifies the
+signature on every fetch. The key is bound to this one repository via
+<code>signed-by</code> and is trusted for nothing else on the system.</footer>
 </html>

@@ -12,7 +12,7 @@ All notable changes to MailDigest. The format follows
   from a COPR project (`dnf install maildigest`). Both hang off the release tag:
   `.github/workflows/release.yml` builds the `.deb`, test-installs it on Debian, Kali and
   Ubuntu, signs it and triggers the COPR build. The plan with all steps is in
-  [docs/PLAN-PAKETE.md](docs/PLAN-PAKETE.md) (German); the instructions in the README will
+  [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md); the instructions in the README will
   only be switched over once the repository really carries packages.
 - Package users get the manual page under `/usr/share/man/man1` — `man maildigest` works
   without the copy step from the README.

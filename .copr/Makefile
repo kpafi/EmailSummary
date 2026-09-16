@@ -1,9 +1,10 @@
-# COPR ruft beim SCM-Paket mit Baumethode „make_srpm" genau dieses Ziel auf:
+# For an SCM package with build method "make_srpm", COPR calls exactly this
+# target:
 #
-#     make -f .copr/Makefile srpm outdir=<verzeichnis>
+#     make -f .copr/Makefile srpm outdir=<directory>
 #
-# Es baut das Quellpaket aus dem ausgecheckten Stand — die Version kommt aus
-# pyproject.toml, damit es keine zweite Stelle mit einer Versionsnummer gibt.
+# It builds the source package from the checked-out tree — the version comes
+# from pyproject.toml, so there is no second place holding a version number.
 srpm:
 	dnf -y install rpm-build tar sed
 	set -eu; \

@@ -1,5 +1,6 @@
-# Fedora-Paket für MailDigest. Die Versionsnummer wird beim Bauen des SRPM aus
-# pyproject.toml eingesetzt (.copr/Makefile) — sie steht nirgends doppelt.
+# Fedora package for MailDigest. The version number is substituted from
+# pyproject.toml while the SRPM is built (.copr/Makefile) — it is never written
+# down twice.
 Name:           maildigest
 Version:        @VERSION@
 Release:        1%{?dist}
@@ -35,8 +36,8 @@ deterministic warning.
 %install
 %pyproject_install
 %pyproject_save_files -l maildigest
-# Die Handbuchseite liegt als shared-data schon im Wheel; der Aufruf stellt sie
-# unabhängig davon sicher, damit `man maildigest` nach der Installation trägt.
+# The manual page already ships in the wheel as shared-data; this call makes
+# sure of it independently, so that `man maildigest` works after installation.
 install -Dpm 0644 man/maildigest.1 %{buildroot}%{_mandir}/man1/maildigest.1
 
 %check
@@ -49,4 +50,4 @@ install -Dpm 0644 man/maildigest.1 %{buildroot}%{_mandir}/man1/maildigest.1
 
 %changelog
 * Wed Sep 16 2026 Samuel Krapf <samukrapf@gmail.com> - @VERSION@-1
-- Automatisch aus dem Git-Tag gebaut; Änderungen siehe CHANGELOG.md.
+- Built automatically from the git tag; see CHANGELOG.md for the changes.

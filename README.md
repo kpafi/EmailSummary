@@ -462,8 +462,9 @@ In short: the README explains the tool, `docs/` explains the program.
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | systemd unit, cron, maintenance, log events |
 | [docs/TESTING.md](docs/TESTING.md) | Test protocol and all findings logs, including the open findings (§7) |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Requirements with status |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | All design decisions as ADRs (ADR-001 to ADR-087) — *German* |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | All design decisions as ADRs (ADR-001 to ADR-088) — *German* |
 | docs/TESTRUNDE-*.md, docs/ABNAHME-FIXRUNDE.md | Records of the test rounds and the acceptance review, unchanged — *German* |
+| [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md) | How MailDigest reaches apt and dnf: repository layout, signature, release flow, and the steps only the copyright holder can take |
 | [PLAN.md](PLAN.md), [docs/PLAN-FIXRUNDE.md](docs/PLAN-FIXRUNDE.md) | How the project came about: work packages and the fix round, worked through by AI agents and decided by humans — *German* |
 
 The documents marked *German* are historical records of how the project was built and
