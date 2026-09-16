@@ -11,15 +11,28 @@ Standards-Version: 4.7.0
 Homepage: https://github.com/kpafi/maildigest
 Rules-Requires-Root: no
 
-# python3-pdfminer is spelled out because dh_python3 cannot map the dist name
-# pdfminer.six to it and drops the dependency without failing the build. It is
-# imported lazily in a subprocess (sanitize/extract_pdf.py), so nothing notices
-# at start-up -- PDF extraction would simply be dead on a user's machine.
+# The dependencies below are spelled out because dh_python3 does not carry them
+# over from pyproject.toml faithfully, and fails silently when it cannot:
+#
+#   * python3-pdfminer -- dh_python3 cannot map the dist name pdfminer.six to it
+#     and drops the dependency without failing the build. Nothing notices,
+#     because pdfminer is imported lazily inside a subprocess
+#     (sanitize/extract_pdf.py): the program starts fine and PDF extraction is
+#     simply dead on the user's machine.
+#   * the lower bounds -- dh_python3 emits unversioned dependencies even where
+#     pyproject.toml states a minimum. Without them apt installs the package on
+#     Ubuntu 24.04, whose pydantic 1.10 the code cannot use, and the program
+#     falls apart at start-up instead of never being installed.
+#
+# ${python3:Depends} still contributes the same names unversioned; apt applies
+# both relations, so the stricter one wins.
 Package: maildigest
 Architecture: all
 Depends: ${python3:Depends},
          ${misc:Depends},
          python3-pdfminer,
+         python3-pydantic (>= 2),
+         python3-imap-tools (>= 1.0),
 Description: summarises mail from a mirror mailbox into text-only digests
  MailDigest reads a mirror mailbox over IMAP, strips every message down to plain
  text, filters it by importance, checks it for phishing traits and delivers a

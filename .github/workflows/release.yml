@@ -82,12 +82,12 @@ jobs:
             optional: false
           - image: "kalilinux/kali-rolling"
             optional: true
-          # Ubuntu 24.04 LTS is deliberately not in the matrix: it ships
-          # pydantic 1.10, and the code needs pydantic 2. The dependency in
-          # pyproject.toml says so, so apt there refuses the installation
-          # instead of producing one that cannot start. 25.04 is the first
-          # Ubuntu that carries a new enough pydantic.
-          - image: "ubuntu:25.04"
+          # 26.04 LTS is the first Ubuntu that carries every dependency in a
+          # usable version (imap-tools 1.10, pydantic 2.12, pdfminer). 22.04 and
+          # 24.04 have imap-tools 0.5x and pydantic 1.x; 25.04 dropped
+          # python3-imap-tools entirely. The versioned Depends make apt refuse
+          # the installation there rather than create one that cannot start.
+          - image: "ubuntu:26.04"
             optional: true
     container: ${{ matrix.image }}
     steps:

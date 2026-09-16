@@ -86,7 +86,14 @@ shipped five of its six dependencies. Nothing noticed, because `pdfminer` is imp
 lazily inside a subprocess (`sanitize/extract_pdf.py`), so `maildigest --help` runs
 happily and PDF extraction would have been dead on the user's machine. It is therefore
 spelled out in `debian/control`, and the install test now imports every runtime dependency
-instead of only starting the program. The second finding is Ubuntu 24.04 in section 4.
+instead of only starting the program.
+
+The same applies to the lower bounds: `dh_python3` emits unversioned dependencies even
+where `pyproject.toml` states a minimum, so `python3-pydantic (>= 2)` and
+`python3-imap-tools (>= 1.0)` are written out in `debian/control` as well. Both findings
+have the same shape — the tool drops what it cannot resolve and the build stays green —
+which is why the package's own `Depends` line is read back from the published index after
+every run rather than taken on trust. The second finding is Ubuntu in section 4.
 
 That install test is also the reason `debian/rules` switches pybuild's own test step off.
 pybuild would run `python3 -m unittest discover` right after the build, which imports the
@@ -103,13 +110,24 @@ afterwards:
 
 - **Debian 13 (trixie) and newer** — carries all six dependencies.
 - **Kali Rolling** — same base, verified locally here.
-- **Ubuntu 25.04 and newer** — in the install test as a non-blocking probe.
-- **Ubuntu 24.04 LTS and older, Debian 12** — explicitly **not** supported. Measured, not
-  assumed: the first run installed cleanly on 24.04 and then failed to start, because
-  Ubuntu 24.04 ships `python3-pydantic` 1.10 while the code needs pydantic 2
-  (`ConfigDict`, `model_validator`). The lower bounds in `pyproject.toml` now carry that
-  into the package, so apt there refuses the installation rather than creating one that
-  cannot run. Older systems keep `pipx` — with the same constraint, enforced by pip.
+- **Ubuntu 26.04 LTS and newer** — in the install test as a non-blocking probe. It is the
+  first Ubuntu that carries every dependency in a usable version.
+- **Ubuntu 25.04 and older, Debian 12** — explicitly **not** supported. Measured on the
+  first two runs and then checked against the Ubuntu archive:
+
+  | Ubuntu | `imap-tools` | `pydantic` | usable |
+  |---|---|---|---|
+  | 22.04 LTS | 0.50 | 1.x | no |
+  | 24.04 LTS | 0.54 | 1.10 | no |
+  | 25.04 | absent | 2.x | no |
+  | 25.10 | 1.10 | 2.x | yes |
+  | 26.04 LTS | 1.10 | 2.12 | yes |
+
+  24.04 installed cleanly in the first run and then failed to start: it ships pydantic
+  1.10, and the code needs pydantic 2 (`ConfigDict`, `model_validator`). That is what the
+  lower bounds in `debian/control` are for — apt now refuses the installation instead of
+  creating one that cannot run. Older systems keep `pipx`, where pip enforces the same
+  bounds from `pyproject.toml`.
 
 A single suite directory `stable` is enough as long as one package serves every supported
 system. Should that fall apart later (because Ubuntu needs an older dependency, say), it
