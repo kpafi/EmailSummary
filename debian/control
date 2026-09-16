@@ -11,10 +11,15 @@ Standards-Version: 4.7.0
 Homepage: https://github.com/kpafi/maildigest
 Rules-Requires-Root: no
 
+# python3-pdfminer is spelled out because dh_python3 cannot map the dist name
+# pdfminer.six to it and drops the dependency without failing the build. It is
+# imported lazily in a subprocess (sanitize/extract_pdf.py), so nothing notices
+# at start-up -- PDF extraction would simply be dead on a user's machine.
 Package: maildigest
 Architecture: all
 Depends: ${python3:Depends},
          ${misc:Depends},
+         python3-pdfminer,
 Description: summarises mail from a mirror mailbox into text-only digests
  MailDigest reads a mirror mailbox over IMAP, strips every message down to plain
  text, filters it by importance, checks it for phishing traits and delivers a

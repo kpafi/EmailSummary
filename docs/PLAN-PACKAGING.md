@@ -79,6 +79,15 @@ Whether the distribution versions really carry the program is not assumed but **
 the workflow installs the built `.deb` in every target container and runs `maildigest --help`
 and `maildigest --man` there. If that fails, there is no release.
 
+Two findings from the first run belong here, because both were invisible until the package
+was really built. `dh_python3` could not map the dist name `pdfminer.six` to
+`python3-pdfminer` and dropped the dependency **without failing the build** — the package
+shipped five of its six dependencies. Nothing noticed, because `pdfminer` is imported
+lazily inside a subprocess (`sanitize/extract_pdf.py`), so `maildigest --help` runs
+happily and PDF extraction would have been dead on the user's machine. It is therefore
+spelled out in `debian/control`, and the install test now imports every runtime dependency
+instead of only starting the program. The second finding is Ubuntu 24.04 in section 4.
+
 That install test is also the reason `debian/rules` switches pybuild's own test step off.
 pybuild would run `python3 -m unittest discover` right after the build, which imports the
 package — but the runtime dependencies are `Depends`, not `Build-Depends`, so they are
@@ -94,12 +103,13 @@ afterwards:
 
 - **Debian 13 (trixie) and newer** — carries all six dependencies.
 - **Kali Rolling** — same base, verified locally here.
-- **Ubuntu 24.04 LTS and newer** — checked by the install test; should
-  `python3-imap-tools` be missing there, Ubuntu will only be named from the version that
-  has it onwards, and the README will say so plainly instead of walking the user into a
-  failure.
-- **Ubuntu 22.04 and older, Debian 12** — explicitly **not** supported (Python < 3.11 and
-  dependencies that are too old). `pipx` remains the way there.
+- **Ubuntu 25.04 and newer** — in the install test as a non-blocking probe.
+- **Ubuntu 24.04 LTS and older, Debian 12** — explicitly **not** supported. Measured, not
+  assumed: the first run installed cleanly on 24.04 and then failed to start, because
+  Ubuntu 24.04 ships `python3-pydantic` 1.10 while the code needs pydantic 2
+  (`ConfigDict`, `model_validator`). The lower bounds in `pyproject.toml` now carry that
+  into the package, so apt there refuses the installation rather than creating one that
+  cannot run. Older systems keep `pipx` — with the same constraint, enforced by pip.
 
 A single suite directory `stable` is enough as long as one package serves every supported
 system. Should that fall apart later (because Ubuntu needs an older dependency, say), it

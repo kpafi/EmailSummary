@@ -17,6 +17,14 @@ All notable changes to MailDigest. The format follows
 - Package users get the manual page under `/usr/share/man/man1` — `man maildigest` works
   without the copy step from the README.
 
+### Changed
+- **Lower bounds on two dependencies**: `pydantic>=2` (the code uses `ConfigDict` and
+  `model_validator`, which do not exist in pydantic 1) and `imap-tools>=1.0` (only the 1.x
+  line is tested). Without them the distribution package inherits unversioned dependencies
+  and installs on systems where it cannot start — Ubuntu 24.04 LTS ships pydantic 1.10 and
+  is therefore not supported; apt now refuses the installation there instead of producing a
+  broken one.
+
 ## [0.2.0] — 2026-09-14
 
 The first public release. Since 0.1.0, MailDigest has run against real counterparts for the

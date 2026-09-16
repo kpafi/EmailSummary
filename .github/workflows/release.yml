@@ -82,7 +82,12 @@ jobs:
             optional: false
           - image: "kalilinux/kali-rolling"
             optional: true
-          - image: "ubuntu:24.04"
+          # Ubuntu 24.04 LTS is deliberately not in the matrix: it ships
+          # pydantic 1.10, and the code needs pydantic 2. The dependency in
+          # pyproject.toml says so, so apt there refuses the installation
+          # instead of producing one that cannot start. 25.04 is the first
+          # Ubuntu that carries a new enough pydantic.
+          - image: "ubuntu:25.04"
             optional: true
     container: ${{ matrix.image }}
     steps:
@@ -100,6 +105,10 @@ jobs:
           maildigest --man | head -5
           test -f /usr/share/man/man1/maildigest.1.gz
           python3 -m maildigest --help > /dev/null
+          # Every runtime dependency, not just the ones that are imported at
+          # start-up: pdfminer is loaded lazily inside a subprocess, so a
+          # missing Depends on it stays invisible until a user gets a PDF.
+          python3 -c "import imap_tools, httpx, pydantic, bs4, lxml, pdfminer.high_level" 
 
   apt-repo:
     name: Publish the apt repository

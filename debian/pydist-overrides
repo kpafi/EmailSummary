@@ -1,2 +1,5 @@
-pdfminer.six python3-pdfminer
+# dh_python3 maps dist names from the wheel metadata to Debian package names.
+# beautifulsoup4 is listed for clarity; pdfminer.six is NOT listed here because
+# the mapping does not take effect (the name is normalised to pdfminer-six) --
+# it is spelled out in debian/control instead, where it cannot be lost.
 beautifulsoup4 python3-bs4

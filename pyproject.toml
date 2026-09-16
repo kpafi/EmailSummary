@@ -10,10 +10,15 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
+# Mindestversionen, wo die Verträglichkeit belegt ist: pydantic 2 ist harte
+# Anforderung des Codes (ConfigDict, model_validator), imap-tools ist nur in der
+# 1.x-Reihe erprobt. Ohne diese Schranken erbt das Distributionspaket
+# unversionierte Abhängigkeiten und lässt sich dort installieren, wo es nicht
+# laufen kann — Ubuntu 24.04 liefert pydantic 1.10 (ADR-088, PLAN-PACKAGING §4).
 dependencies = [
-    "imap-tools",
+    "imap-tools>=1.0",
     "httpx",
-    "pydantic",
+    "pydantic>=2",
     "beautifulsoup4",
     "lxml",
     "pdfminer.six",
