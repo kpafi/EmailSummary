@@ -274,7 +274,7 @@ Ein Release ist in diesem Zustand **nicht vertretbar**, solange HC-1 offen ist: 
 ### HC-25: Outbox-Fristen hängen an der Wanduhr
 
 **Severity:** low
-**Referenz:** ADR-048 („5 Versuche über höchstens eine Stunde"), ARCHITECTURE §6, BETRIEB §3
+**Referenz:** ADR-048 („5 Versuche über höchstens eine Stunde"), ARCHITECTURE §6, OPERATIONS §3
 **Repro:** Steuerbare Uhr, toter Messenger. (a) Nachricht einreihen (erster Versuch scheitert), Uhr um 3 h vorstellen (NTP-Erstsynchronisation auf einem Gerät ohne RTC, VM-Resume), `flush()`. (b) Nachricht einreihen, Uhr um 2 Tage zurückstellen, danach mit gesundem Messenger dreimal stündlich `flush()`.
 **Beobachtet:** (a) `DeliveryStats(delivered=0, deferred=0, abandoned=1)` — die Nachricht wird beim **zweiten** Versuch endgültig verworfen, Mail-Status `failed`, weil `age = now - first_queued_at` durch den Sprung 3 h beträgt. Statt fünf Versuchen über eine Stunde gab es einen. (b) Nach drei Läufen: `pending 1` — `next_attempt_at` liegt zwei Tage in der Zukunft, der Eintrag wird von `outbox_due` nie geliefert; die Stunden-Schranke greift nicht, weil sie nur in `_handle_failure` geprüft wird und es keinen Sweeper gibt. `delivery.py:275-281` und `state/db.py:585-608` rechnen ausschließlich mit `datetime.now(UTC)`; `time.monotonic` kommt für Zustellfristen nirgends vor. Nicht-monotone Zeit ist in der gesamten Suite nicht geprüft.
 **Erwartet:** Die Fristenrechnung ist gegen Sprünge der Systemuhr unempfindlich, oder `outbox_due`/`flush` korrigieren unplausible Werte, statt sie zu ignorieren.
@@ -285,22 +285,22 @@ Ein Release ist in diesem Zustand **nicht vertretbar**, solange HC-1 offen ist: 
 ### HC-26: Der tägliche Sammel-Digest wird von einem IMAP-Ausfall mitblockiert
 
 **Severity:** low
-**Referenz:** F-SUM-5, ADR-049 (c), ADR-051, BETRIEB §3
+**Referenz:** F-SUM-5, ADR-049 (c), ADR-051, OPERATIONS §3
 **Repro:** Ein wartender Low-Eintrag in der DB, Uhr auf 20:00 (nach `low_digest_time`), `runner.ingest.run_once` wirft `ImapConnectionError`, dann `runner.run_once()`.
 **Beobachtet:** Der `IngestError` wird nach dem `finally`-Flush nach oben gereicht; `maybe_send_low_digest()` steht dahinter und wird nie erreicht. Ergebnis: null zugestellte Nachrichten, der Eintrag bleibt liegen. In `run_forever` dasselbe Bild — der `except IngestError`-Zweig macht `continue` vor dem Digest-Aufruf. Solange IMAP nicht erreichbar ist (abgelaufenes App-Passwort, Kennwortwechsel, Wartung über den Digest-Zeitpunkt hinweg), erscheint der Digest gar nicht — auch für Einträge, die fertig sanitisiert in der DB liegen. ADR-049 (c) deckt nur den stillstehenden Prozess ab, nicht den laufenden mit kaputtem IMAP; kein Test deckt den Fall.
 **Erwartet:** Der Digest liest nur aus `low_digest_queue` und schreibt in die Outbox; er sollte laufen, sobald der Zeitpunkt erreicht ist — analog zum Outbox-Flush, den `run_once` bewusst in ein `finally` gelegt hat.
-**Fix-Richtung:** In `run_once` `maybe_send_low_digest()` samt anschließendem Flush in dieselbe ausnahmefeste Zone ziehen (Fehler des Digests dabei abfangen, damit sie den `IngestError` nicht verdecken). In `run_forever` denselben Schritt im `except IngestError`-Zweig vor `continue` ausführen. Zusage in ADR-049 (c) bzw. BETRIEB §3 präzisieren, Regression analog `tests/unit/test_hot_schedule.py`.
+**Fix-Richtung:** In `run_once` `maybe_send_low_digest()` samt anschließendem Flush in dieselbe ausnahmefeste Zone ziehen (Fehler des Digests dabei abfangen, damit sie den `IngestError` nicht verdecken). In `run_forever` denselben Schritt im `except IngestError`-Zweig vor `continue` ausführen. Zusage in ADR-049 (c) bzw. OPERATIONS §3 präzisieren, Regression analog `tests/unit/test_hot_schedule.py`.
 **Einordnung:** Kein Verlust — die Einträge gehen beim nächsten erfolgreichen Lauf gesammelt raus.
 **Herkunft:** hot/zustand
 
 ### HC-27: `run --once` (der dokumentierte Cron-Betrieb) fragt nie Befehle ab
 
 **Severity:** low
-**Referenz:** SPEC-CLI §5 („Eingeschaltet reagiert `run` auf /digest … und /status"); BETRIEB §3 (empfohlener Cron-Aufruf mit `run --once`); ADR-077
+**Referenz:** SPEC-CLI §5 („Eingeschaltet reagiert `run` auf /digest … und /status"); OPERATIONS §3 (empfohlener Cron-Aufruf mit `run --once`); ADR-077
 **Repro:** `grep -n "poll_commands_once" src/maildigest/runner.py` — genau eine Aufrufstelle, innerhalb von `run_forever`. `cli.py:1595-1610` ruft bei `--once` nur `runner.run_once()`. Praktisch: `accept_commands = true` setzen, `maildigest run --once` laufen lassen, `/digest` und `/status` senden.
-**Beobachtet:** Keine Reaktion, keine Statusantwort, kein Log; der Offset bleibt bei 0, die Befehle stapeln sich bei Telegram. Als Unit-Test bestätigt: `command_calls == []`, kein Offset gesetzt, nichts gesendet. Weder SPEC-CLI noch README noch ADR-077 grenzen die Zusage auf den Dauerbetrieb ein, obwohl BETRIEB §3 genau `run --once` als Betriebsart empfiehlt.
+**Beobachtet:** Keine Reaktion, keine Statusantwort, kein Log; der Offset bleibt bei 0, die Befehle stapeln sich bei Telegram. Als Unit-Test bestätigt: `command_calls == []`, kein Offset gesetzt, nichts gesendet. Weder SPEC-CLI noch README noch ADR-077 grenzen die Zusage auf den Dauerbetrieb ein, obwohl OPERATIONS §3 genau `run --once` als Betriebsart empfiehlt.
 **Erwartet:** Entweder bedient `run_once` den Befehlskanal ebenfalls (mindestens `/status`), oder die Dokumentation sagt ausdrücklich, dass die Fernauslösung nur im Dauerbetrieb wirkt — und `run --once` warnt beim Start, wenn `accept_commands` gesetzt ist.
-**Fix-Richtung:** (1) SPEC-CLI §5, README und den Einrichtungs-Tipp (`cli.py:1200-1205`) auf den Dauerbetrieb einschränken, dieselbe Zeile in die Cron-Liste in BETRIEB §3 aufnehmen und ADR-077 um den Geltungsbereich ergänzen. (2) Im `args.once`-Zweig von `cmd_run` prüfen, ob der Kanal freigeschaltet ist (`Runner._commands_enabled` existiert bereits), und einmalig auf stderr ausgeben, dass die Befehle nur im Dauerbetrieb bedient werden. Optional `/status` auch im Cron-Betrieb bedienen und `/digest` dort ignorieren.
+**Fix-Richtung:** (1) SPEC-CLI §5, README und den Einrichtungs-Tipp (`cli.py:1200-1205`) auf den Dauerbetrieb einschränken, dieselbe Zeile in die Cron-Liste in OPERATIONS §3 aufnehmen und ADR-077 um den Geltungsbereich ergänzen. (2) Im `args.once`-Zweig von `cmd_run` prüfen, ob der Kanal freigeschaltet ist (`Runner._commands_enabled` existiert bereits), und einmalig auf stderr ausgeben, dass die Befehle nur im Dauerbetrieb bedient werden. Optional `/status` auch im Cron-Betrieb bedienen und `/digest` dort ignorieren.
 **Entlastend:** Alle Nutzertexte nennen die bloße Form `maildigest run`, die SPEC-CLI §4 als Dauerbetrieb definiert; §4 zählt den `--once`-Zyklus abschließend auf und nennt den Befehlskanal dort nicht. `/digest` ist im Cron-Betrieb ohnehin semantisch leer.
 **Herkunft:** hot/fernauslösung-code
 

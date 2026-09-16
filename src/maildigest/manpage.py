@@ -249,6 +249,6 @@ def render_manpage(parser: argparse.ArgumentParser, *, version: str = __version_
         _SECURITY,
         ".SH SEE ALSO",
         "docs/SPEC\\-CLI.md (the contract for every command, question and message line),",
-        "docs/SECURITY.md, docs/BETRIEB.md (systemd and cron), README.md.",
+        "docs/SECURITY.md, docs/OPERATIONS.md (systemd and cron), README.md.",
     ]
     return "\n".join(out) + "\n"

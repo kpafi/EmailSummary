@@ -1,126 +1,123 @@
-# MailDigest — CLI- und Konfigurations-Spezifikation
+# MailDigest — CLI and configuration specification
 
-> **Dieses Dokument ist der Vertrag.** Alles, was hier steht, muss das Programm genau so
-> tun; was hier nicht steht, existiert für den Cold-Tester (docs/TESTING.md §3) nicht.
-> Stand: WP9. Änderungen nur zusammen mit dem Code und mit ADR in docs/DECISIONS.md.
+> **This document is the contract.** Everything written here the program must do exactly so;
+> what is not written here does not exist for the cold tester (docs/TESTING.md §3).
+> As of WP9. Changes only together with the code and with an ADR in docs/DECISIONS.md.
 
-## 1. Installation und Aufruf
+## 1. Installation and invocation
 
-MailDigest braucht Python ≥ 3.11. Empfohlen ist die Installation mit `pipx install .` —
-nur so liegt der Befehl `maildigest` im Suchpfad. Eine Installation in ein virtuelles Umfeld
-(`pip install -e .`) legt ihn dagegen nur unter `.venv/bin/maildigest` ab; ohne aktiviertes
-venv meldet die Shell dann `command not found`. Der Modulaufruf funktioniert in beiden
-Fällen.
+MailDigest needs Python ≥ 3.11. The recommended installation is `pipx install .` — only that
+puts the `maildigest` command on the path. An installation into a virtual environment
+(`pip install -e .`) instead places it only under `.venv/bin/maildigest`; without an activated
+venv the shell then reports `command not found`. The module invocation works in both cases.
 
-Nach der Installation des Pakets gibt es zwei gleichwertige Aufrufformen:
+After installing the package there are two equivalent invocation forms:
 
 ```
-maildigest <KOMMANDO> [OPTIONEN]
-python -m maildigest <KOMMANDO> [OPTIONEN]
+maildigest <COMMAND> [OPTIONS]
+python -m maildigest <COMMAND> [OPTIONS]
 ```
 
-Sieben Kommandos: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`,
-`run`, `instructions`.
+Seven commands: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`, `run`,
+`instructions`.
 
-Ein Aufruf ohne Kommando gibt die Hilfe auf **stdout** aus und endet mit Exit-Code 2.
-`maildigest --help` und `maildigest <KOMMANDO> --help` geben Hilfe aus und enden mit
-Exit-Code 0. Die Hilfe jedes Kommandos enthält eine Beschreibung, die Optionen und
-Beispiele (ADR-087). `maildigest --man` gibt die vollständige Handbuchseite im
-troff-Format auf stdout aus (Exit-Code 0), lesbar mit `maildigest --man | man -l -`; die
-Datei `man/maildigest.1` im Repository ist daraus erzeugt und kann nach
-`~/.local/share/man/man1/` kopiert werden, danach genügt `man maildigest`.
+An invocation without a command prints the help on **stdout** and exits with code 2.
+`maildigest --help` and `maildigest <COMMAND> --help` print help and exit with code 0. The
+help of every command contains a description, the options and examples (ADR-087).
+`maildigest --man` prints the complete manual page in troff format on stdout (exit code 0),
+readable with `maildigest --man | man -l -`; the file `man/maildigest.1` in the repository is
+generated from it and can be copied to `~/.local/share/man/man1/`, after which
+`man maildigest` suffices.
 
-## 2. Exit-Codes
+## 2. Exit codes
 
-| Code | Bedeutung |
+| Code | Meaning |
 |------|-----------|
-| 0 | Erfolg |
-| 1 | Laufzeit- oder Konfigurationsfehler (Verbindung fehlgeschlagen, Datei fehlt, Konfiguration ungültig, Selbsttest fail-closed) |
-| 2 | Bedienfehler (unbekanntes Kommando, unbekannte Option, unerlaubter Optionswert — auch ein Zahlenwert außerhalb des erlaubten Bereichs, z. B. `--port 0` / `--port 99999` —, fehlende Pflichtangabe im nicht-interaktiven Modus, zu viele ungültige Eingaben, abgebrochene Eingabe/EOF auf stdin) |
+| 0 | Success |
+| 1 | Runtime or configuration error (connection failed, file missing, configuration invalid, self-test fail-closed) |
+| 2 | Usage error (unknown command, unknown option, disallowed option value — including a number outside the permitted range, e.g. `--port 0` / `--port 99999` —, a missing mandatory value in non-interactive mode, too many invalid entries, aborted input/EOF on stdin) |
 
-Ein Wert, der als Zahl im erlaubten Bereich liegt, aber als **Konfiguration** unzulässig ist,
-bleibt Exit-Code 1 — etwa `--port 143` (Klartext-IMAP) oder `--low-digest-time 25:99`
-(ADR-069).
+A value that is a number within the permitted range but is invalid as **configuration**
+remains exit code 1 — for instance `--port 143` (cleartext IMAP) or
+`--low-digest-time 25:99` (ADR-069).
 
-Jede Fehlermeldung geht auf **stderr** und beginnt mit `Error: `. Fortschritts- und
-Ergebnismeldungen gehen auf **stdout**. Warnungen (Hinweise, die den Ablauf nicht
-abbrechen) gehen auf stderr, ohne `Error: `-Präfix.
+Every error message goes to **stderr** and starts with `Error: `. Progress and result
+messages go to **stdout**. Warnings (notices that do not abort the flow) go to stderr,
+without the `Error: ` prefix.
 
-**Sprache der Ausgabe:** Jeder Text, den das Programm ausgibt — Abfragen, Schritt- und
-Bilanzzeilen, Fehler- und Warnmeldungen sowie der gesamte Rahmen jeder zugestellten
-Nachricht — ist **englisch**, unabhängig von jeder Einstellung und jeder Locale.
-`[general] language` steuert ausschließlich die Sprache der vom Sprachmodell erzeugten
-Textfelder (Zusammenfassung, Kopfzeile, Begründungen, Kategorie); ohne Sprachmodell gibt es
-diese Felder nicht. Dieses Dokument ist damit der wörtliche Vertrag der **englischen**
-Ausgabe (ADR-083).
+**Language of the output:** every text the program prints — prompts, step and summary lines,
+error and warning messages as well as the whole frame of every delivered message — is
+**English**, independent of any setting and any locale. `[general] language` steers only the
+language of the text fields produced by the language model (summary, headline, reasons,
+category); without a language model those fields do not exist. This document is therefore the
+literal contract of the **English** output (ADR-083).
 
-Ein `SIGINT` (Strg-C) während einer Abfrage beendet das Kommando mit `Error: Aborted.` auf
-stderr und **Exit-Code 1**; geschrieben wird dabei nichts.
+A `SIGINT` (Ctrl-C) during a prompt ends the command with `Error: Aborted.` on stderr and
+**exit code 1**; nothing is written.
 
-Dazu kommt das **Protokoll** der inneren Schichten (etwa ein Wiederholversuch beim
-Modell-Aufruf). Es besteht immer aus JSON-Zeilen im Format aus §4 `run`. Bei `run` gehen
-sie auf **stdout** — dort liest der Dienstbetrieb mit. Bei allen anderen Kommandos gehen
-sie ab Stufe `WARNING` auf **stderr**, damit stdout ausschließlich die in §4 festgelegte
-Ausgabe enthält.
+In addition there is the **log** of the inner layers (for instance a retry of a model call).
+It always consists of JSON lines in the format from §4 `run`. With `run` they go to
+**stdout** — that is where service operation reads along. With every other command they go to
+**stderr** from level `WARNING` upwards, so that stdout contains only the output specified in
+§4.
 
-Fehlermeldungen enthalten **niemals** Passwörter, API-Keys, Bot-Tokens oder Webhook-URLs.
-Zitiert eine Gegenstelle den gesendeten API-Key in ihrer Fehlerantwort, wird er vor der
-Ausgabe durch `***` ersetzt (auch als Präfix ab acht Zeichen) — die Zusage hängt nicht am
-Wohlverhalten des Anbieters.
+Error messages **never** contain passwords, API keys, bot tokens or webhook URLs. If a
+counterpart quotes the API key that was sent in its error response, it is replaced by `***`
+before output (also as a prefix from eight characters onwards) — the promise does not depend
+on the provider's good behaviour.
 
-Jede Fehlerzeile läuft vor der Ausgabe durch eine **Zeichen-Allowlist** (druckbares ASCII,
-Umlaute/ß, die üblichen Satzzeichen; alles andere wird zu `·`, ADR-055). Damit kann ein
-Text, der von einer Gegenstelle stammt — Fehlertext des Modell-Anbieters, Ordnername des
-IMAP-Servers —, keine ANSI-/Steuersequenz auf das Terminal bringen und dort Bildschirm,
-Farbe, Fenstertitel oder eine erfundene Programmmeldung setzen.
+Every error line passes through a **character allowlist** before output (printable ASCII,
+umlauts/ß, the usual punctuation; everything else becomes `·`, ADR-055). That way a text
+originating from a counterpart — the model provider's error text, the IMAP server's folder
+name — cannot bring an ANSI/control sequence onto the terminal and set the screen, colour,
+window title or an invented program message there.
 
-## 3. Globale Optionen
+## 3. Global options
 
-Diese Optionen gelten für jedes Kommando und dürfen **vor oder nach** dem Kommandonamen
-stehen (`maildigest --config x init` und `maildigest init --config x` sind gleichwertig).
+These options apply to every command and may appear **before or after** the command name
+(`maildigest --config x init` and `maildigest init --config x` are equivalent).
 
-| Option | Wert | Bedeutung |
+| Option | Value | Meaning |
 |---|---|---|
-| `--config` | PFAD | Pfad der Konfigurationsdatei. Ohne Angabe gilt die Umgebungsvariable `MAILDIGEST_CONFIG`, sonst `config.toml` im aktuellen Verzeichnis. |
-| `--non-interactive` | – | Stellt keine Rückfragen. Es gelten die Optionen der Kommandozeile, die bisherigen Werte der Datei und die Defaults. Fehlt dann eine Pflichtangabe, endet das Kommando mit Exit-Code 2 und nennt die zuständige Option. |
-| `--help` | – | Hilfe anzeigen und mit Exit-Code 0 beenden. |
-| `--man` | – | Handbuchseite (troff, Abschnitt 1) auf stdout ausgeben und mit Exit-Code 0 beenden. Nur ohne Kommandonamen sinnvoll; ein Kommando dahinter wird nicht ausgeführt. |
+| `--config` | PATH | Path of the configuration file. Without it the environment variable `MAILDIGEST_CONFIG` applies, otherwise `config.toml` in the current directory. |
+| `--non-interactive` | – | Asks nothing. The command-line options, the file's existing values and the defaults apply. If a mandatory value is then missing, the command exits with code 2 and names the responsible option. |
+| `--help` | – | Show help and exit with code 0. |
+| `--man` | – | Print the manual page (troff, section 1) on stdout and exit with code 0. Only meaningful without a command name; a command after it is not executed. |
 
-## 4. Kommandos
+## 4. Commands
 
 ### `maildigest init`
 
-Legt eine neue Konfigurationsdatei an. Existiert die Datei bereits, bricht das Kommando mit
-Exit-Code 1 ab und ändert nichts (außer mit `--force`).
+Creates a new configuration file. If the file already exists, the command aborts with exit
+code 1 and changes nothing (unless `--force` is given).
 
-Interaktive Abfragen in dieser Reihenfolge; in Klammern der Default, der bei leerer
-Eingabe gilt:
+Interactive prompts in this order; in brackets the default that applies on empty input:
 
 1. `Language of the summaries (de/en) [de]: `
 2. `Length of the summaries (short/medium/long) [medium]: `
 3. `Deliver individually from importance (low/normal/high) [normal]: `
 4. `Time of the daily digest (HH:MM) [18:00]: `
-5. `Custom-Instructions: ` (eine Zeile; leer = keine; wird auf 2000 Zeichen gekürzt);
-   davor steht im interaktiven Modus die Erläuterung
+5. `Custom-Instructions: ` (one line; empty = none; truncated to 2000 characters); in
+   interactive mode it is preceded by the explanation
    `Custom instructions: one line about what matters to you (leave empty for none).`
 
-Eine unerlaubte Eingabe bei 1–3 wird abgelehnt (`Invalid value. Allowed: …` auf stderr)
-und erneut gefragt; nach drei Fehlversuchen endet das Kommando mit
-`Error: Too many invalid entries — aborted.` und Exit-Code 2.
+A disallowed entry at 1–3 is rejected (`Invalid value. Allowed: …` on stderr) and asked
+again; after three failed attempts the command ends with
+`Error: Too many invalid entries — aborted.` and exit code 2.
 
-Danach entsteht die Datei mit **Dateirechten 0600** und dem vollständigen Feldsatz aus
-Abschnitt 5: Jedes Feld mit Default steht mit diesem Default darin. Pflichtfelder ohne
-Default (`[imap] host`, `[imap] username`), alle Secrets und alle übrigen Felder ohne
-Default — dazu gehören alle vier Overrides in `[llm.critic]` — stehen als auskommentierte
-Beispielzeilen darin; die Datei ist nach `init` also gültiges TOML, aber noch keine
-vollständige Konfiguration. `[llm] model` gehört **nicht** dazu: Es hat laut Abschnitt 5
-den Default `""` und ist erst Pflicht, sobald `provider` nicht `none` ist (ADR-076). Die
-Frage-Erläuterung zu den Custom-Instructions erscheint nur im interaktiven Modus.
+Afterwards the file is created with **file mode 0600** and the complete field set from
+section 5: every field with a default is present with that default. Mandatory fields without
+a default (`[imap] host`, `[imap] username`), all secrets and all remaining fields without a
+default — which includes all four overrides in `[llm.critic]` — are present as commented-out
+example lines; after `init` the file is therefore valid TOML but not yet a complete
+configuration. `[llm] model` is **not** among them: per section 5 it has the default `""` and
+only becomes mandatory once `provider` is not `none` (ADR-076). The explanatory line for the
+custom instructions appears in interactive mode only.
 
-Die erste Zeile lautet `Setting up MailDigest — configuration: <pfad>`, nach dem Schreiben
-folgt `Configuration created: <pfad> (file mode 0600).` Danach folgt ein Absatz, der
-einordnet, was MailDigest ohne Sprachmodell zustellt; **zum Schluss** steht die Liste der
-nächsten Schritte. Die Ausgabe endet mit dieser Liste:
+The first line is `Setting up MailDigest — configuration: <path>`, and after writing
+`Configuration created: <path> (file mode 0600).` follows. After that comes a paragraph
+placing what MailDigest delivers without a language model; **at the end** stands the list of
+next steps. The output ends with that list:
 
 ```
 Next steps:
@@ -131,122 +128,120 @@ Next steps:
   5) maildigest run                 (continuous operation)
 ```
 
-Ein unzulässiger Wert (z. B. `--low-digest-time 25:99`) führt zu Exit-Code 1 mit einer
-feldbezogenen Meldung; die Datei wird dann **nicht** angelegt.
+An invalid value (e.g. `--low-digest-time 25:99`) leads to exit code 1 with a field-specific
+message; the file is then **not** created.
 
-**Optionen**
+**Options**
 
-| Option | Wert | Bedeutung |
+| Option | Value | Meaning |
 |---|---|---|
-| `--force` | – | Vorhandene Datei überschreiben (der bisherige Inhalt geht verloren) |
-| `--language` | `de` \| `en` | Antwort auf Frage 1 |
-| `--summary-length` | `short` \| `medium` \| `long` | Antwort auf Frage 2 |
-| `--min-importance` | `low` \| `normal` \| `high` | Antwort auf Frage 3 |
-| `--low-digest-time` | HH:MM | Antwort auf Frage 4 |
-| `--instructions` | TEXT | Antwort auf Frage 5 |
+| `--force` | – | Overwrite an existing file (the previous content is lost) |
+| `--language` | `de` \| `en` | Answer to question 1 |
+| `--summary-length` | `short` \| `medium` \| `long` | Answer to question 2 |
+| `--min-importance` | `low` \| `normal` \| `high` | Answer to question 3 |
+| `--low-digest-time` | HH:MM | Answer to question 4 |
+| `--instructions` | TEXT | Answer to question 5 |
 
 ### `maildigest connect-mail`
 
-Trägt die Zugangsdaten des Mirror-Postfachs ein, testet die Verbindung, lässt den Ordner
-wählen und druckt am Ende die Anleitung zur Weiterleitung im echten Postfach. Setzt eine
-vorhandene Konfigurationsdatei voraus (sonst Exit-Code 1 mit Hinweis auf `maildigest init`).
+Enters the mirror mailbox credentials, tests the connection, lets you choose the folder and
+finally prints the instructions for setting up forwarding in the real mailbox. Requires an
+existing configuration file (otherwise exit code 1 with a pointer to `maildigest init`).
 
-Vor der ersten Frage druckt das Kommando eine Erklärung, was ein IMAP-Host ist, samt
-Beispielliste der großen Anbieter. Ist in der Konfiguration noch kein Host hinterlegt und
-läuft das Kommando interaktiv, geht dem eine Empfehlung voraus, bei welchem Anbieter sich
-ein Spiegel-Postfach mit dem geringsten Aufwand anlegen lässt.
+Before the first question the command prints an explanation of what an IMAP host is, along
+with an example list of the large providers. If no host is stored in the configuration yet
+and the command runs interactively, that is preceded by a recommendation of which provider a
+mirror mailbox can be created with for the least effort.
 
-**Anbietererkennung.** Nach Frage 1 wird der eingetragene Wert gegen eine eingebaute
-Anbieterliste geprüft (Datenstand 2026-09-09):
+**Provider detection.** After question 1 the entered value is checked against a built-in
+provider list (data as of 2026-09-09):
 
-* Eine **Mailadresse oder blanke Domain** eines bekannten Anbieters wird in dessen
-  IMAP-Host übersetzt; die Übersetzung wird als Zeile `  -> IMAP host for <Anbieter>: <Host>`
-  angezeigt. Ein unbekannter Wert bleibt unverändert — geraten wird nicht.
-* Für einen **erkannten Anbieter** folgt eine Anleitung: welche Art Passwort der Server
-  verlangt (Konto- oder App-Passwort), die nötigen Schritte, gegebenenfalls ein Direktlink
-  und ein Hinweis auf die häufigste Stolperfalle.
-* Für einen Anbieter, bei dem Passwort-Anmeldung serverseitig **abgeschaltet** ist —
-  derzeit Outlook.com/Hotmail/Live (OAuth2-Pflicht, `LOGINDISABLED`) und Proton Mail
-  (kein offenes IMAP) —, endet das Kommando **vor** der Passwortfrage mit Exit-Code 2,
-  nennt den Grund und den Ausweg (Spiegel-Postfach woanders anlegen und dorthin
-  weiterleiten). Es wird nichts gespeichert. Das gilt für die blanke Domain **und** für
-  eine Mailadresse dieses Anbieters (`me@outlook.com`) gleichermaßen, auch zusammen mit
-  `--no-test`.
+* A **mail address or bare domain** of a known provider is translated into that provider's
+  IMAP host; the translation is shown as the line `  -> IMAP host for <provider>: <host>`. An
+  unknown value stays unchanged — nothing is guessed.
+* For a **recognised provider** instructions follow: what kind of password the server
+  requires (account or app password), the necessary steps, a direct link where applicable,
+  and a note on the most common pitfall.
+* For a provider where password login is **disabled** server-side — currently
+  Outlook.com/Hotmail/Live (OAuth2 mandatory, `LOGINDISABLED`) and Proton Mail (no open
+  IMAP) — the command ends with exit code 2 **before** the password question, naming the
+  reason and the way out (create the mirror mailbox elsewhere and forward to it). Nothing is
+  saved. This applies to the bare domain **and** to a mail address of that provider
+  (`me@outlook.com`) alike, including together with `--no-test`.
 
-Der Vorgabewert für Frage 2 ist der Port des erkannten Anbieters (bei allen bekannten
-Anbietern 993), sofern die Konfiguration noch keinen Port enthält. Vor Frage 3 wird ein
-Beispiel gedruckt, das die vollständige Mailadresse als Benutzernamen zeigt; vor Frage 4
-steht bei erkanntem Anbieter, welche Art Passwort erwartet wird.
+The default for question 2 is the port of the recognised provider (993 for all known
+providers), provided the configuration does not contain a port yet. Before question 3 an
+example is printed showing the full mail address as the username; before question 4, with a
+recognised provider, it says what kind of password is expected.
 
-Abfragen in dieser Reihenfolge:
+Prompts in this order:
 
-1. `IMAP host [<bisheriger Wert>]: ` — Pflichtangabe
-2. `Port [993]: ` — ganze Zahl von 1 bis 65535
-3. `Username [<bisheriger Wert>]: ` — Pflichtangabe
-4. `Password (leave empty to use MAILDIGEST_IMAP_PASSWORD instead): ` — ohne
-   Bildschirmecho, sofern ein Terminal vorhanden ist. Ist die Umgebungsvariable
-   `MAILDIGEST_IMAP_PASSWORD` gesetzt, entfällt diese Frage; es wird dann **kein** Passwort
-   in die Datei geschrieben. Liegt weder ein eingegebenes noch ein gespeichertes noch ein
-   Umgebungs-Passwort vor, endet das Kommando mit Exit-Code 2.
-5. Nach erfolgreicher Verbindung: die Zeile `Which folder should MailDigest read?`, die
-   nummerierte Ordnerliste des Servers und `Folder [<Nummer des aktuellen Ordners>]: `
+1. `IMAP host [<previous value>]: ` — mandatory
+2. `Port [993]: ` — an integer from 1 to 65535
+3. `Username [<previous value>]: ` — mandatory
+4. `Password (leave empty to use MAILDIGEST_IMAP_PASSWORD instead): ` — without screen echo,
+   provided a terminal is present. If the environment variable `MAILDIGEST_IMAP_PASSWORD` is
+   set, this question is skipped; **no** password is then written into the file. If there is
+   neither an entered nor a stored nor an environment password, the command ends with exit
+   code 2.
+5. After a successful connection: the line `Which folder should MailDigest read?`, the
+   server's numbered folder list, and `Folder [<number of the current folder>]: `
 
-Port 143 (Klartext-IMAP) wird immer abgelehnt (Exit-Code 1). Verbindet sich MailDigest
-nicht, endet das Kommando mit Exit-Code 1 und schreibt **nichts** in die Datei. Die
-Meldung nennt Host, Port, Ordner und die **Fehlerklasse**; der Antworttext des Servers
-wird bewusst **nicht** ausgegeben — er kann den gesendeten Benutzernamen zitieren (I5,
-docs/SECURITY.md §6). Danach folgt eine Erklärung, die zur Fehlerklasse passt:
+Port 143 (cleartext IMAP) is always rejected (exit code 1). If MailDigest does not connect,
+the command ends with exit code 1 and writes **nothing** into the file. The message names
+host, port, folder and the **error class**; the server's response text is deliberately **not**
+printed — it can quote the username that was sent (I5, docs/SECURITY.md §6). After that comes
+an explanation matching the error class:
 
-* **Anmeldefehler** (der Server hat die Zugangsdaten abgelehnt): der anbieterspezifische
-  Hinweis, woran die Anmeldung typischerweise scheitert — meist ein separat erzeugtes
-  App-Passwort (bei unbekanntem Anbieter ein allgemeiner Hinweis).
-* **Transportfehler** (Verbindung abgelehnt, Zeitüberschreitung, TLS): der Hinweis, dass
-  gar kein Login versucht wurde und Host, Port und Netzverbindung zu prüfen sind.
+* **Login error** (the server rejected the credentials): the provider-specific hint on what
+  logins typically fail on — usually a separately generated app password (a generic hint with
+  an unknown provider).
+* **Transport error** (connection refused, timeout, TLS): the hint that no login was even
+  attempted and that host, port and network connection should be checked.
 
-Zum Schluss steht in beiden Fällen der Verweis auf `--no-test`
-(`With --no-test the values can also be saved without testing them.`). Lässt sich die
-Ordnerliste nicht abrufen, bleibt es bei der Warnung
-`Folder list unavailable (<klasse>); keeping the current setting.` auf stderr und beim
-bisherigen Ordner. Existiert der eingestellte Ordner nicht, steht auf stderr
-`The configured folder "<name>" does not exist on the server.`; läuft das Kommando
-nicht-interaktiv, wird danach die nummerierte Ordnerliste auf stdout gedruckt und
-anschließend auf stderr darauf verwiesen (`Keeping it unchanged — pick one of the folders
-listed on stdout with --folder, otherwise the next run will fail.`); der eingestellte
-Ordner bleibt unverändert.
+At the end, in both cases, stands the pointer to `--no-test`
+(`With --no-test the values can also be saved without testing them.`). If the folder list
+cannot be fetched, it stays at the warning
+`Folder list unavailable (<class>); keeping the current setting.` on stderr and at the
+previous folder. If the configured folder does not exist, stderr shows
+`The configured folder "<name>" does not exist on the server.`; when the command runs
+non-interactively, the numbered folder list is then printed on stdout and stderr afterwards
+points to it (`Keeping it unchanged — pick one of the folders listed on stdout with --folder,
+otherwise the next run will fail.`); the configured folder stays unchanged.
 
-Weitere wörtliche Zeilen dieses Kommandos auf stdout:
+Further literal lines of this command on stdout:
 `Connecting the mirror mailbox (IMAPS only, certificate check always on)`,
-`Detected: <Anbieter>`, `Username = <Beispiel>`, `Password = <Art des Passworts>.`,
+`Detected: <provider>`, `Username = <example>`, `Password = <kind of password>.`,
 `Password: from MAILDIGEST_IMAP_PASSWORD (not written to the file)`, `Connecting ...`,
-`Connection established.`, `Connection test skipped (--no-test).` und
-`Saved to <pfad> (file mode 0600).`
+`Connection established.`, `Connection test skipped (--no-test).` and
+`Saved to <path> (file mode 0600).`
 
-Gespeichert wird erst nach dem Test. Die Datei behält die Rechte 0600.
+Saving only happens after the test. The file keeps mode 0600.
 
-**Optionen**
+**Options**
 
-| Option | Wert | Bedeutung |
+| Option | Value | Meaning |
 |---|---|---|
-| `--host` | HOST | Antwort auf Frage 1 |
-| `--port` | PORT | Antwort auf Frage 2 |
-| `--username` | NAME | Antwort auf Frage 3 |
-| `--folder` | ORDNER | Ordner setzen, ohne die Liste zu benutzen |
-| `--move-processed-to` | ORDNER | Verarbeitete Mails dorthin verschieben (leerer Wert = nur als gelesen markieren) |
-| `--no-test` | – | Angaben ohne Verbindungstest speichern; die Ordnerabfrage entfällt |
+| `--host` | HOST | Answer to question 1 |
+| `--port` | PORT | Answer to question 2 |
+| `--username` | NAME | Answer to question 3 |
+| `--folder` | FOLDER | Set the folder without using the list |
+| `--move-processed-to` | FOLDER | Move processed mail there (an empty value = only mark as read) |
+| `--no-test` | – | Save the values without a connection test; the folder prompt is skipped |
 
-Für das Passwort gibt es **bewusst keine Option**: Es kommt aus der Abfrage oder aus
-`MAILDIGEST_IMAP_PASSWORD` und landet damit nicht in der Prozessliste oder der
-Shell-History.
+For the password there is **deliberately no option**: it comes from the prompt or from
+`MAILDIGEST_IMAP_PASSWORD` and therefore does not end up in the process list or the shell
+history.
 
 ### `maildigest connect-llm`
 
-Wählt Provider und Modell, hinterlegt den API-Key und macht einen Testaufruf. Setzt eine
-vorhandene Konfigurationsdatei voraus.
+Chooses the provider and model, stores the API key and makes a test call. Requires an existing
+configuration file.
 
-Abfragen in dieser Reihenfolge:
+Prompts in this order:
 
-1. Eine nummerierte **Auswahlliste der Betriebsarten** (interaktiv; mit `--provider` oder
-   `--non-interactive` entfällt sie und die Option entscheidet):
+1. A numbered **list of the operating modes** (interactive; with `--provider` or
+   `--non-interactive` it is skipped and the option decides):
 
    ```
     1) No language model — works immediately, nothing to sign up for (default)
@@ -258,111 +253,113 @@ Abfragen in dieser Reihenfolge:
     7) Other OpenAI-compatible endpoint — enter the base URL yourself
    ```
 
-   Die Auswahl selbst lautet `Option [1]: `.
+   The selection itself reads `Option [1]: `.
 
-   Danach folgt die Anleitung zur gewählten Option: woher der Schlüssel kommt, welche
-   Stolperfalle dort typisch ist und — bei den Gratis-Anbietern — wo die aktuellen
-   Modell-IDs stehen. Wird die Liste mit `--provider` oder `--non-interactive`
-   übersprungen, entscheidet der Optionswert: `none` und `anthropic` führen zur jeweiligen
-   Anleitung, `openai_compatible` zur **generischen** Anleitung für OpenAI-kompatible
-   Endpunkte. Ein anbieterspezifischer Erklärtext und eine anbieterspezifische `base_url`
-   (Groq, OpenRouter, Cerebras, Ollama) kommen dann **nicht** zum Zug: `base_url` bleibt
-   auf dem bisherigen Dateiwert bzw. leer, sofern `--base-url` nichts anderes sagt.
+   Instructions for the chosen option follow: where the key comes from, which pitfall is
+   typical there and — for the free providers — where the current model IDs are listed. If the
+   list is skipped with `--provider` or `--non-interactive`, the option value decides: `none`
+   and `anthropic` lead to the respective instructions, `openai_compatible` to the **generic**
+   instructions for OpenAI-compatible endpoints. A provider-specific explanation and a
+   provider-specific `base_url` (Groq, OpenRouter, Cerebras, Ollama) then do **not** come into
+   play: `base_url` stays at the previous file value or empty, unless `--base-url` says
+   otherwise.
 
-   Bei Auswahl 1 endet das Kommando sofort mit Exit-Code 0: Es gibt weder Modellnamen
-   noch Schlüssel noch Testaufruf, `[llm] model` und `base_url` werden geleert und ein
-   etwaiger gespeicherter Schlüssel entfernt.
+   With choice 1 the command ends immediately with exit code 0: there is neither a model name
+   nor a key nor a test call, `[llm] model` and `base_url` are cleared and any stored key is
+   removed.
 
-2. `Model name (exact model ID used by the provider) [<bisheriger Wert>]: ` —
-   Pflichtangabe, es gibt bewusst keinen Default
-3. nur bei `openai_compatible`:
-   `Base URL of the endpoint (e.g. http://localhost:11434/v1) [<bisheriger Wert>]: `
+2. `Model name (exact model ID used by the provider) [<previous value>]: ` — mandatory, there
+   is deliberately no default
+3. only with `openai_compatible`:
+   `Base URL of the endpoint (e.g. http://localhost:11434/v1) [<previous value>]: `
 4. `API key (leave empty to use MAILDIGEST_LLM_API_KEY, or if the endpoint needs no key): `
-   — ohne Bildschirmecho. Ist `MAILDIGEST_LLM_API_KEY` gesetzt, entfällt die Frage, es
-   erscheint `API key: from MAILDIGEST_LLM_API_KEY (not written to the file)` und es wird
-   kein Key in die Datei geschrieben.
-5. `Response token limit per call (empty = no limit) [<bisheriger Wert>]: ` — davor steht
-   die Empfehlung aus der Anbieter-Wissensbasis (Block mit der Überschrift
-   `Response token limit (max_tokens) — optional`). Leere Eingabe, `0`, `none`, `no`,
-   `unlimited` oder `-` bedeuten **kein Limit**: das Feld `[llm] max_tokens` wird aus der
-   Datei entfernt. Eine ganze Zahl ≥ 1 wird als Limit gespeichert. Ab Werk gilt kein Limit
-   (ADR-085); Reasoning-Modelle ziehen ihre Denk-Tokens vom Budget ab, ein kleines Limit
-   schneidet dort die Antwort ab. Bei einer anderen Eingabe wird bis zu dreimal neu
-   gefragt, danach Exit-Code 2.
+   — without screen echo. If `MAILDIGEST_LLM_API_KEY` is set, the question is skipped,
+   `API key: from MAILDIGEST_LLM_API_KEY (not written to the file)` appears, and no key is
+   written into the file.
+5. `Response token limit per call (empty = no limit) [<previous value>]: ` — preceded by the
+   recommendation from the provider knowledge base (a block with the heading
+   `Response token limit (max_tokens) — optional`). An empty entry, `0`, `none`, `no`,
+   `unlimited` or `-` mean **no limit**: the field `[llm] max_tokens` is removed from the file.
+   An integer ≥ 1 is stored as the limit. Out of the box no limit applies (ADR-085); reasoning
+   models subtract their thinking tokens from the budget, and a small limit truncates the
+   answer there. On any other entry the question is repeated up to three times, then exit
+   code 2.
 
-Ist die Basis-URL weder `https://` noch `http://localhost`/`http://127.`, erscheint eine
-Warnung auf stderr; das Kommando läuft weiter.
+If the base URL is neither `https://` nor `http://localhost`/`http://127.`, a warning appears
+on stderr; the command continues.
 
-Der Testaufruf (`Test call ...` auf stdout, `Test call skipped (--no-test).` mit
-`--no-test`) schickt einen kurzen, im Programm formulierten Prompt (kein Mail-Inhalt) mit
-`max_tokens = 16`. Die Antwort des Modells wird **nicht** angezeigt — gemeldet werden nur
-ihre Länge und ob sie das erwartete Wort enthält:
-`Response received (N characters, expected reply).` bzw. `… unexpected reply).`
-Schlägt der Aufruf fehl, endet das Kommando mit Exit-Code 1
-(`Error: Test call failed (<Fehlerklasse>): …` plus `Check the model name, API key and base
-URL.`) und schreibt nichts. Bei Auswahl 1 lauten die beiden letzten Zeilen
-`Saved to <pfad> (file mode 0600).` und `MailDigest now runs without a language model. Run
+The test call (`Test call ...` on stdout, `Test call skipped (--no-test).` with `--no-test`)
+sends a short prompt formulated in the program (no mail content) with `max_tokens = 16`. The
+model's answer is **not** displayed — only its length and whether it contains the expected word
+are reported: `Response received (N characters, expected reply).` or `… unexpected reply).`
+If the call fails, the command ends with exit code 1
+(`Error: Test call failed (<error class>): …` plus `Check the model name, API key and base
+URL.`) and writes nothing. With choice 1 the last two lines are
+`Saved to <path> (file mode 0600).` and `MailDigest now runs without a language model. Run
 this command again at any time to connect one.`
 
-**Optionen**
+**Options**
 
-| Option | Wert | Bedeutung |
+| Option | Value | Meaning |
 |---|---|---|
-| `--provider` | `none` \| `anthropic` \| `openai_compatible` | Setzt `[llm] provider`; überspringt die Auswahlliste. Belegt **keine** anbieterspezifische `base_url` vor — dafür ist `--base-url` da |
-| `--model` | ID | Antwort auf Frage 2 |
-| `--base-url` | URL | Antwort auf Frage 3 |
-| `--max-tokens` | N | Antwort auf Frage 5: ganze Zahl ≥ 1 als Limit, `0` = kein Limit. Ohne die Option bleibt nicht-interaktiv der Dateiwert. Negativ oder keine Zahl: Exit-Code 2 |
-| `--no-test` | – | Ohne Testaufruf speichern |
+| `--provider` | `none` \| `anthropic` \| `openai_compatible` | Sets `[llm] provider`; skips the selection list. Does **not** preset a provider-specific `base_url` — that is what `--base-url` is for |
+| `--model` | ID | Answer to question 2 |
+| `--base-url` | URL | Answer to question 3 |
+| `--max-tokens` | N | Answer to question 5: an integer ≥ 1 as the limit, `0` = no limit. Without the option, non-interactively the file value stays. Negative or not a number: exit code 2 |
+| `--no-test` | – | Save without a test call |
 
-Für den API-Key gibt es keine Option; er kommt aus der Abfrage oder aus
+For the API key there is no option; it comes from the prompt or from
 `MAILDIGEST_LLM_API_KEY`.
 
 ### `maildigest connect-messenger`
 
-Richtet den Zustellweg ein und schickt eine Testnachricht. Setzt eine vorhandene
-Konfigurationsdatei voraus.
+Sets up the delivery route and sends a test message. Requires an existing configuration file.
 
-Die erste Zeile lautet `Connecting the messenger`, danach immer die Abfrage
+The first line is `Connecting the messenger`, followed always by the prompt
 `Messenger (telegram/discord/signal) [telegram]: `
 
-**Telegram.** Anleitung zum Anlegen des Bots über @BotFather — einschließlich des
-Schrittes, dem eigenen Bot zuerst selbst eine Nachricht zu schreiben, ohne den die
-Chat-Ermittlung im nächsten Schritt nichts finden kann. Dann
-`Bot token (leave empty to use MAILDIGEST_TELEGRAM_TOKEN instead): ` (ohne Echo;
-entfällt, wenn die Umgebungsvariable gesetzt ist — dann erscheint `Bot token: from
-MAILDIGEST_TELEGRAM_TOKEN (not written to the file)` und es steht kein Token in der Datei).
-Ohne `--chat-id` folgt der getUpdates-Flow: Die Ausgabe fordert mit
-`Now send your bot a message in Telegram (e.g. /start).` dazu auf, dem Bot jetzt eine
-Nachricht zu schreiben, und fragt Telegram bis zu 10-mal im Abstand von 3 Sekunden ab
-(`No message received yet — waiting (n/10) ...`). Gefunden wird die Chat-ID aus der
-ersten passenden Nachricht (`Chat ID found: <id>`); bei mehreren Chats erscheint nach
-`Several chats found — which one should it be?` eine nummerierte Auswahl (`Chat [1]: `),
-die **nur** die numerische Chat-ID und den Chat-Typ (`private`, `group`, `supergroup`,
-`channel`, `unknown`) zeigt — nie einen Namen aus dem Chat. Wird nichts gefunden, endet das
-Kommando mit Exit-Code 1 (`Error: No message to the bot found. …`); steht bereits eine
-Chat-ID in der Datei, bleibt sie stehen und es gibt nur die Warnung
-`No new message found — keeping the existing chat ID.` Ein abgelehntes Token führt zu
-Exit-Code 1 mit `Error: Telegram request failed: … / Is the bot token correct?`.
+**Telegram.** Instructions for creating the bot through @BotFather — including the step of
+first writing a message to your own bot, without which the chat discovery in the next step can
+find nothing. Then `Bot token (leave empty to use MAILDIGEST_TELEGRAM_TOKEN instead): `
+(without echo; skipped when the environment variable is set — then
+`Bot token: from MAILDIGEST_TELEGRAM_TOKEN (not written to the file)` appears and no token is
+in the file). Without `--chat-id` the getUpdates flow follows: the output asks with
+`Now send your bot a message in Telegram (e.g. /start).` to write the bot a message now, and
+polls Telegram up to 10 times at 3-second intervals
+(`No message received yet — waiting (n/10) ...`). The chat ID is taken from the first matching
+message (`Chat ID found: <id>`); with several chats a numbered selection (`Chat [1]: `)
+appears after `Several chats found — which one should it be?`, showing **only** the numeric
+chat ID and the chat type (`private`, `group`, `supergroup`, `channel`, `unknown`) — never a
+name from the chat. If nothing is found, the command ends with exit code 1
+(`Error: No message to the bot found. …`); if a chat ID is already in the file, it stays and
+there is only the warning `No new message found — keeping the existing chat ID.` A rejected
+token leads to exit code 1 with `Error: Telegram request failed: … / Is the bot token
+correct?`.
 
-Nach jeder erfolgreichen Telegram-Einrichtung nennt die Ausgabe **genau einmal** die optionalen Befehle `/digest` und `/status` samt des Schalters `accept_commands` (ADR-077), damit der Nutzer von ihrer Existenz erfaehrt — auf dem getUpdates-Weg ebenso wie mit `--chat-id`; die zugestellte Testnachricht enthaelt dieselbe Auskunft. Fehlt `[messenger.telegram] accept_commands` in einer aelteren Datei, traegt `connect-messenger` den Default nach, damit der Feldsatz aus Abschnitt 5 vollstaendig bleibt.
+After every successful Telegram setup the output names the optional commands `/digest` and
+`/status` **exactly once**, together with the switch `accept_commands` (ADR-077), so that the
+user learns of their existence — on the getUpdates route just as with `--chat-id`; the
+delivered test message carries the same information. If `[messenger.telegram]
+accept_commands` is missing from an older file, `connect-messenger` adds the default so that
+the field set from section 5 stays complete.
 
-**Discord.** Hinweis zum Anlegen des Webhooks, dann `Webhook URL: ` (ohne Echo, weil die
-URL selbst das Secret ist). Ohne URL: Exit-Code 2.
+**Discord.** A note on creating the webhook, then `Webhook URL: ` (without echo, because the
+URL itself is the secret). Without a URL: exit code 2.
 
-**Signal.** Der Hinweis
-`Prerequisite: \`signal-cli --daemon --socket <path>\` is already running.`, dann
-`Path of the signal-cli socket [<bisheriger Wert>]: ` (Pflichtangabe). Das Kommando setzt
-`[messenger.signal] enabled = true`. Zugestellt wird an „Notiz an mich".
+**Signal.** The note
+`Prerequisite: \`signal-cli --daemon --socket <path>\` is already running.`, then
+`Path of the signal-cli socket [<previous value>]: ` (mandatory). The command sets
+`[messenger.signal] enabled = true`. Delivery goes to "Note to Self".
 
-Danach folgt (außer bei `--no-test`; sonst `Test message skipped (--no-test).`) ein
-Erreichbarkeitstest und **eine Testnachricht**:
+After that (except with `--no-test`; otherwise `Test message skipped (--no-test).`) a
+reachability test and **one test message** follow:
 
 ```
 ✅ MailDigest test message
 Delivery works — your mail summaries will arrive here from now on
 ```
 
-Bei Telegram hängt daran — und nur dort — der Befehls-Absatz:
+With Telegram — and only there — the command paragraph is appended to it:
 
 ```
 
@@ -371,58 +368,64 @@ This chat can also trigger MailDigest:
 /status — short report on what is waiting
 ```
 
-Ist der Dienst nicht erreichbar oder scheitert die Zustellung, endet das Kommando mit
-Exit-Code 1 und schreibt nichts in die Datei.
+If the service is unreachable or delivery fails, the command ends with exit code 1 and writes
+nothing into the file.
 
-**Optionen**
+**Options**
 
-| Option | Wert | Bedeutung |
+| Option | Value | Meaning |
 |---|---|---|
-| `--messenger` | `telegram` \| `discord` \| `signal` | Antwort auf die erste Frage |
-| `--chat-id` | ID | Telegram-Chat-ID direkt setzen; der getUpdates-Flow entfällt |
-| `--webhook-url` | URL | Discord-Webhook-URL |
-| `--signal-socket` | PFAD | Pfad des signal-cli-Sockets |
-| `--no-test` | – | Ohne Erreichbarkeitstest und ohne Testnachricht speichern |
+| `--messenger` | `telegram` \| `discord` \| `signal` | Answer to the first question |
+| `--chat-id` | ID | Set the Telegram chat ID directly; the getUpdates flow is skipped |
+| `--webhook-url` | URL | Discord webhook URL |
+| `--signal-socket` | PATH | Path of the signal-cli socket |
+| `--no-test` | – | Save without a reachability test and without a test message |
 
-Für das Bot-Token gibt es keine Option; es kommt aus der Abfrage oder aus
+For the bot token there is no option; it comes from the prompt or from
 `MAILDIGEST_TELEGRAM_TOKEN`.
 
 ### `maildigest test`
 
-Ohne `--dry-run` geht der eigentlichen Nachricht ein kurzer Vorspann voraus (Kennzeichnung als Selbsttest mit dem Hinweis, dass die Mail nicht aus dem Postfach stammt). Ohne ihn waere die zugestellte Zusammenfassung von einer echten nicht zu unterscheiden, und der Nutzer suchte im Postfach nach einer Mail, die es nie gab. Der Vorspann nennt die **Herkunft der Testmail** in zwei Fassungen — mitgelieferte Beispielmail oder die mit `--eml` uebergebene Datei —, aber nie den Dateipfad: Punkte im Pfad wuerde der Output-Sanitizer sichtbar entschaerfen. Wortlaut:
+Without `--dry-run` the actual message is preceded by a short preamble (marking it as a
+self-test with the note that the mail does not come from the mailbox). Without it the
+delivered summary would be indistinguishable from a real one, and the user would search the
+mailbox for a mail that never existed. The preamble names the **origin of the test mail** in
+two variants — the bundled example mail or the file passed with `--eml` — but never the file
+path: dots in the path would be visibly defanged by the output sanitizer. Wording:
 
 ```
 🧪 MailDigest self-test
 The next message is built from the bundled example mail, not from your mailbox — there is no such mail to look for
 ```
 
-bzw. `… built from the file you supplied, not from your mailbox — …`. Laesst sich der
-Vorspann nicht zustellen, steht auf stderr `Note: the self-test marker could not be
-delivered.`; der Selbsttest laeuft weiter.
+or `… built from the file you supplied, not from your mailbox — …`. If the preamble cannot be
+delivered, stderr shows `Note: the self-test marker could not be delivered.`; the self-test
+continues.
 
-Ende-zu-Ende-Selbsttest: verarbeitet **eine `.eml`-Datei** durch dieselbe Pipeline wie im
-Betrieb (Sanitizer → Summarizer → Kritiker → Output-Sanitizer → Messenger) und stellt das
-Ergebnis zu. Das Postfach wird dabei nicht angefasst.
+End-to-end self-test: processes **one `.eml` file** through the same pipeline as in production
+(sanitizer → summarizer → critic → output sanitizer → messenger) and delivers the result. The
+mailbox is not touched in the process.
 
-Ohne `--eml` wird die mitgelieferte Beispielmail benutzt (eine harmlose deutsche
-Terminmail mit einem Link, ohne Anhang). Mit `--eml <pfad>` wird eine eigene Datei im
-RFC-822-Format eingespeist — das ist das **Einspeise-Verfahren** für eigene Testmails
-(Angriffsmails inklusive): Datei schreiben, `maildigest test --eml datei.eml` aufrufen,
-Ergebnis im Messenger bzw. mit `--dry-run` auf stdout ansehen.
+Without `--eml` the bundled example mail is used (a harmless German appointment mail with a
+link and no attachment). With `--eml <path>` your own file in RFC 822 format is fed in — that
+is the **feeding procedure** for your own test mail (attack mail included): write the file,
+call `maildigest test --eml file.eml`, inspect the result in the messenger or, with
+`--dry-run`, on stdout.
 
-Zwei Eigenschaften sind für den Test wichtig:
+Two properties matter for the test:
 
-* Der Selbsttest benutzt eine **eigene, temporäre State-Datenbank**. Er verändert weder
-  den Dedupe-Stand noch die Zustell-Warteschlange des Betriebs; dieselbe Datei lässt sich
-  beliebig oft einspeisen.
-* Er ignoriert `[general] deliver_min_importance` (er stellt ab `low` zu), damit auch eine
-  als unwichtig eingestufte Testmail sichtbar wird statt im Sammel-Digest zu landen.
+* The self-test uses its **own, temporary state database**. It changes neither the dedupe
+  state nor the delivery queue of production; the same file can be fed in as often as you
+  like.
+* It ignores `[general] deliver_min_importance` (it delivers from `low` upwards), so that a
+  test mail classified as unimportant becomes visible instead of landing in the collected
+  digest.
 
-Die Ausgabe hat fünf nummerierte Schritte:
+The output has five numbered steps:
 
 ```
-1/5 Configuration loaded: <pfad>
-2/5 Test mail read: <pfad|bundled example mail> (N bytes)
+1/5 Configuration loaded: <path>
+2/5 Test mail read: <path|bundled example mail> (N bytes)
 3/5 Pipeline running (sanitizer -> summarizer -> critic -> delivery) ...
 4/5 Sanitizer: N characters of text, N attachments (N processed), N links removed, N control characters removed
   Summarizer: importance=<high|normal|low>, injection suspected=<yes|no>
@@ -430,320 +433,310 @@ Die Ausgabe hat fünf nummerierte Schritte:
 5/5 Delivered (N parts). Check your messenger.
 ```
 
-Bei genau einem Teil lautet die Klammer `(1 part)` — hier und ebenso in
-`5/5 Message created (N parts) — dry run, not sent:`. Ebenso stehen in Zeile 4/5 die
-Einzahlformen, wenn der Zähler 1 ist: `1 attachment`, `1 link removed`,
-`1 control character removed`.
+With exactly one part the parenthesis reads `(1 part)` — here and likewise in
+`5/5 Message created (N parts) — dry run, not sent:`. Line 4/5 uses the singular forms when a
+counter is 1 as well: `1 attachment`, `1 link removed`, `1 control character removed`.
 
-Weder der Mail-Text noch die Modellausgabe erscheinen dabei auf dem Terminal; nur die
-fertige, sanitisierte Nachricht bei `--dry-run`. Mit `--dry-run` steht zwischen Schritt 2
-und 3 zusätzlich die Zeile `    Dry run: nothing is sent to the messenger (--dry-run).`,
-und Schritt 5 lautet `5/5 Message created (N parts) — dry run, not sent:`, gefolgt von der
-Nachricht selbst.
+Neither the mail text nor the model output appears on the terminal; only the finished,
+sanitised message with `--dry-run`. With `--dry-run` the line
+`    Dry run: nothing is sent to the messenger (--dry-run).` additionally appears between
+steps 2 and 3, and step 5 reads `5/5 Message created (N parts) — dry run, not sent:`,
+followed by the message itself.
 
-Wurde die Nachricht erzeugt, aber nicht zugestellt (der Messenger nimmt sie nicht an, sie
-wartet in der Warteschlange), lautet Schritt 5
-`5/5 Not delivered (N parts) — queued for retry.`; die Erklärung dazu steht auf
-stderr, der Exit-Code ist 1. Damit hat die Schrittfolge in allen drei Ausgängen —
-zugestellt, nicht zugestellt, fail-closed — eine abschließende 5/5-Zeile.
+If the message was created but not delivered (the messenger does not accept it and it waits in
+the queue), step 5 reads `5/5 Not delivered (N parts) — queued for retry.`; the explanation is
+on stderr and the exit code is 1. The step sequence therefore has a closing 5/5 line in all
+three outcomes — delivered, not delivered, fail-closed.
 
-Exit-Codes: 0, wenn die Nachricht erzeugt **und** zugestellt wurde (bzw. bei `--dry-run`
-erzeugt und ausgegeben). 1, wenn die Pipeline fail-closed endete (dann lautet Zeile 4/5
-`4/5 Sanitizer: failed.` und Schritt 5 `5/5 Fail-closed: stage <stufe>, reason <grund>.`,
-und der Messenger bekommt die Metadaten-Notiz aus Abschnitt 6) oder wenn die Zustellung
-nicht bestätigt wurde. 1 auch bei fehlender, unlesbarer oder unvollständiger Konfiguration
-und bei nicht lesbarer `--eml`-Datei.
+Exit codes: 0 when the message was created **and** delivered (or, with `--dry-run`, created
+and printed). 1 when the pipeline ended fail-closed (line 4/5 then reads
+`4/5 Sanitizer: failed.` and step 5 `5/5 Fail-closed: stage <stage>, reason <reason>.`, and
+the messenger receives the metadata note from section 6) or when delivery was not confirmed.
+1 as well with a missing, unreadable or incomplete configuration and with an unreadable
+`--eml` file.
 
-Endet die Pipeline mit `--dry-run` fail-closed, geht **nichts** an den Messenger. Schritt 5
-lautet dann
+If the pipeline ends fail-closed with `--dry-run`, **nothing** goes to the messenger. Step 5
+then reads
 
 ```
-5/5 Fail-closed: stage <stufe>, reason <grund>.
+5/5 Fail-closed: stage <stage>, reason <reason>.
     Metadata notice created — dry run, not sent:
 ```
 
-gefolgt von der Notiz selbst auf stdout; auf stderr steht `Self-test failed — only the
-metadata notice was created (delivered: no — dry run).` Ohne `--dry-run` steht dort
-`(delivered: yes)` nur, wenn die Notiz den Messenger tatsächlich erreicht hat; blieb sie in
-der Warteschlange liegen, steht dort `(delivered: no)` (ADR-071).
+followed by the note itself on stdout; stderr carries `Self-test failed — only the metadata
+notice was created (delivered: no — dry run).` Without `--dry-run` it says `(delivered: yes)`
+only when the note actually reached the messenger; if it stayed in the queue, it says
+`(delivered: no)` (ADR-071).
 
-**Optionen**
+**Options**
 
-| Option | Wert | Bedeutung |
+| Option | Value | Meaning |
 |---|---|---|
-| `--eml` | PFAD | Eigene `.eml`-Datei statt der Beispielmail |
-| `--dry-run` | – | Nachricht nur auf stdout ausgeben, nichts zustellen |
+| `--eml` | PATH | Your own `.eml` file instead of the example mail |
+| `--dry-run` | – | Only print the message on stdout, deliver nothing |
 
 ### `maildigest run`
 
-Der Betrieb. Ohne Optionen läuft MailDigest im Vordergrund und pollt das Postfach alle
-`[imap] poll_interval_seconds` Sekunden; `SIGINT` (Strg-C) und `SIGTERM` beenden den
-laufenden Zyklus sauber und danach den Prozess (Exit-Code 0).
+Production. Without options MailDigest runs in the foreground and polls the mailbox every
+`[imap] poll_interval_seconds` seconds; `SIGINT` (Ctrl-C) and `SIGTERM` finish the running
+cycle cleanly and then the process (exit code 0).
 
-Mit `--once` wird genau ein Zyklus ausgeführt (Warteschlange leeren → einmal pollen →
-Warteschlange leeren → Sammel-Digest prüfen → Befehlskanal bedienen), dann endet der
-Prozess. Das ist die Cron-taugliche Form.
+With `--once` exactly one cycle is executed (drain the queue → poll once → drain the queue →
+check the collected digest → serve the command channel), then the process ends. That is the
+cron-friendly form.
 
-Zum Befehlskanal (`[messenger.telegram] accept_commands`, ADR-077/ADR-080): Im
-Dauerbetrieb wird er **während** der Wartezeit alle 10 Sekunden abgefragt — ein `/digest`
-wartet höchstens diese 10 Sekunden, nicht ein volles `poll_interval_seconds`. Bei `--once`
-wird er **einmal am Ende** des Laufs bedient: `/status` wird beantwortet, `/digest` ist
-dort wirkungslos (der Abruf lief gerade) und wird nur konsumiert, damit er sich nicht
-staut. Im Cron-Betrieb kommt die Antwort also beim nächsten Lauf, verzögert um höchstens
-das Cron-Intervall.
+On the command channel (`[messenger.telegram] accept_commands`, ADR-077/ADR-080): in
+continuous operation it is polled every 10 seconds **during** the waiting time — a `/digest`
+waits at most those 10 seconds, not a full `poll_interval_seconds`. With `--once` it is served
+**once at the end** of the run: `/status` is answered, `/digest` has no effect there (the fetch
+just happened) and is only consumed so that it does not pile up. Under cron the answer
+therefore arrives on the next run, delayed by at most the cron interval.
 
-Sammel-Digest und Zustell-Warteschlange hängen **nicht** an der Erreichbarkeit des
-Postfachs: Ist das Postfach ausgefallen, werden beide trotzdem abgearbeitet, bevor der
-Lauf mit Exit-Code 1 endet (ADR-049 Nachtrag).
+The collected digest and the delivery queue do **not** depend on the mailbox being reachable:
+if the mailbox is down, both are worked off anyway before the run ends with exit code 1
+(ADR-049 addendum).
 
-Ausgabe: strukturierte **JSON-Zeilen auf stdout** (ein Objekt je Ereignis, Felder `ts`,
-`level`, `logger`, `event` und ereignisabhängige Zusatzfelder). Der Schwellwert kommt aus
-`[general] log_level`. Mail-Inhalte, Betreffzeilen und Secrets erscheinen dort nie — nur
-gekürzte Hashes, Absender-Domains, Statuswerte und Zähler. Bei `--once` kommt zusätzlich
-eine Bilanzzeile auf **stderr**:
+Output: structured **JSON lines on stdout** (one object per event, fields `ts`, `level`,
+`logger`, `event` and event-dependent extra fields). The threshold comes from
+`[general] log_level`. Mail content, subject lines and secrets never appear there — only
+shortened hashes, sender domains, status values and counters. With `--once` a summary line on
+**stderr** is added:
 
 ```
 Run finished: N mails fetched, N processed, N duplicates, N errors, N messages delivered, N queued.
 ```
 
-`N messages delivered` zählt **alle** in diesem Lauf zugestellten Nachrichten: direkt
-zugestellte Einzelnachrichten, zugestellte Metadaten-Notizen, den Sammel-Digest und aus der
-Warteschlange nachgelieferte Nachrichten (ADR-070). Nachrichten, die in der Warteschlange
-verbleiben, zählen erst in dem Lauf, in dem sie durchgehen; bis dahin erscheinen sie unter
-`N queued`.
+`N messages delivered` counts **all** messages delivered in that run: directly delivered
+individual messages, delivered metadata notes, the collected digest and messages delivered
+late from the queue (ADR-070). Messages remaining in the queue only count in the run in which
+they get through; until then they appear under `N queued`.
 
-Exit-Codes: 0 bei sauberem Ende, 1 bei unvollständiger Konfiguration, unbenutzbarer
-State-Datenbank oder — nur bei `--once` — nicht erreichbarem Postfach
-(`Error: Mailbox unreachable: …`). Ein fehlendes IMAP-Passwort (weder `[imap]
-password` noch `MAILDIGEST_IMAP_PASSWORD`) zählt zum **ersten** Fall: Es wird vor dem
-Verbindungsaufbau erkannt und als Konfigurationsfehler gemeldet
-(`Error: Invalid configuration (<pfad>):` / `  - [imap] password: required value missing. …`),
-nicht als Erreichbarkeitsproblem. Ein fehlgeschlagenes Verschieben ist **kein**
-solcher Fall: Es betrifft eine einzelne Mail, wird als `imap_postprocess_failed`
-protokolliert und bricht den Lauf nicht ab (ADR-065). Im Dauerbetrieb ist ein Postfach-Ausfall kein
-Abbruch: Es wird mit wachsendem Abstand (5 s, 10 s, 20 s … maximal 10 Minuten) neu
-verbunden.
+Exit codes: 0 on a clean end, 1 on an incomplete configuration, an unusable state database or
+— only with `--once` — an unreachable mailbox (`Error: Mailbox unreachable: …`). A missing
+IMAP password (neither `[imap] password` nor `MAILDIGEST_IMAP_PASSWORD`) belongs to the
+**first** case: it is detected before the connection is established and reported as a
+configuration error
+(`Error: Invalid configuration (<path>):` / `  - [imap] password: required value missing. …`),
+not as a reachability problem. A failed move is **not** such a case: it concerns a single mail,
+is logged as `imap_postprocess_failed` and does not abort the run (ADR-065). In continuous
+operation a mailbox outage is not an abort either: it reconnects with growing intervals (5 s,
+10 s, 20 s … at most 10 minutes).
 
-**Optionen**
+**Options**
 
-| Option | Wert | Bedeutung |
+| Option | Value | Meaning |
 |---|---|---|
-| `--once` | – | Einen Zyklus ausführen und beenden |
+| `--once` | – | Run one cycle and exit |
 
 ### `maildigest instructions`
 
-Zeigt oder ändert die Custom-Instructions (`[summarizer] instructions`, F-SUM-3), ohne dass
-die Datei von Hand gesucht werden muss (ADR-086). Setzt eine vorhandene Konfigurationsdatei
-voraus. Der Text geht als klar gelabelter Block in den System-Prompt des Summarizers (I8);
-der Kritiker sieht ihn nie (ADR-042), und die Sicherheitsregeln lassen sich damit nicht
-abschalten.
+Shows or changes the custom instructions (`[summarizer] instructions`, F-SUM-3) without having
+to hunt for the file by hand (ADR-086). Requires an existing configuration file. The text goes
+into the summarizer's system prompt as a clearly labelled block (I8); the critic never sees it
+(ADR-042), and the security rules cannot be switched off with it.
 
-Ohne Option wird der aktuelle Text gezeigt: `Custom instructions (<N> characters):`, gefolgt
-vom Text (jede Zeile um zwei Leerzeichen eingerückt), bzw. `Custom instructions: (none)`.
-Danach die beiden Zeilen
-`They reach the summarizer as a labelled block; the critic never sees them.` und
+Without an option the current text is shown: `Custom instructions (<N> characters):`, followed
+by the text (each line indented by two spaces), or `Custom instructions: (none)`. After that
+the two lines `They reach the summarizer as a labelled block; the critic never sees them.` and
 `Change them with: maildigest instructions --set "..." | --add "..." | --edit | --clear`.
 
-Mit einer Option wird der Text geändert und gespeichert: `Saved to <pfad> (file mode 0600).`,
-danach der neue Text wie oben (ohne die beiden Hinweiszeilen). Ist der Text unverändert,
-lautet die einzige Ausgabe `Custom instructions unchanged.` und nichts wird geschrieben.
-Normalisierung vor dem Speichern: Windows-Zeilenenden werden zu `\n`, Leerzeichen am
-Zeilenende und am Rand entfernt. Mehr als 2000 Zeichen oder Steuerzeichen außer
-Zeilenumbruch und Tab: Exit-Code 2, nichts gespeichert.
+With an option the text is changed and saved: `Saved to <path> (file mode 0600).`, then the
+new text as above (without the two note lines). If the text is unchanged, the only output is
+`Custom instructions unchanged.` and nothing is written. Normalisation before saving: Windows
+line endings become `\n`, trailing and surrounding whitespace is removed. More than 2000
+characters, or control characters other than newline and tab: exit code 2, nothing saved.
 
-`--edit` öffnet den Text im Editor aus `$VISUAL`, sonst `$EDITOR`, sonst `nano` oder `vi`
-aus dem Suchpfad (`Opening <editor> ... (save and close the editor to apply)`). Die
-Bearbeitungsdatei liegt so lange im Verzeichnis der Konfiguration (Rechte 0600) und beginnt
-mit Kommentarzeilen (`#`), die beim Übernehmen verworfen werden. Endet der Editor mit einem
-anderen Status als 0, wird nichts gespeichert (Exit-Code 1). Ohne Terminal
-(`--non-interactive`) oder ohne auffindbaren Editor: Exit-Code 2 mit dem Hinweis auf `--set`
-bzw. `--add`.
+`--edit` opens the text in the editor from `$VISUAL`, otherwise `$EDITOR`, otherwise `nano` or
+`vi` from the path (`Opening <editor> ... (save and close the editor to apply)`). The edit file
+lives in the configuration's directory for that time (mode 0600) and begins with comment lines
+(`#`) that are discarded on apply. If the editor exits with a status other than 0, nothing is
+saved (exit code 1). Without a terminal (`--non-interactive`) or without a findable editor:
+exit code 2 with a pointer to `--set` or `--add`.
 
-**Optionen** (höchstens eine)
+**Options** (at most one)
 
-| Option | Wert | Bedeutung |
+| Option | Value | Meaning |
 |---|---|---|
-| `--set` | TEXT | Ersetzt den Text durch TEXT |
-| `--add` | TEXT | Hängt TEXT als neue Zeile an |
-| `--edit` | – | Öffnet den Text im Editor |
-| `--clear` | – | Entfernt den Text |
+| `--set` | TEXT | Replaces the text with TEXT |
+| `--add` | TEXT | Appends TEXT as a new line |
+| `--edit` | – | Opens the text in the editor |
+| `--clear` | – | Removes the text |
 
-## 5. Konfigurationsdatei
+## 5. Configuration file
 
-Format TOML, UTF-8. Dateirechte **0600** — jedes Kommando, das schreibt, setzt sie erneut.
-Unbekannte Felder sind ein Fehler (Tippfehler-Schutz): Beim Laden meldet MailDigest
-`[sektion] feld: Unbekanntes Feld — Tippfehler?` und endet mit Exit-Code 1.
+Format TOML, UTF-8. File mode **0600** — every command that writes sets it again. Unknown
+fields are an error (typo protection): on load MailDigest reports
+`[sektion] feld: Unbekanntes Feld — Tippfehler?` and exits with code 1.
 
-Alle Felder mit ihren Defaults:
+All fields with their defaults:
 
-| Sektion / Feld | Typ / Werte | Default | Bedeutung |
+| Section / field | Type / values | Default | Meaning |
 |---|---|---|---|
-| `[general] language` | Text | `"de"` | Sprache der Zusammenfassungen |
-| `[general] summary_length` | `short`/`medium`/`long` | `"medium"` | Ausführlichkeit |
-| `[general] deliver_min_importance` | `low`/`normal`/`high` | `"normal"` | Ab dieser Wichtigkeit wird einzeln zugestellt; darunter Sammel-Digest |
-| `[general] low_digest_time` | `HH:MM` | `"18:00"` | Uhrzeit des Sammel-Digests (lokale Zeit des Servers) |
-| `[general] state_db` | Pfad | `""` | Leer = `state.db` neben der Konfigurationsdatei; relative Pfade gelten relativ zu deren Verzeichnis |
-| `[general] log_level` | `DEBUG`/`INFO`/`WARNING`/`ERROR` | `"INFO"` | Log-Schwellwert. `DEBUG` schaltet Tracebacks frei, die Mail-Inhalte enthalten können — solche Logs sind vertraulich |
-| `[imap] host` | Text | — | **Pflicht.** Hostname des Mirror-Postfachs |
-| `[imap] port` | 1–65535 | `993` | Nur IMAPS; 143 wird abgelehnt |
-| `[imap] username` | Text | — | **Pflicht.** |
-| `[imap] password` | Text | — | Alternativ `MAILDIGEST_IMAP_PASSWORD` |
-| `[imap] folder` | Text | `"INBOX"` | Gelesener Ordner |
-| `[imap] poll_interval_seconds` | ≥ 5 | `120` | Abrufintervall im Dauerbetrieb |
-| `[imap] move_processed_to` | Text | `""` | Leer = nur Gelesen-Flag setzen. Der Ordner muss auf dem Server existieren, und der Server muss die MOVE-Erweiterung beherrschen. Fehlt eines von beidem, bleibt die Mail als gelesen im Quellordner liegen und der Lauf protokolliert `imap_postprocess_failed` mit dem Grund — der Zyklus läuft weiter (ADR-064/ADR-065) |
-| `[llm] provider` | `none`/`anthropic`/`openai_compatible` | `"none"` | Anbieter. `none` = Betrieb ohne Sprachmodell (ADR-076): zugestellt wird ein beschrifteter Auszug statt einer Zusammenfassung, alle deterministischen Warnungen bleiben |
-| `[llm] model` | Text | `""` | **Pflicht, sobald `provider` nicht `none` ist.** Exakte Modell-ID; bewusst kein Default |
-| `[llm] api_key` | Text | — | Alternativ `MAILDIGEST_LLM_API_KEY`. Für `anthropic` erforderlich, für lokale Server meist nicht |
-| `[llm] base_url` | URL | `""` | Endpunkt für `openai_compatible` |
-| `[llm] max_tokens` | ≥ 1 | — | Obergrenze je Antwort und Aufruf. **Fehlt das Feld, gilt kein Limit** — die Obergrenze des Anbieters bzw. Modells (ADR-085; bei `anthropic` die Pflicht-Obergrenze der API, 32 000). `connect-llm` fragt danach und nennt sinnvolle Werte |
-| `[llm.critic] provider` | wie `[llm]` | erbt | Override für den Kritiker |
-| `[llm.critic] model` | Text | erbt | Override |
-| `[llm.critic] base_url` | URL | erbt | Override |
-| `[llm.critic] max_tokens` | ≥ 1 | erbt | Override; kann ein Limit setzen, wo `[llm]` keins hat |
-| `[summarizer] instructions` | Text | `""` | Custom-Instructions: was ist wichtig, worauf achten. Steuert Stil und Wichtigkeit, kann die Sicherheitsregeln nicht abschalten |
-| `[links] footnote` | `true`/`false` | `false` | Defangte Link-Liste als Fußnote an die Nachricht hängen |
-| `[messenger] active` | `telegram`/`discord`/`signal` | `"telegram"` | Aktiver Zustellweg |
-| `[messenger.telegram] token` | Text | — | Alternativ `MAILDIGEST_TELEGRAM_TOKEN` |
-| `[messenger.telegram] chat_id` | Text | `""` | Ziel-Chat; `connect-messenger` ermittelt ihn |
-| `[messenger.telegram] accept_commands` | true/false | `true` | Ob MailDigest Befehle aus dem Chat annimmt (ADR-077, Vorgabe seit ADR-078 `true`). Eingeschaltet reagiert `run` auf `/digest` (Abrufzyklus, Wartezeit höchstens 10 s) und `/status` (Kurzbericht), **nur** aus `chat_id`; bei `run --once` wird der Kanal einmal am Ende des Laufs bedient und `/digest` ist dort wirkungslos (ADR-080). Erkannt werden die beiden Wörter tolerant: Groß-/Kleinschreibung egal, umgebende Leerzeichen und ein `@botname`-Suffix werden abgetrennt, Zusatztext hinter dem Befehl wird ignoriert. Jeder andere Text wird verworfen; kein Zeichen aus dem Chat — weder Zusatztext noch Chat-Titel noch Absendername — erreicht jemals ein Sprachmodell oder eine zugestellte Nachricht |
-| `[messenger.discord] webhook_url` | URL | — | Webhook des Kanals (ist selbst ein Secret) |
-| `[messenger.signal] enabled` | `true`/`false` | `false` | Signal-Adapter freischalten |
-| `[messenger.signal] signal_cli_socket` | Pfad | `""` | Socket von `signal-cli --daemon` |
-| `[limits] max_mail_bytes` | ≥ 1 | `26214400` | Größte verarbeitete Mail (25 MB); darüber nur Metadaten-Notiz |
-| `[limits] max_text_chars` | ≥ 1 | `30000` | Klartext-Budget über Body und Anhänge. Roher Mail- und Anhangstext wird schon **vor** der Sanitisierung gedeckelt: das Sechzehnfache dieses Werts, als **Restbudget über die ganze Mail** (Body und alle Anhangstexte zusammen, ADR-084-Nachtrag). Ist es erschöpft, läuft ein weiterer Anhangstext gar nicht mehr durch die Sanitisierung und der Anhang gilt als nicht verarbeitet; sichtbar ist ohnehin nur dieses Budget |
-| `[limits] pdf_max_input_bytes` | ≥ 1 | `10485760` | Größtes verarbeitetes PDF (10 MB) |
-| `[limits] pdf_max_output_chars` | ≥ 1 | `50000` | Textausbeute je PDF |
-| `[limits] pdf_timeout_seconds` | ≥ 1 | `20` | Zeitlimit **einer** PDF-Extraktion |
-| `[limits] pdf_time_budget_seconds` | ≥ 1 | `30` | Zeitbudget **aller** PDF-Extraktionen einer Mail (ADR-029-Nachtrag). Jede Extraktion bekommt `min(pdf_timeout_seconds, Restbudget)`; ist das Budget aufgebraucht, gilt der Anhang wie beim Timeout als nicht verarbeitet und es startet kein Kindprozess mehr. Ohne dieses Budget hielten 20 PDF-Anhänge den Abruf rund 400 s an |
-| `[limits] max_mime_depth` | ≥ 1 | `10` | Maximale MIME-Verschachtelung |
-| `[limits] max_attachments_processed` | ≥ 0 | `20` | Inhaltlich verarbeitete Anhänge je Mail |
-| `[limits] max_html_elements` | ≥ 1 | `50000` | Elemente der HTML-Konvertierung, als **Restbudget je Mail** über alle HTML-Teile; darüber wird der Teil nicht konvertiert (ADR-084). Höher stellen verlängert die Konvertierung linear — die Zusage „höchstens 10 s" gilt für die Vorgabe |
-| `[limits] max_html_bytes` | ≥ 1024 | `1048576` | Bytebudget der HTML-Konvertierung je Mail (1 MB), geprüft **vor** dem Parsen; zusammen mit höchstens vier konvertierten `text/html`-Teilen deckelt es die Konvertierungszeit einer Mail auf etwa zwei bis drei Sekunden je nach Maschinenlast — deutlich unter der Zusage „höchstens 10 s" (ADR-084-Nachtrag). Echte Newsletter liegen weit darunter; ein grösserer Wert verlängert die Konvertierung überproportional |
+| `[general] language` | text | `"de"` | Language of the summaries |
+| `[general] summary_length` | `short`/`medium`/`long` | `"medium"` | Level of detail |
+| `[general] deliver_min_importance` | `low`/`normal`/`high` | `"normal"` | From this importance upwards mail is delivered individually; below it goes into the collected digest |
+| `[general] low_digest_time` | `HH:MM` | `"18:00"` | Time of the collected digest (the server's local time) |
+| `[general] state_db` | path | `""` | Empty = `state.db` next to the configuration file; relative paths are relative to its directory |
+| `[general] log_level` | `DEBUG`/`INFO`/`WARNING`/`ERROR` | `"INFO"` | Log threshold. `DEBUG` enables tracebacks that can contain mail content — such logs are confidential |
+| `[imap] host` | text | — | **Mandatory.** Hostname of the mirror mailbox |
+| `[imap] port` | 1–65535 | `993` | IMAPS only; 143 is rejected |
+| `[imap] username` | text | — | **Mandatory.** |
+| `[imap] password` | text | — | Alternatively `MAILDIGEST_IMAP_PASSWORD` |
+| `[imap] folder` | text | `"INBOX"` | The folder being read |
+| `[imap] poll_interval_seconds` | ≥ 5 | `120` | Poll interval in continuous operation |
+| `[imap] move_processed_to` | text | `""` | Empty = only set the seen flag. The folder must exist on the server, and the server must support the MOVE extension. If either is missing, the mail stays as read in the source folder and the run logs `imap_postprocess_failed` with the reason — the cycle continues (ADR-064/ADR-065) |
+| `[llm] provider` | `none`/`anthropic`/`openai_compatible` | `"none"` | The provider. `none` = operation without a language model (ADR-076): what is delivered is a labelled excerpt instead of a summary, and all deterministic warnings remain |
+| `[llm] model` | text | `""` | **Mandatory as soon as `provider` is not `none`.** The exact model ID; deliberately no default |
+| `[llm] api_key` | text | — | Alternatively `MAILDIGEST_LLM_API_KEY`. Required for `anthropic`, usually not for local servers |
+| `[llm] base_url` | URL | `""` | Endpoint for `openai_compatible` |
+| `[llm] max_tokens` | ≥ 1 | — | Upper bound per answer and call. **If the field is absent, no limit applies** — the ceiling of the provider or model (ADR-085; with `anthropic` the API's mandatory ceiling, 32,000). `connect-llm` asks about it and suggests sensible values |
+| `[llm.critic] provider` | as `[llm]` | inherits | Override for the critic |
+| `[llm.critic] model` | text | inherits | Override |
+| `[llm.critic] base_url` | URL | inherits | Override |
+| `[llm.critic] max_tokens` | ≥ 1 | inherits | Override; can set a limit where `[llm]` has none |
+| `[summarizer] instructions` | text | `""` | Custom instructions: what matters, what to look out for. Steers style and importance, cannot switch off the security rules |
+| `[links] footnote` | `true`/`false` | `false` | Append the defanged link list to the message as a footnote |
+| `[messenger] active` | `telegram`/`discord`/`signal` | `"telegram"` | The active delivery route |
+| `[messenger.telegram] token` | text | — | Alternatively `MAILDIGEST_TELEGRAM_TOKEN` |
+| `[messenger.telegram] chat_id` | text | `""` | Target chat; `connect-messenger` discovers it |
+| `[messenger.telegram] accept_commands` | true/false | `true` | Whether MailDigest accepts commands from the chat (ADR-077, the default `true` since ADR-078). When on, `run` reacts to `/digest` (a fetch cycle, waiting at most 10 s) and `/status` (a short report), **only** from `chat_id`; with `run --once` the channel is served once at the end of the run and `/digest` has no effect there (ADR-080). The two words are recognised tolerantly: case does not matter, surrounding whitespace and an `@botname` suffix are stripped, and extra text after the command is ignored. Any other text is discarded; not a single character from the chat — neither extra text nor chat title nor sender name — ever reaches a language model or a delivered message |
+| `[messenger.discord] webhook_url` | URL | — | The channel's webhook (itself a secret) |
+| `[messenger.signal] enabled` | `true`/`false` | `false` | Enable the Signal adapter |
+| `[messenger.signal] signal_cli_socket` | path | `""` | Socket of `signal-cli --daemon` |
+| `[limits] max_mail_bytes` | ≥ 1 | `26214400` | Largest processed mail (25 MB); above it only a metadata note |
+| `[limits] max_text_chars` | ≥ 1 | `30000` | Plain-text budget across body and attachments. Raw mail and attachment text is capped **before** sanitisation already: sixteen times this value, as a **remaining budget across the whole mail** (body and all attachment texts together, ADR-084 addendum). Once it is exhausted, a further attachment text does not go through sanitisation at all and the attachment counts as unprocessed; only this budget is visible anyway |
+| `[limits] pdf_max_input_bytes` | ≥ 1 | `10485760` | Largest processed PDF (10 MB) |
+| `[limits] pdf_max_output_chars` | ≥ 1 | `50000` | Text yield per PDF |
+| `[limits] pdf_timeout_seconds` | ≥ 1 | `20` | Time limit of **one** PDF extraction |
+| `[limits] pdf_time_budget_seconds` | ≥ 1 | `30` | Time budget of **all** PDF extractions of one mail (ADR-029 addendum). Each extraction gets `min(pdf_timeout_seconds, remaining budget)`; once the budget is used up, the attachment counts as unprocessed just as on a timeout and no child process is started. Without this budget, 20 PDF attachments held the fetch up for around 400 s |
+| `[limits] max_mime_depth` | ≥ 1 | `10` | Maximum MIME nesting |
+| `[limits] max_attachments_processed` | ≥ 0 | `20` | Attachments processed for content per mail |
+| `[limits] max_html_elements` | ≥ 1 | `50000` | Elements of the HTML conversion, as a **remaining budget per mail** across all HTML parts; above it the part is not converted (ADR-084). Raising it extends the conversion linearly — the promise "at most 10 s" applies to the default |
+| `[limits] max_html_bytes` | ≥ 1024 | `1048576` | Byte budget of the HTML conversion per mail (1 MB), checked **before** parsing; together with at most four converted `text/html` parts it caps the conversion time of one mail at roughly two to three seconds depending on machine load — well below the promise "at most 10 s" (ADR-084 addendum). Real newsletters are far below that; a larger value extends the conversion disproportionately |
 
-**Was die Zusage „höchstens 10 s" bedeutet.** Sie gilt der **Befehlslatenz im Wartepfad**
-(ADR-080): Ein `/digest` oder `/status` aus dem Chat wartet höchstens zehn Sekunden auf eine
-Reaktion. Sie ist keine Zusage über die Dauer eines Abrufzyklus. Die reine Sanitisierung der
-teuersten Mail, die alle Grenzen oben überhaupt zulassen, kostet gemessen 3,6 bis 5,1 s CPU,
-davon rund die Hälfte der MIME-Parser der Standardbibliothek; Ende-zu-Ende mit Abruf-Parse
-und Roh-Serialisierung rund 8 s (ADR-084-Nachtrag, fünfte Iteration); eine PDF-lastige Mail kann den Zyklus zusätzlich bis
-zu `pdf_time_budget_seconds` verlängern, weil dort ein Fremdparser im Subprozess läuft
-(ADR-029-Nachtrag). Der Befehlskanal bleibt in beiden Fällen innerhalb seiner zehn Sekunden,
-weil er zwischen den Abschnitten der Wartezeit bedient wird.
+**What the promise "at most 10 s" means.** It concerns the **command latency in the wait path**
+(ADR-080): a `/digest` or `/status` from the chat waits at most ten seconds for a reaction. It
+is not a promise about the duration of a fetch cycle. The pure sanitisation of the most
+expensive mail that all the bounds above permit at all costs a measured 3.6 to 5.1 s of CPU,
+about half of it in the standard library's MIME parser; end to end, including the fetch parse
+and raw serialisation, around 8 s (ADR-084 addendum, fifth iteration); a PDF-heavy mail can
+extend the cycle by up to a further `pdf_time_budget_seconds`, because a foreign parser runs in
+a subprocess there (ADR-029 addendum). The command channel stays within its ten seconds in both
+cases, because it is served between the segments of the waiting time.
 
-**Umgebungsvariablen**
+**Environment variables**
 
-| Variable | Wirkung |
+| Variable | Effect |
 |---|---|
-| `MAILDIGEST_CONFIG` | Pfad der Konfigurationsdatei, wenn `--config` fehlt |
-| `MAILDIGEST_IMAP_PASSWORD` | Überschreibt `[imap] password` |
-| `MAILDIGEST_LLM_API_KEY` | Überschreibt `[llm] api_key` |
-| `MAILDIGEST_TELEGRAM_TOKEN` | Überschreibt `[messenger.telegram] token` |
+| `MAILDIGEST_CONFIG` | Path of the configuration file when `--config` is missing |
+| `MAILDIGEST_IMAP_PASSWORD` | Overrides `[imap] password` |
+| `MAILDIGEST_LLM_API_KEY` | Overrides `[llm] api_key` |
+| `MAILDIGEST_TELEGRAM_TOKEN` | Overrides `[messenger.telegram] token` |
 
-Eine gesetzte Variable schlägt immer den Dateiwert; ein leerer Wert wird ignoriert.
+A set variable always beats the file value; an empty value is ignored.
 
-## 6. Nachrichtenformat
+## 6. Message format
 
-Jede Zustellung ist **reiner Text**. Sie enthält nie einen klickbaren Link, nie einen
-Anhang, nie HTML oder Markdown. Markdown-Konstrukte werden neutralisiert, auch die nur am
-Zeilenanfang wirkenden (Überschriften, Listen, Zitate, Discord-Subtext) und Unterstriche am
-Wortrand; Aufzählungen erscheinen als `•`, nummerierte Zeilen als `12 · …`. `@everyone` und
-`@here` erscheinen als `(at)everyone`/`(at)here`. Die strukturgebenden Zeilenanfänge (`⚠️`,
-`📧`, `📎`, `🔍 Notes:`, `From:`) erzeugt ausschließlich das Programm; identische Anfänge in
-Modelltext werden neutralisiert — **in beiden Sprachen**, also auch `Von:`, `Betreff:`,
-`Hinweise:`, `Stufe:`, `Grund:`, `PHISHING-VERDACHT:` (ADR-062, ADR-083: die Ausgabe ist
-englisch, ein Modelltext darf aber auch keine deutsch aussehende Kopfzeile fälschen können). Alle Domains und Dateinamen erscheinen mit gebrochenem
-Punkt (`beispiel[.]de`, `rechnung[.]pdf`), weil Messenger nackte Domains automatisch
-verlinken. Ist die Nachricht länger als das Limit des Zielsystems (Telegram 4096, Discord
-2000, Signal 2000 Zeichen), wird sie an Zeilengrenzen auf mehrere Nachrichten aufgeteilt.
-Muss dabei eine einzelne Zeile geschnitten werden, beginnt jede Fortsetzung mit `… `; das
-Präfix macht sichtbar, dass die Zeile weiterläuft, und verhindert, dass ein Schnitt einen
-der reservierten Zeilenanfänge an den Anfang einer Nachricht schiebt.
+Every delivery is **plain text**. It never contains a clickable link, never an attachment,
+never HTML or Markdown. Markdown constructs are neutralised, including those that only work at
+the start of a line (headings, lists, quotes, Discord subtext) and underscores at word edges;
+bullet lists appear as `•`, numbered lines as `12 · …`. `@everyone` and `@here` appear as
+`(at)everyone`/`(at)here`. The structural line starts (`⚠️`, `📧`, `📎`, `🔍 Notes:`, `From:`)
+are produced exclusively by the program; identical starts in model text are neutralised —
+**in both languages**, so also `Von:`, `Betreff:`, `Hinweise:`, `Stufe:`, `Grund:`,
+`PHISHING-VERDACHT:` (ADR-062, ADR-083: the output is English, but model text must not be able
+to forge a German-looking header line either). All domains and filenames appear with a broken
+dot (`example[.]com`, `invoice[.]pdf`), because messengers autolink bare domains. If the
+message is longer than the target system's limit (Telegram 4096, Discord 2000, Signal 2000
+characters), it is split at line boundaries into several messages. If a single line has to be
+cut in the process, every continuation begins with `… `; the prefix makes the continuation
+visible and prevents a cut from pushing one of the reserved line starts to the beginning of a
+message.
 
-**Normale Zustellung**
+**Normal delivery**
 
 ```
-⚠️ SUSPECTED PHISHING: <Gründe, kommasepariert, max. 5>   ← nur bei Phishing-Risiko high
-📧 <Kopfzeile> [important]                                ← Tag nur bei Wichtigkeit high
-From: <Anzeigename> (<domain>) · <TT.MM. HH:MM>           ← ohne Date-Header: `date unknown`
-<Zusammenfassung>
-— <datei>: <1–2 Sätze je verarbeitetem Anhang>
-📎 Not processed: <datei (größe)>, … [and N more]
-🔍 Notes: <Injection-Verdacht; verschlüsselte Mail; Message-ID-Kollision; Auth-Fehler;
-           Punycode; gemischte Schriftsysteme; versteckter Text im HTML entfernt;
-           HTML-Teil weicht vom Textteil ab; HTML-Teil zu komplex (nicht konvertiert);
-           Reply-To-/Return-Path-Abweichung;
-           Text gekürzt; Link-Budget gekappt; Kritiker-Gründe bei Risiko low>
-<Link-Fußnote (defanged), eine Adresse je Zeile>          ← nur bei [links] footnote = true
+⚠️ SUSPECTED PHISHING: <reasons, comma-separated, max. 5>  ← only at phishing risk high
+📧 <headline> [important]                                  ← tag only at importance high
+From: <display name> (<domain>) · <DD.MM. HH:MM>           ← without a Date header: `date unknown`
+<summary>
+— <file>: <1–2 sentences per processed attachment>
+📎 Not processed: <file (size)>, … [and N more]
+🔍 Notes: <injection suspicion; encrypted mail; Message-ID collision; auth failures;
+           punycode; mixed writing systems; hidden text removed from the HTML;
+           HTML part differs from the text part; HTML part too complex (not converted);
+           Reply-To/Return-Path divergence;
+           text truncated; link budget capped; critic reasons at risk low>
+<link footnote (defanged), one address per line>           ← only with [links] footnote = true
 ```
 
-Die Hinweise hinter `🔍 Notes: ` sind kommasepariert und lauten wörtlich, in genau dieser
-Reihenfolge: `the mail contained instructions aimed at the AI (ignored)`,
+The notes after `🔍 Notes: ` are comma-separated and read literally, in exactly this order:
+`the mail contained instructions aimed at the AI (ignored)`,
 `encrypted (PGP/S-MIME) — content not readable by design`,
 `Message-ID collides with an earlier mail`, `sender checks failed: <SPF=…, DKIM=…>`,
 `punycode domain(s): <…>`, `mixed writing systems: <…>`,
 `HTML part differs from the text part`, `HTML part too complex, not converted`,
 `hidden text removed from the HTML`,
 `reply address differs from the sender`, `return-path domain differs`, `text truncated`,
-`too many links, further links removed unlisted`, `critic: <Gründe>`. Fehlt jeder Hinweis,
-entfällt die Zeile.
+`too many links, further links removed unlisted`, `critic: <reasons>`. If no note applies, the
+line is omitted.
 
-`too many links, further links removed unlisted` — die Mail trug mehr Links, als eine
-einzelne Mail einzeln ausgewertet bekommt (2000, `sanitize.links.MAX_LINKS_PER_MAIL`).
-Entfernt sind sie alle; die überzähligen erscheinen im Text als `[Link removed]` ohne
-Nummer und ohne Domain und stehen deshalb auch nicht in der Fußnote (ADR-028-Nachtrag).
+`too many links, further links removed unlisted` — the mail carried more links than a single
+mail gets evaluated individually (2000, `sanitize.links.MAX_LINKS_PER_MAIL`). All of them are
+removed; the surplus ones appear in the text as `[Link removed]` without a number and without
+a domain and therefore do not appear in the footnote either (ADR-028 addendum).
 
-Ersatztexte, wenn ein Feld leer ist: `📧 (no summary)` für die Kopfzeile, `(no summary)`
-bzw. `(file)` in der Anhangszeile, `unknown` für einen fehlenden Absender, `(unnamed)` für
-einen Anhang ohne Dateinamen. Ein Link ohne erkennbaren Host erscheint als
-`[Link #n: unknown]`, eine `mailto:`-Adresse ohne Domain als `[Mail #n: unknown]`. Kürzt der
-Sanitizer den Mail-Text, endet er auf `[truncated]`.
+Substitute texts when a field is empty: `📧 (no summary)` for the headline, `(no summary)` or
+`(file)` in the attachment line, `unknown` for a missing sender, `(unnamed)` for an attachment
+without a filename. A link without a recognisable host appears as `[Link #n: unknown]`, a
+`mailto:` address without a domain as `[Mail #n: unknown]`. If the sanitizer truncates the mail
+text, it ends with `[truncated]`.
 
-Zwei Hinweise erklären, warum eine Mail anders aussieht als erwartet, und haben deshalb
-einen festen Wortlaut:
+Two notes explain why a mail looks different from what was expected, and therefore have fixed
+wording:
 
-- `encrypted (PGP/S-MIME) — content not readable by design` — die Mail war Ende-zu-Ende
-  verschlüsselt (`multipart/encrypted`, `application/pgp-encrypted`,
-  `application/pkcs7-mime`). MailDigest entschlüsselt nicht; Kopfzeile, Absender und die
-  Liste der nicht verarbeiteten Teile kommen trotzdem an (ADR-082). Signierte, aber
-  unverschlüsselte Mail (`multipart/signed`) löst den Hinweis nicht aus.
-- `Message-ID collides with an earlier mail` — die `Message-ID` dieser Mail war bereits von
-  einer inhaltlich **anderen** Mail belegt. Sie wird trotzdem zugestellt (ADR-079); der
-  Hinweis erklärt, warum ein Vorgang doppelt erscheinen kann.
+- `encrypted (PGP/S-MIME) — content not readable by design` — the mail was end-to-end
+  encrypted (`multipart/encrypted`, `application/pgp-encrypted`, `application/pkcs7-mime`).
+  MailDigest does not decrypt; headline, sender and the list of unprocessed parts still arrive
+  (ADR-082). Signed but unencrypted mail (`multipart/signed`) does not trigger the note.
+- `Message-ID collides with an earlier mail` — this mail's `Message-ID` was already taken by a
+  mail with **different** content. It is delivered anyway (ADR-079); the note explains why a
+  transaction can appear twice.
 
-Ohne Sprachmodell (`[llm] provider = "none"`) steht in der Anhangszeile statt der
-Zusammenfassung ein beschrifteter Auszug des gelesenen Anhangstextes
-(`— datei.txt: Excerpt: …`) — genau wie die Zusammenfassungszeile dort ein Auszug ist.
+Without a language model (`[llm] provider = "none"`) the attachment line carries a labelled
+excerpt of the attachment text that was read (`— file.txt: Excerpt: …`) instead of a summary —
+just as the summary line there is an excerpt.
 
-**Zahl- und Datumsformate** sind keine Literale und bleiben unabhängig von der
-Ausgabesprache: Größen erscheinen als `34 KB` bzw. mit Dezimalkomma als `1,2 MB`, das Datum
-der Absenderzeile als `TT.MM. HH:MM` (ADR-083).
+**Number and date formats** are not literals and stay independent of the output language:
+sizes appear as `34 KB` or, with a decimal comma, `1,2 MB`, and the date of the sender line as
+`DD.MM. HH:MM` (ADR-083).
 
-Zeilen ohne Inhalt entfallen. Einzellimits: Kopfzeile 120, Zusammenfassung 3000,
-Anhangs-Zusammenfassung 400, Kritiker-Grund 200, Anzeigename 80, Domain 100, Dateiname
-80 Zeichen; höchstens 10 namentlich genannte Anhänge und 5 Banner-Gründe. Gekürzt wird
-mit `…`. Bei Dateinamen wird in der **Mitte** gekürzt, damit die Endung erhalten bleibt
-(`aaa…aaa.exe`) — bei einem nicht verarbeiteten Anhang ist sie die wichtigste Angabe.
+Lines without content are omitted. Individual limits: headline 120, summary 3000, attachment
+summary 400, critic reason 200, display name 80, domain 100, filename 80 characters; at most
+10 attachments named and 5 banner reasons. Truncation uses `…`. Filenames are truncated in the
+**middle** so that the extension is preserved (`aaa…aaa.exe`) — for an unprocessed attachment
+it is the most important piece of information.
 
-**Metadaten-Notiz (fail-closed)** — immer genau diese fünf Zeilen:
+**Metadata note (fail-closed)** — always exactly these five lines:
 
 ```
 ⚠️ This mail could not be processed safely — no content delivered.
 From: <domain>
-Subject: <Betreff>
-Stage: <sanitize|summarize|critic|compose|deliver> · Reason: <fehlerklasse>
+Subject: <subject>
+Stage: <sanitize|summarize|critic|compose|deliver> · Reason: <error class>
 Open your real mailbox to read it.
 ```
 
-Fehlt die Domain, steht dort `unknown`; fehlt der Betreff, `(no subject)`. Lässt sich eine
-Stufe oder Fehlerklasse nicht als Label darstellen, steht dort `unknown`.
+If the domain is missing, it says `unknown` there; if the subject is missing, `(no subject)`.
+If a stage or error class cannot be rendered as a label, it says `unknown`.
 
-Fehlerklassen: `sanitize_error`, `llm_timeout`, `llm_rate_limited`, `llm_invalid_response`,
+Error classes: `sanitize_error`, `llm_timeout`, `llm_rate_limited`, `llm_invalid_response`,
 `llm_transport_error`, `schema_invalid`, `summary_inaccurate`, `delivery_error`,
-`state_error`, `delivery_failed` sowie `<stufe>_error` für Unbekanntes.
+`state_error`, `delivery_failed`, plus `<stage>_error` for anything unknown.
 
-**Täglicher Sammel-Digest** — eine Nachricht ab `[general] low_digest_time`, gruppiert nach
-Kategorie (größte Gruppe zuerst), je Mail eine Zeile; ab 60 Mails wird der Rest gezählt.
-Eine leere Warteschlange erzeugt keine Nachricht.
+**Daily collected digest** — one message from `[general] low_digest_time` onwards, grouped by
+category (largest group first), one line per mail; from 60 mails onwards the rest is counted.
+An empty queue produces no message.
 
 ```
 🗂 12 low-priority mails: 8 newsletter, 3 benachrichtigung, 1 other
@@ -754,24 +747,22 @@ newsletter (8):
 ... and N more
 ```
 
-Die Kategorienamen stammen aus der Modellausgabe und folgen deshalb `[general] language`;
-eine leere Kategorie heißt `other`. Fehlt eine Kopfzeile, steht `(no subject)`, fehlt die
-Domain, `unknown`.
+The category names come from the model output and therefore follow `[general] language`; an
+empty category is called `other`. If a headline is missing, it says `(no subject)`; if the
+domain is missing, `unknown`.
 
-## 7. Zusicherungen des Programms
+## 7. Assurances given by the program
 
-Diese Punkte sind Teil des Vertrags und in REQUIREMENTS.md als F-SEC-* nachlesbar:
+These points are part of the contract and can be looked up in REQUIREMENTS.md as F-SEC-*:
 
-1. Im Mirror-Postfach wird **nichts gelöscht**. Geschrieben werden nur das Gelesen-Flag und
-   — falls konfiguriert — das Verschieben in `move_processed_to`. Technisch sind das genau
-   zwei IMAP-Kommandos: `UID STORE +FLAGS (\Seen)` und `UID MOVE`. Ein `EXPUNGE` wird nie
-   gesendet — es würde auch fremde, von anderen Programmen als `\Deleted` markierte
-   Nachrichten endgültig löschen (ADR-064).
-2. Kein Sprachmodell sieht rohes HTML, rohe MIME-Teile oder Anhangs-Binärdaten.
-3. Anhänge werden nie zugestellt. Inhaltlich verarbeitet werden nur `text/plain`-Dateien
-   und PDFs (nach Prüfung der Magic-Bytes); alles andere erscheint nur in der Zeile
-   `📎 Not processed:`.
-4. Schlägt irgendeine Stufe fehl, kommt die Metadaten-Notiz — nie ungeprüfter Inhalt und
-   nie stilles Verschwinden.
-5. Secrets stehen ausschließlich in der Konfigurationsdatei (0600) oder in
-   Umgebungsvariablen — nie in Prompts, Logs, Fehlermeldungen oder der State-Datenbank.
+1. **Nothing is deleted** in the mirror mailbox. What is written is only the seen flag and —
+   if configured — the move into `move_processed_to`. Technically those are exactly two IMAP
+   commands: `UID STORE +FLAGS (\Seen)` and `UID MOVE`. An `EXPUNGE` is never sent — it would
+   also permanently delete foreign messages marked `\Deleted` by other programs (ADR-064).
+2. No language model sees raw HTML, raw MIME parts or attachment binaries.
+3. Attachments are never delivered. Only `text/plain` files and PDFs are processed for content
+   (after a magic-byte check); everything else appears only in the line `📎 Not processed:`.
+4. If any stage fails, the metadata note arrives — never unchecked content and never a silent
+   disappearance.
+5. Secrets live exclusively in the configuration file (0600) or in environment variables —
+   never in prompts, logs, error messages or the state database.

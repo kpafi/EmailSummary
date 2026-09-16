@@ -6,7 +6,7 @@ maschinell, damit die Dokumentation nicht still veraltet.
 
 Verankerung im Dokument:
 
-* Überschrift ``### `maildigest <kommando>` `` je Kommando, plus ``## 3. Globale Optionen``.
+* Überschrift ``### `maildigest <kommando>` `` je Kommando, plus ``## 3. Global options``.
 * Optionen stehen in Tabellenzeilen, die mit ``| `--option` |`` beginnen. Nur solche
   Zeilen werden ausgewertet — Fließtext darf Optionen also frei erwähnen.
 """
@@ -27,7 +27,7 @@ SPEC_PATH = Path(__file__).resolve().parents[2] / "docs" / "SPEC-CLI.md"
 GLOBAL_OPTIONS = {"--config", "--non-interactive", "--help", "--man"}
 
 _COMMAND_HEADING = re.compile(r"^### `maildigest ([a-z-]+)`\s*$")
-_GLOBAL_HEADING = re.compile(r"^## 3\. Globale Optionen\s*$")
+_GLOBAL_HEADING = re.compile(r"^## 3\. Global options\s*$")
 _ANY_HEADING = re.compile(r"^#{2,3} ")
 _TABLE_OPTION = re.compile(r"^\|\s*`(--[a-z0-9-]+)`")
 
@@ -147,8 +147,8 @@ def test_umgebungsvariablen_sind_dokumentiert() -> None:
 
 _FIELD_ROW = re.compile(r"^\|\s*`\[([a-z.]+)\]\s+([a-z_]+)`\s*\|([^|]*)\|([^|]*)\|")
 
-#: Default-Zellen, die kein Literal sind: „—" (kein Default) und „erbt" (Override).
-_NO_DEFAULT = {"—", "erbt"}
+#: Default-Zellen, die kein Literal sind: „—" (kein Default) und „inherits" (Override).
+_NO_DEFAULT = {"—", "inherits"}
 
 
 def _spec_fields() -> list[tuple[str, str, str]]:

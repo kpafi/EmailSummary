@@ -15,7 +15,7 @@ Sicherheits-Design dieses Moduls:
   Mail-Inhalte transportieren (`ValueError: unerwartetes Zeichen in '<Mail-Zeile>'`). Auf
   den Standard-Leveln wird deshalb nur der Klassenname geloggt; der volle Traceback
   erscheint ausschließlich, wenn der Betreiber `log_level = "DEBUG"` bewusst einschaltet.
-  Für diesen Fall dokumentiert docs/BETRIEB.md die Vertraulichkeit der Logs.
+  Für diesen Fall dokumentiert docs/OPERATIONS.md die Vertraulichkeit der Logs.
 """
 
 from __future__ import annotations

@@ -187,7 +187,7 @@ def test_hc25_backward_clock_jump_does_not_park_the_message_forever() -> None:
 
 
 def test_hc25_clock_skew_correction_is_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """Der Eingriff ist im Betrieb sichtbar (BETRIEB §5)."""
+    """Der Eingriff ist im Betrieb sichtbar (OPERATIONS §5)."""
     clock = Clock()
     with StateDB(":memory:") as db:
         outbox = OutboxMessenger(db, RecordingMessenger(failures=1), now=clock)

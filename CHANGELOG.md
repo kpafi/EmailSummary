@@ -1,369 +1,356 @@
 # Changelog
 
-Alle nennenswerten Änderungen an MailDigest. Format angelehnt an
-[Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die Versionsnummern folgen
-[Semantic Versioning](https://semver.org/lang/de/).
+All notable changes to MailDigest. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the version numbers follow
+[Semantic Versioning](https://semver.org/).
 
 ## [0.2.0] — 2026-09-14
 
-Erstes öffentliches Release. Seit 0.1.0 ist MailDigest erstmals gegen echte Gegenstellen
-gelaufen (ein Spiegelpostfach bei web.de, ein Modell über OpenRouter, ein Telegram-Bot) und
-hat zwei dokumentierte Prüfrunden durchlaufen (docs/TESTRUNDE-HOT-COLD.md und
-docs/TESTRUNDE-2.md, Abnahme in docs/ABNAHME-FIXRUNDE.md). Was offen blieb, steht in
-docs/TESTING.md §7 und unten unter „Bekannte Grenzen".
+The first public release. Since 0.1.0, MailDigest has run against real counterparts for the
+first time (a mirror mailbox at web.de, a model via OpenRouter, a Telegram bot) and has gone
+through two documented test rounds (docs/TESTRUNDE-HOT-COLD.md and docs/TESTRUNDE-2.md,
+acceptance in docs/ABNAHME-FIXRUNDE.md — all German). What stayed open is in
+docs/TESTING.md §7 and below under "Known limitations".
 
-### Funktionen
-- **Betrieb ohne Sprachmodell** als Standard (`[llm] provider = "none"`, ADR-076):
-  MailDigest läuft ohne Anmeldung bei irgendeinem Anbieter und stellt einen beschrifteten
-  Auszug samt aller deterministischen Warnungen zu. `connect-llm` bietet die Betriebsarten
-  als Auswahlliste an, darunter drei Anbieter mit Gratis-Kontingent und die lokale Variante.
-- **Fernauslösung per Telegram** (ADR-077, Vorgabe geändert durch ADR-078): `maildigest run`
-  reagiert auf `/digest` (sofortiger Abruf) und `/status` (Kurzbericht) — **nur** auf diese
-  beiden Wörter und **nur** aus dem konfigurierten Chat. Jeder andere Text wird verworfen und
-  erreicht nie ein Sprachmodell. Schalter `[messenger.telegram] accept_commands`, seit
-  ADR-078 ab Werk **an**; für Gruppen-Chats auf `false` setzen.
-- **Anbieter-Wissensbasis** für die Einrichtung (ADR-075): `connect-mail` erklärt den Begriff
-  IMAP-Host, übersetzt eine eingetippte Mailadresse in den Host und bricht bei Anbietern ohne
-  Passwort-Anmeldung (Outlook.com, Proton) sofort mit Begründung ab.
-- **`maildigest instructions`** (ADR-086): zeigt die Custom-Instructions für den
-  Summarizer oder ändert sie mit `--set`, `--add`, `--edit` (im `$VISUAL`/`$EDITOR`) und
-  `--clear` — ohne die Stelle in der Konfigurationsdatei zu suchen. Mehrzeilig, bis 2000
-  Zeichen; Steuerzeichen werden abgewiesen. Der Kritiker sieht den Text weiterhin nie.
-- **Hilfe und Handbuch** (ADR-087): `maildigest <kommando> --help` erklärt jedes Kommando
-  mit Beschreibung und Beispielen, `maildigest --help` den typischen Ablauf. `maildigest
-  --man` gibt eine Handbuchseite im troff-Format aus (`| man -l -`); `man/maildigest.1`
-  ist daraus erzeugt, ein Test hält sie mit dem Parser synchron.
+### Features
+- **Operation without a language model** as the default (`[llm] provider = "none"`,
+  ADR-076): MailDigest runs without signing up with any provider and delivers a labelled
+  excerpt together with all deterministic warnings. `connect-llm` offers the operating modes
+  as a list to pick from, among them three providers with a free tier and the local variant.
+- **Remote triggering via Telegram** (ADR-077, the default changed by ADR-078):
+  `maildigest run` reacts to `/digest` (an immediate fetch) and `/status` (a short report) —
+  **only** to those two words and **only** from the configured chat. Any other text is
+  discarded and never reaches a language model. The switch is
+  `[messenger.telegram] accept_commands`, **on** by default since ADR-078; set it to `false`
+  for group chats.
+- **A provider knowledge base** for the setup (ADR-075): `connect-mail` explains the term
+  IMAP host, translates a typed mail address into the host, and aborts immediately with a
+  reason for providers without password login (Outlook.com, Proton).
+- **`maildigest instructions`** (ADR-086): shows the custom instructions for the summarizer
+  or changes them with `--set`, `--add`, `--edit` (in `$VISUAL`/`$EDITOR`) and `--clear` —
+  without hunting for the place in the configuration file. Multi-line, up to 2000
+  characters; control characters are rejected. The critic still never sees the text.
+- **Help and manual** (ADR-087): `maildigest <command> --help` explains every command with a
+  description and examples, `maildigest --help` the typical flow. `maildigest --man` prints a
+  manual page in troff format (`| man -l -`); `man/maildigest.1` is generated from it, and a
+  test keeps it in sync with the parser.
 
-### Behoben
+### Fixed
 
-Aus der Abschluss-Testrunde (38 Befunde, docs/TESTING.md §7; Bericht in
+From the final test round (38 findings, docs/TESTING.md §7; report in
 docs/TESTRUNDE-HOT-COLD.md):
 
-- **Eine einzige Mail konnte den Dienst anhalten.** Eine 16 KB grosse Mail mit 250
-  verschachtelten MIME-Ebenen liess die Umwandlung mit `RecursionError` scheitern: Der
-  Dauerbetrieb starb, `maildigest run --once` scheiterte bei jedem Lauf, und weil die Mail
-  nie als gelesen markiert wurde, blieben alle danach eintreffenden Mails unverarbeitet
-  liegen, bis jemand sie von Hand aus dem Postfach nahm. Die Verschachtelungstiefe wird
-  jetzt vor jeder Auswertung auf 32 Ebenen gedeckelt (Log `mail_mime_depth_capped`), und
-  scheitert die Umwandlung einer Mail trotzdem, bekommt der Nutzer die Metadaten-Notiz, die
-  Mail den Status `failed` und der Abruf läuft mit der nächsten Mail weiter (O-1,
-  ADR-020-Nachtrag).
-- **Nachgezogen (zweite Iteration): Eine 31 KB grosse Mail konnte den Abruf weiterhin dauerhaft
-  blockieren.** Bei rund 1000 ineinander gesteckten `message/rfc822`-Teilen scheiterte schon
-  die IMAP-Bibliothek beim Parsen — noch bevor MailDigest die Mail sah. Der Fehler wurde als
-  Verbindungsproblem gemeldet („Mailbox unreachable" bzw. endlose Reconnect-Versuche), die
-  Mail blieb ungelesen liegen und blockierte alle Mails dahinter. Der Abruf holt jetzt jede
-  Mail einzeln je UID; eine Mail, die sich nicht parsen lässt, wird über einen
-  Kopfzeilen-Abruf identifiziert, als Metadaten-Notiz zugestellt, als `failed` gebucht und
-  als gelesen markiert — die Mails dahinter werden verarbeitet, `run --once` endet mit Exit 0
-  und zählt sie in der Bilanz als Fehler. Neues Logereignis `mail_unparsable`; die Zahl der
-  IMAP-Kommandos je Abruf bleibt gleich (O-1, ADR-020-Nachtrag zweite Iteration,
-  ADR-064-Nachtrag).
+- **A single mail could stall the service.** A 16 KB mail with 250 nested MIME levels made
+  the conversion fail with `RecursionError`: continuous operation died, `maildigest run
+  --once` failed on every run, and because the mail was never marked as read, every mail
+  arriving after it stayed unprocessed until someone removed it from the mailbox by hand. The
+  nesting depth is now capped at 32 levels before any evaluation (log
+  `mail_mime_depth_capped`), and if the conversion of a mail fails nonetheless, the user gets
+  the metadata note, the mail gets status `failed`, and the fetch continues with the next
+  mail (O-1, ADR-020 addendum).
+- **Followed up (second iteration): a 31 KB mail could still block the fetch permanently.**
+  At around 1000 nested `message/rfc822` parts, the IMAP library already failed to parse —
+  before MailDigest even saw the mail. The error was reported as a connection problem
+  ("Mailbox unreachable", or endless reconnect attempts), the mail stayed unread and blocked
+  every mail behind it. The fetch now retrieves every mail individually per UID; a mail that
+  cannot be parsed is identified through a header fetch, delivered as a metadata note, booked
+  as `failed` and marked as read — the mail behind it is processed, `run --once` ends with
+  exit 0 and counts it as an error in the summary. New log event `mail_unparsable`; the
+  number of IMAP commands per fetch stays the same (O-1, ADR-020 addendum second iteration,
+  ADR-064 addendum).
 
-- **Ohne Sprachmodell kam bei einem Betreff über 100 Zeichen keine Zusammenfassung mehr an,
-  sondern nur die Metadaten-Notiz** — für eine alltägliche Mailklasse war der
-  Auslieferungszustand damit funktionslos. Der Betreff wird jetzt mit `…` gekürzt (HC-1).
-- **Ohne Sprachmodell verschwand gelesener Anhangstext spurlos**, und die Nachricht behauptete
-  „Mail ohne darstellbaren Inhalt". Jeder Anhang, aus dem Text gelesen werden konnte, erscheint
-  jetzt als eigene Zeile mit beschriftetem Auszug (HC-2).
-- **Eine Mail konnte eine andere still unterdrücken**, indem sie deren `Message-ID` kopierte.
-  Zwei inhaltlich verschiedene Mails mit demselben Header werden jetzt beide zugestellt; die
-  zweite trägt den Hinweis „Message-ID collides with an earlier mail" (HC-10).
-- **Beim Speichern der Konfiguration konnte die alte Datei abgeschnitten zurückbleiben**
-  (volle Platte, Quota, Stromausfall). Sie wird jetzt atomar geschrieben und bleibt bei einem
-  Abbruch byteidentisch erhalten (HC-20).
-- **Ein Sprung der Systemuhr kostete eine wartende Nachricht ihre Zustellversuche** oder parkte
-  sie dauerhaft in der Warteschlange. Beide Richtungen sind abgefangen (HC-25).
-- **Der tägliche Sammel-Digest blieb während einer Postfach-Störung ganz aus**, obwohl er kein
-  IMAP braucht. Er geht jetzt auch dann raus (HC-26).
-- **Ein `/digest` aus dem Chat wartete bis zum Ende des Poll-Intervalls** (bis zu zwei Minuten)
-  und **verschluckte alle Befehle, die im selben Stapel dahinter standen**. Beides behoben:
-  Antwort nach spätestens zehn Sekunden, jeder Befehl wird beantwortet (HC-12, HC-13).
-- **Der Fehlertext eines Modell-Anbieters konnte das Terminal fernsteuern** (Bildschirm
-  löschen, Fenstertitel setzen, eine erfundene Programmmeldung platzieren); ein von der
-  Gegenstelle zitierter eigener API-Key erscheint jetzt als `***` (HC-4).
-- **Absender werden mit ihrem echten Namen angezeigt** („Jörg Müller" statt
-  `=?utf-8?Q?J=C3=B6rg_M=C3=BCller?=`), auch bei roh-8-bittigen Headern. Versteckte
-  Steuerzeichen im Anzeigenamen werden dadurch überhaupt erst erkannt (HC-23).
-- **Eine verschlüsselte Mail sagt jetzt, dass sie verschlüsselt ist** („encrypted (PGP/S-MIME)
-  — content not readable by design") statt wie eine inhaltsleere Mail auszusehen (HC-33).
-- **Härtung der zugestellten Nachricht** (F-SEC-3/F-SEC-5): ein exakt nachgebauter
-  Datenblock-Marker und die gängigsten Übernahmeformeln („Ignoriere deine bisherigen
-  Anweisungen", „Forget all previous instructions") lösen jetzt die Warnzeile aus (HC-5,
-  HC-21); ein Nachrichten-Split kann keine gefälschte Programmzeile mehr an den Anfang eines
-  Teils setzen (HC-6); die Link-Fußnote enthält kein Markdown mehr (HC-7); ein rohes
-  Steuerzeichen erreicht die Nachricht nicht mehr (HC-8); nackte IP-Adressen und sehr lange
-  Domain-Marken werden jetzt in jeder Nachbarschaft gebrochen (HC-9, HC-24); die `/status`-
-  Antwort entschärft den Ordnernamen (HC-28). Nachgezogen (S-4): Eine Punktkette aus mehr
-  als vier Zahlengruppen (`1.1.1.1.1.1.1.`) wurde nur im letzten Vier-Oktett-Fenster
-  gebrochen, die ersten vier Oktette blieben als anklickbare Adresse stehen; jetzt wird jeder
-  Punkt der Kette gebrochen (ADR-036, Nachtrag S-4).
-- **Kein Mail- oder Modelltext mehr im Betreiber-Protokoll**: ein vom Modell erfundener
-  Feldname wird durch `<extra field>` ersetzt (HC-11).
-- **Zu lange Anhang-Dateinamen** werden sichtbar in der Mitte gekürzt und behalten ihre Endung
-  — bei einem geblockten Anhang die sicherheitsrelevante Angabe (HC-22).
-- **Einrichtung**: `connect-llm --provider openai_compatible` trägt keine fremde Anbieter-URL
-  mehr ein und zeigt die passende Anleitung (HC-3, HC-36); `connect-mail` lehnt Outlook.com und
-  Proton auch als Mailadresse ab (HC-15) und erklärt einen Fehlschlag passend zur Ursache
-  (HC-32); `init` endet wieder mit der Liste der nächsten Schritte, jetzt inklusive
-  `connect-llm` (HC-18); die Hinweise zu `/digest` und `/status` erscheinen auch nach
-  `connect-messenger --chat-id` (HC-19); `run` meldet ein fehlendes IMAP-Passwort als
-  Konfigurationsfehler statt als „Postfach nicht erreichbar" (HC-34); `test` beendet die
-  Schrittfolge auch dann mit einer `5/5`-Zeile, wenn die Nachricht in der Warteschlange bleibt
-  (HC-35), und der Selbsttest-Vorspann nennt bei `--eml` die übergebene Datei (HC-17).
-- **Robustheit**: ein unbrauchbares `Retry-After` (etwa `nan`) wirft MailDigest nicht mehr aus
-  der Fehler-Taxonomie (HC-30); ein whitespace-freies Modellfeld lief quadratisch und braucht
-  jetzt Millisekunden statt Sekunden (HC-29).
+- **Without a language model, a subject over 100 characters no longer produced a summary but
+  only the metadata note** — for an everyday class of mail the shipped state was therefore
+  non-functional. The subject is now truncated with `…` (HC-1).
+- **Without a language model, attachment text that had been read disappeared without a
+  trace**, and the message claimed "mail without displayable content". Every attachment that
+  text could be read from now appears as a line of its own with a labelled excerpt (HC-2).
+- **One mail could silently suppress another** by copying its `Message-ID`. Two mails with
+  different content and the same header are now both delivered; the second one carries the
+  note "Message-ID collides with an earlier mail" (HC-10).
+- **When saving the configuration, the old file could be left truncated** (full disk, quota,
+  power loss). It is now written atomically and stays byte-identical on an abort (HC-20).
+- **A jump of the system clock cost a waiting message its delivery attempts**, or parked it
+  in the queue permanently. Both directions are caught (HC-25).
+- **The daily collected digest was skipped entirely during a mailbox outage**, even though it
+  needs no IMAP. It now goes out then as well (HC-26).
+- **A `/digest` from the chat waited until the end of the poll interval** (up to two minutes)
+  and **swallowed every command that stood behind it in the same batch**. Both fixed: an
+  answer within ten seconds at the latest, and every command is answered (HC-12, HC-13).
+- **A model provider's error text could remote-control the terminal** (clear the screen, set
+  the window title, place an invented program message); one's own API key quoted back by the
+  counterpart now appears as `***` (HC-4).
+- **Senders are shown with their real name** ("Jörg Müller" instead of
+  `=?utf-8?Q?J=C3=B6rg_M=C3=BCller?=`), including with raw 8-bit headers. Only that makes
+  hidden control characters in the display name detectable at all (HC-23).
+- **An encrypted mail now says that it is encrypted** ("encrypted (PGP/S-MIME) — content not
+  readable by design") instead of looking like a mail with no content (HC-33).
+- **Hardening of the delivered message** (F-SEC-3/F-SEC-5): an exactly forged data-block
+  marker and the most common takeover formulas ("Ignoriere deine bisherigen Anweisungen",
+  "Forget all previous instructions") now trigger the warning line (HC-5, HC-21); a message
+  split can no longer put a forged program line at the start of a part (HC-6); the link
+  footnote no longer contains Markdown (HC-7); a raw control character no longer reaches the
+  message (HC-8); bare IP addresses and very long domain labels are now broken in every
+  neighbourhood (HC-9, HC-24); the `/status` answer defangs the folder name (HC-28). Followed
+  up (S-4): a dot chain of more than four number groups (`1.1.1.1.1.1.1.`) was broken only in
+  the last four-octet window and the first four octets stayed as a clickable address; now
+  every dot of the chain is broken (ADR-036, addendum S-4).
+- **No more mail or model text in the operator's log**: a field name invented by the model is
+  replaced by `<extra field>` (HC-11).
+- **Overlong attachment filenames** are visibly truncated in the middle and keep their
+  extension — for a blocked attachment the security-relevant piece of information (HC-22).
+- **Setup**: `connect-llm --provider openai_compatible` no longer enters a foreign provider
+  URL and shows the matching instructions (HC-3, HC-36); `connect-mail` rejects Outlook.com
+  and Proton as a mail address as well (HC-15) and explains a failure in line with its cause
+  (HC-32); `init` again ends with the list of next steps, now including `connect-llm`
+  (HC-18); the hints about `/digest` and `/status` also appear after
+  `connect-messenger --chat-id` (HC-19); `run` reports a missing IMAP password as a
+  configuration error instead of "mailbox unreachable" (HC-34); `test` ends the step sequence
+  with a `5/5` line even when the message stays in the queue (HC-35), and the self-test
+  preamble names the file passed with `--eml` (HC-17).
+- **Robustness**: an unusable `Retry-After` (such as `nan`) no longer throws MailDigest out
+  of the error taxonomy (HC-30); a whitespace-free model field ran quadratically and now takes
+  milliseconds instead of seconds (HC-29).
 
-Aus der zweiten Testrunde (docs/TESTING.md §7 „Nachfixrunde NF-1"; Bericht in
+From the second test round (docs/TESTING.md §7 "Follow-up fix round NF-1"; report in
 docs/TESTRUNDE-2.md):
 
-- **Eine einzige Mail konnte MailDigest minutenlang anhalten.** Ein HTML-Teil mit sehr tief
-  verschachtelten Elementen liess die Umwandlung in Text quadratisch wachsen — 68 KB
-  Angriffs-HTML kosteten fünf Sekunden, ein Megabyte rechnerisch Minuten, und in dieser Zeit
-  wurden weder Mails abgeholt noch `/digest` oder `/status` beantwortet. Die Umwandlung ist
-  jetzt linear (16 000 Ebenen: 28,6 s → unter 0,1 s) und hat zusätzlich eine harte Grenze:
-  Ein HTML-Teil mit mehr als `[limits] max_html_elements` Elementen (Standard 50 000) oder
-  mehr als 2000 Verschachtelungsebenen wird **nicht** umgewandelt. Die Mail geht trotzdem
-  raus — mit dem Klartext-Teil, falls vorhanden, und dem Hinweis `HTML part too complex, not
-  converted`, damit niemand eine unvollständige Zusammenfassung für eine vollständige hält
+- **A single mail could stall MailDigest for minutes.** An HTML part with very deeply nested
+  elements made the conversion to text grow quadratically — 68 KB of attack HTML cost five
+  seconds, a megabyte would compute to minutes, and during that time neither was mail fetched
+  nor were `/digest` or `/status` answered. The conversion is now linear (16,000 levels:
+  28.6 s → under 0.1 s) and additionally has a hard bound: an HTML part with more than
+  `[limits] max_html_elements` elements (default 50,000) or more than 2000 nesting levels is
+  **not** converted. The mail still goes out — with the plain-text part if present, and with
+  the note `HTML part too complex, not converted`, so that nobody mistakes an incomplete
+  summary for a complete one (HC2-1, ADR-084).
+- **A forged sender display name could determine the sender domain shown.** Whoever sent
+  their name encoded as `Bank <info@bank.example>,` appeared in the delivery line as
+  `bank.example`, even though the mail came from `attacker@evil.example` — and the two
+  warnings about a diverging reply address and a diverging return path went silent in the
+  process. The sender address and domain are now read from the unmodified header value; only
+  the name is decoded (HC2-2). The readable plain name available since HC-23 is retained.
+- **Followed up (second iteration):** the bound for HTML parts only bit after the parser had
+  read the entire input — a 24 MB HTML part stalled the service for 47 seconds even though it
+  was discarded afterwards; and it applied per part, so 34 inconspicuous HTML parts together
+  cost 29 seconds without anything being displayed. New is a byte cap **before** the
+  conversion (`[limits] max_html_bytes`, default 1 MB) which, together with the element
+  bound, applies as a budget for the **whole mail**; at most four HTML parts per mail are
+  converted at all. The same attack mails now cost 0.1 s and 0.7 s respectively, and no mail
+  can occupy the conversion for longer than about two seconds. Real newsletters are unaffected
   (HC2-1, ADR-084).
-- **Ein gefälschter Absender-Anzeigename konnte die angezeigte Absender-Domain bestimmen.**
-  Wer seinen Namen kodiert als `Bank <info@bank.example>,` schickte, erschien in der
-  Zustellzeile als `bank.example`, obwohl die Mail von `attacker@evil.example` kam — und die
-  beiden Warnungen zu abweichender Antwortadresse und abweichendem Rückweg verstummten dabei.
-  Absenderadresse und Domain werden jetzt aus dem unveränderten Kopfzeilenwert gelesen;
-  dekodiert wird nur noch der Name (HC2-2). Der seit HC-23 lesbare Klarname bleibt erhalten.
-- **Nachgezogen (zweite Iteration):** Die Grenze für HTML-Teile griff erst, nachdem der
-  Parser die ganze Eingabe gelesen hatte — ein 24-MB-HTML-Teil hielt den Dienst 47 Sekunden
-  an, obwohl er anschliessend verworfen wurde; und sie galt je Teil, sodass 34 unauffällige
-  HTML-Teile zusammen 29 Sekunden kosteten, ohne dass irgendetwas angezeigt wurde. Neu ist
-  ein Byte-Deckel **vor** dem Umwandeln (`[limits] max_html_bytes`, Standard 1 MB), der
-  zusammen mit der Elementgrenze als Budget für die **ganze Mail** gilt; höchstens vier
-  HTML-Teile je Mail werden überhaupt umgewandelt. Dieselben Angriffsmails kosten jetzt 0,1 s
-  bzw. 0,7 s, und keine Mail kann die Umwandlung länger als rund zwei Sekunden beschäftigen.
-  Echte Newsletter sind nicht betroffen (HC2-1, ADR-084).
-- **Nachgezogen (zweite Iteration):** Ein kodierter Anzeigename konnte die Absender-Domain
-  weiterhin fälschen, wenn er `@` und `,` unkodiert trug (`=?utf-8?Q?info@bank.example,?=`).
-  Kodierte Wörter werden jetzt vor dem Lesen der Adresse durch einen neutralen Platzhalter
-  ersetzt und erst danach als Name wieder eingesetzt — ein Name kann die Absender-Domain
-  damit weder ersetzen noch löschen (HC2-2, ADR-020).
-- **Nachgezogen (dritte Iteration):** Eine einzige Mail konnte den Abruf weiterhin minutenlang
-  blockieren — nicht über das HTML, sondern über die Zahl der Links: Das Entfernen von Links
-  wurde mit jeder weiteren Adresse überproportional teurer (eine Mail mit 41 000 Links kostete
-  29 Sekunden, obwohl sie alle Grenzen einhielt), und für Klartext gab es überhaupt keine
-  Grenze (21 MB Text = 4,5 Sekunden). Das Entfernen läuft jetzt in einem Durchgang, je Mail
-  werden höchstens 2000 Links einzeln aufgeführt (weitere werden trotzdem entfernt und als
-  `[Link removed]` angezeigt; die Nachricht sagt das mit „too many links, further links
-  removed unlisted"), und roher Mail- und Anhangstext wird vor der Prüfung auf ein
-  Vielfaches des Textbudgets vorgeschnitten. Dieselben Mails kosten jetzt 1,1 s bzw. 0,4 s;
-  die teuerste überhaupt mögliche Mail liegt bei etwa zwei bis drei Sekunden (HC2-1,
-  ADR-028/ADR-084).
-- **Nachgezogen (dritte Iteration):** Die Absender-Fälschung über einen kodierten
-  Anzeigenamen war mit einem einzigen fehlenden Zeichen wieder möglich (`=??Q?…?=` ohne
-  Zeichensatz). Die Erkennung kodierter Wörter folgt jetzt genau der Form, die auch der
-  Dekodierer der Standardbibliothek verwendet (HC2-2, ADR-020).
-- **Nachgezogen (vierte Iteration):** Die Korrektur an der Absender-Erkennung aus der
-  dritten Iteration hatte sich selbst eine Blockade eingehandelt: Eine Mail mit einem
-  kaputten, sehr langen Absender-Header hielt den Abruf minutenlang an (156 KB Header =
-  18 Sekunden), und zwar schon beim Einlesen, vor jeder Grössenprüfung. Kopfzeilen werden
-  jetzt vor jeder Verarbeitung auf 4096 Zeichen geschnitten, und die Erkennung kodierter
-  Wörter läuft in einem einzigen Durchgang — dieselbe Mail kostet nun keine messbare Zeit.
-  Derselbe Deckel schützt den Betreff (HC2-2, ADR-020).
-- **Nachgezogen (vierte Iteration):** Ein kodiertes Wort **hinter** der Absenderadresse
-  liess Adresse und Domain ganz verschwinden — die Nachricht zeigte „(unknown sender)", und
-  die Warnungen zu abweichender Antwortadresse und abweichendem Rückweg verstummten dabei.
-  Die Adresse wird jetzt notfalls aus der ersten spitzen Klammer des Headers gelesen, und
-  eine **unbekannte** Absender-Domain neben einem bekannten Rückweg gilt ab sofort als
-  Warnfall statt als Ruhefall (HC2-2, ADR-020).
-- **Nachgezogen (vierte Iteration):** Eine einzige Mail konnte den Abruf weiterhin rund
-  zehn Sekunden blockieren: Die Vorabkürzung des Klartexts galt je Textstück, sodass zwanzig
-  Anhänge sie einfach vervielfachten, und für die Zahl der MIME-Teile gab es gar keine
-  Grenze. Beides ist jetzt ein Budget der ganzen Mail (höchstens 500 Teile; weitere werden
-  gezählt, nicht gelesen). Die teuerste überhaupt mögliche Mail kostet damit 2,7 statt
-  9,2 Sekunden (HC2-1, ADR-084).
-- **Nachgezogen (vierte Iteration):** Das Zeitlimit der PDF-Auswertung galt je Anhang —
-  zwanzig PDF-Anhänge hätten den Abruf rund 400 Sekunden angehalten, weit über der
-  Abrufperiode. Neu ist `[limits] pdf_time_budget_seconds` (Vorgabe 30 s) als Zeitbudget
-  über **alle** PDFs einer Mail; ist es aufgebraucht, gelten die übrigen Anhänge als nicht
-  verarbeitet und werden in der Nachricht als solche genannt. Gemessen: drei PDF-Anhänge
-  60 s → 30 s (ADR-029).
-- **Nachgezogen (fünfte Iteration):** Der Kopfzeilen-Deckel aus der vierten Iteration galt
-  nur für Absender, Antwortadresse und Betreff. Eine Mail mit einem riesigen `To:`-Header
-  (20 MB) hielt den Abruf 18 Sekunden an, und die interne Neu-Serialisierung der Mail
-  kostete bei sehr vielen oder sehr langen Kopfzeilen bis zu 14 Sekunden. Jetzt wird
-  **jede** gelesene Kopfzeile an einer einzigen Stelle auf 4096 Zeichen geschnitten, die
-  Kopfzeilen der ganzen Mail sind als Gesamtbudget gedeckelt, und `to_addrs` trägt
-  höchstens 200 Empfänger. Dieselben Mails kosten nun keine messbare Zeit; gewöhnliche
-  Mails bleiben byteidentisch (HC2-1, ADR-020).
-- **Nachgezogen (fünfte Iteration):** Die Reparatur aus der vierten Iteration konnte eine
-  Bank-Adresse aus einem Kommentar oder Anführungszeichen im Absender-Header als
-  Absender-Domain übernehmen und dabei beide Warnungen abschalten — vor allem, wenn der
-  4096-Zeichen-Schnitt einen Kommentar mitten durchtrennte. Kommentare und Anführungszeichen
-  werden jetzt vor der Suche entfernt (mit Verschachtelung und Escapes), ein
-  unvollständiger Header gilt als „Absender unbekannt" und löst die Rückweg-Warnung aus.
-  Ausserdem konnte eine Antwortadresse mit angehängtem Text die Warnung „abweichende
-  Antwortadresse" zum Schweigen bringen; ein vorhandener, aber unlesbarer `Reply-To` gilt
-  jetzt als Warnfall (HC2-2, ADR-020).
-- **Nachgezogen (Nachfixrunde O-3, sechs Griffe):** Die Absender-Erkennung aus den Iterationen
-  zwei bis fünf liess sich mit regelwidrig kodierten Wörtern (`=?utf-8?Q?Support?(?=`) weiter
-  täuschen: Das Werkzeug zeigte `bank.example` ohne Warnung, wo das Mailprogramm
-  `real@evil.example` zeigt. Absender und Antwortadresse liest jetzt der RFC-5322-Parser der
-  Standardbibliothek; Maske, Klammer-Rückfall und Kommentar-Scanner sind entfernt. Die Regel,
-  in sechs Skeptiker-Durchgängen über mehr als 60 000 Header-Formen gegen
-  `email.policy.default` geprüft: nie eine Domain, die das Mailprogramm nicht zeigt, nie
-  „unbekannt" ohne Warnung, keine Ausnahme, keine Blockade. Mailprogramme antworten an
-  **alle** Reply-To-Adressen, deshalb zählt jede; eine unlesbare Antwortadresse neben einem
-  bekannten Absender warnt; HTML-Entities im Anzeigenamen werden vor der Prüfung aufgelöst
-  (O-3, ADR-020-Nachträge).
-- **Nachgezogen (fünfte Iteration):** Die teuerste zulässige Mail kostet nicht 2,7, sondern
-  3,6 bis 5,1 Sekunden CPU in der Sanitisierung — mehr als die Hälfte davon im MIME-Parser
-  der Standardbibliothek, den kein eigenes Budget erreicht. Die Zahl ist in der Dokumentation
-  korrigiert; an der Zusage von zehn Sekunden für den Befehlskanal ändert sich nichts
+- **Followed up (second iteration):** an encoded display name could still forge the sender
+  domain when it carried `@` and `,` unencoded (`=?utf-8?Q?info@bank.example,?=`). Encoded
+  words are now replaced by a neutral placeholder before the address is read, and only put
+  back as the name afterwards — a name can therefore neither replace nor delete the sender
+  domain (HC2-2, ADR-020).
+- **Followed up (third iteration):** a single mail could still block the fetch for minutes —
+  not through the HTML but through the number of links: removing links grew disproportionately
+  more expensive with every further address (a mail with 41,000 links cost 29 seconds even
+  though it stayed within every bound), and for plain text there was no bound at all (21 MB of
+  text = 4.5 seconds). Removal now runs in a single pass, at most 2000 links are listed
+  individually per mail (further ones are still removed and shown as `[Link removed]`; the
+  message says so with "too many links, further links removed unlisted"), and raw mail and
+  attachment text is pre-cut to a multiple of the text budget before checking. The same mails
+  now cost 1.1 s and 0.4 s; the most expensive mail possible at all is around two to three
+  seconds (HC2-1, ADR-028/ADR-084).
+- **Followed up (third iteration):** the sender forgery through an encoded display name was
+  possible again with one missing character (`=??Q?…?=` without a charset). The detection of
+  encoded words now follows exactly the form the standard library's decoder uses (HC2-2,
+  ADR-020).
+- **Followed up (fourth iteration):** the correction to sender detection from the third
+  iteration had earned itself a stall: a mail with a broken, very long sender header stalled
+  the fetch for minutes (a 156 KB header = 18 seconds), and that already on reading, before
+  any size check. Headers are now cut to 4096 characters before any processing, and the
+  detection of encoded words runs in a single pass — the same mail now costs no measurable
+  time. The same cap protects the subject (HC2-2, ADR-020).
+- **Followed up (fourth iteration):** an encoded word **after** the sender address made the
+  address and domain disappear entirely — the message showed "(unknown sender)", and the
+  warnings about a diverging reply address and a diverging return path went silent. The
+  address is now read from the header's first angle bracket if need be, and an **unknown**
+  sender domain alongside a known return path now counts as a warning case rather than a calm
+  one (HC2-2, ADR-020).
+- **Followed up (fourth iteration):** a single mail could still block the fetch for around ten
+  seconds: the plain-text pre-cut applied per text chunk, so twenty attachments simply
+  multiplied it, and for the number of MIME parts there was no bound at all. Both are now a
+  budget for the whole mail (at most 500 parts; further ones are counted, not read). The most
+  expensive mail possible at all therefore costs 2.7 instead of 9.2 seconds (HC2-1, ADR-084).
+- **Followed up (fourth iteration):** the time limit of PDF processing applied per attachment
+  — twenty PDF attachments would have stalled the fetch for around 400 seconds, far beyond the
+  fetch period. New is `[limits] pdf_time_budget_seconds` (default 30 s) as a time budget
+  across **all** PDFs of one mail; once it is used up, the remaining attachments count as
+  unprocessed and are named as such in the message. Measured: three PDF attachments 60 s →
+  30 s (ADR-029).
+- **Followed up (fifth iteration):** the header cap from the fourth iteration applied only to
+  the sender, reply address and subject. A mail with a huge `To:` header (20 MB) stalled the
+  fetch for 18 seconds, and the internal re-serialisation of the mail cost up to 14 seconds
+  with very many or very long headers. Now **every** header read is cut to 4096 characters in
+  a single place, the headers of the whole mail are capped as a total budget, and `to_addrs`
+  carries at most 200 recipients. The same mails now cost no measurable time; ordinary mail
+  stays byte-identical (HC2-1, ADR-020).
+- **Followed up (fifth iteration):** the repair from the fourth iteration could take a bank
+  address out of a comment or quotation marks in the sender header as the sender domain, and
+  switch both warnings off in the process — above all when the 4096-character cut severed a
+  comment. Comments and quotation marks are now removed before the search (with nesting and
+  escapes), an incomplete header counts as "sender unknown" and triggers the return-path
+  warning. In addition, a reply address with appended text could silence the warning
+  "diverging reply address"; a `Reply-To` that is present but unreadable now counts as a
+  warning case (HC2-2, ADR-020).
+- **Followed up (follow-up fix round O-3, six attempts):** the sender detection from
+  iterations two to five could still be deceived with irregularly encoded words
+  (`=?utf-8?Q?Support?(?=`): the tool showed `bank.example` without a warning where the mail
+  program shows `real@evil.example`. The sender and reply address are now read by the standard
+  library's RFC 5322 parser; the mask, bracket fallback and comment scanner are removed. The
+  rule, checked in six skeptic passes across more than 60,000 header forms against
+  `email.policy.default`: never a domain the mail program does not show, never "unknown"
+  without a warning, no exception, no stall. Mail programs reply to **all** Reply-To
+  addresses, so every one counts; an unreadable reply address alongside a known sender
+  warns; HTML entities in the display name are resolved before the check (O-3, ADR-020
+  addenda).
+- **Followed up (fifth iteration):** the most expensive permitted mail costs not 2.7 but 3.6
+  to 5.1 seconds of CPU in sanitisation — more than half of that in the standard library's
+  MIME parser, which no budget of our own reaches. The figure is corrected in the
+  documentation; nothing changes about the ten-second promise for the command channel
   (HC2-1, ADR-084).
 
-### Geändert
-- Alle nutzersichtbaren Texte sind englisch; Docstrings und `docs/` bleiben deutsch.
-  **Seit ADR-083 ist das eine Festlegung**: Programmoberfläche und Nachrichtenrahmen sind
-  sprachunabhängig englisch, `[general] language` steuert nur noch die vom Sprachmodell
-  erzeugten Textfelder. SPEC-CLI §2/§4/§6 ist der wörtliche Vertrag dieser Ausgabe und wird
-  von `tests/unit/test_hc14_spec_literals.py` maschinell dagegen geprüft.
-- Die von `maildigest test` zugestellte Nachricht ist als Selbsttest gekennzeichnet.
-- **Schema-Version 3 der Zustandsdatenbank** (ADR-079). Eine bestehende Datei wird beim ersten
-  Öffnen still und ohne Datenverlust gehoben — kein Eingriff nötig, kein Migrationswerkzeug.
-  Es gibt keinen Rückweg: Eine gehobene Datei lässt sich mit einer älteren MailDigest-Version
-  nicht mehr öffnen.
-- **Die Konfigurationsdatei wird atomar geschrieben** (ADR-081). Das Konfigurationsverzeichnis
-  muss dafür schreibbar sein; während des Schreibens liegt dort kurz eine Datei
-  `.<name>.<pid>.tmp` mit Modus `0600`.
-- **Befehle werden im Dauerbetrieb alle ≤ 10 s abgefragt** statt einmal je Poll-Zyklus
-  (ADR-080). MailDigest ruft dadurch bis zu `poll_interval_seconds / 10` mal `getUpdates` je
-  Zyklus auf.
-- **Auch `maildigest run --once` (Cron) bedient den Befehlskanal**, einmal am Ende des Laufs:
-  `/status` wird beantwortet, `/digest` ist dort wirkungslos und wird nur konsumiert (ADR-080).
-- Fortsetzungen eines harten Zeilenschnitts beginnen sichtbar mit `… `; sie zählen zum
-  Teil-Limit des Messengers (ADR-062/ADR-040, Nachträge).
-- Neue Logereignisse: `mail_id_collision`, `outbox_clock_skew_corrected`, `low_digest_failed`,
-  `command_ignored_once`, `command_handling_failed` (docs/BETRIEB.md §5).
-- **Antwortbudget ab Werk unbegrenzt** (ADR-085): `[llm] max_tokens` hat keinen Default
-  mehr; fehlt das Feld, gilt die Obergrenze des Modells. Grund: Reasoning-Modelle ziehen
-  ihre Denk-Tokens vom Budget ab — mit dem alten Default 1024 endete bei einem echten
-  Postfach fast jede Mail als Fail-closed-Notiz. `connect-llm` fragt jetzt als fünfte
-  Frage nach einem Limit und zeigt vorher Empfehlungen; neue Option `--max-tokens`
-  (`0` = kein Limit). Wer ein Limit will, setzt es bewusst.
+### Changed
+- All user-visible texts are English; docstrings stay German. **Since ADR-083 that is a
+  decision**: the program interface and the message frame are English independently of any
+  language setting, and `[general] language` now steers only the text fields produced by the
+  language model. SPEC-CLI §2/§4/§6 is the literal contract of that output and is checked
+  mechanically against it by `tests/unit/test_hc14_spec_literals.py`.
+- The message delivered by `maildigest test` is marked as a self-test.
+- **Schema version 3 of the state database** (ADR-079). An existing file is upgraded silently
+  and without data loss when first opened — no intervention needed, no migration tool. There
+  is no way back: an upgraded file can no longer be opened with an older MailDigest version.
+- **The configuration file is written atomically** (ADR-081). The configuration directory has
+  to be writable for that; during the write a file `.<name>.<pid>.tmp` with mode `0600` lives
+  there briefly.
+- **Commands are polled every ≤ 10 s in continuous operation** instead of once per poll cycle
+  (ADR-080). MailDigest therefore calls `getUpdates` up to `poll_interval_seconds / 10` times
+  per cycle.
+- **`maildigest run --once` (cron) serves the command channel too**, once at the end of the
+  run: `/status` is answered, `/digest` has no effect there and is merely consumed (ADR-080).
+- Continuations of a hard line cut begin visibly with `… `; they count towards the messenger's
+  part limit (ADR-062/ADR-040, addenda).
+- New log events: `mail_id_collision`, `outbox_clock_skew_corrected`, `low_digest_failed`,
+  `command_ignored_once`, `command_handling_failed` (docs/OPERATIONS.md §5).
+- **The response budget is unlimited out of the box** (ADR-085): `[llm] max_tokens` no longer
+  has a default; if the field is absent, the model's own ceiling applies. The reason:
+  reasoning models subtract their thinking tokens from the budget — with the old default of
+  1024, nearly every mail from a real mailbox ended as a fail-closed note. `connect-llm` now
+  asks about a limit as its fifth question and shows recommendations beforehand; the new
+  option is `--max-tokens` (`0` = no limit). Whoever wants a limit sets it deliberately.
 
-### Bekannte Grenzen
-- Die Aussage „keine Antworten aus dem Messenger heraus" aus 0.1.0 gilt eingeschränkt
-  weiter: kein Dialog, keine Aktionen — außer der festen Befehlsliste oben.
-- Offene Befunde aus den Prüfrunden (docs/TESTING.md §7, Tabelle „Offen nach Ende der
-  Nachfixrunde"): Eine Mail aus Millionen leerer MIME-Teile kostet bis zu rund 35 s je
-  Abrufzyklus, weil der Parser der Standardbibliothek vor jeder Schranke läuft (O-2). Der
-  Platzhalter einer unparsbaren Mail kann eine spätere echte Mail mit gleicher Message-ID
-  als Duplikat unterdrücken (O-6). Antwortet der Server auf den Abruf einer einzelnen Mail
-  dauerhaft mit `NO`, blockiert diese Mail den Abruf (O-7). Dazu sechs niedrige Punkte
-  (O-4, O-5, O-8 bis O-11) und die Nachfix-Pakete NF-2 bis NF-7 aus docs/ABNAHME-FIXRUNDE.md §8.
-  Die beiden zuvor hohen Befunde O-1 (Gift-Mail stoppt den Abruf) und O-3 (Absender-Domain
-  fälschbar) sind vor diesem Release behoben.
+### Known limitations
+- The statement "no replies from the messenger" from 0.1.0 still holds with a restriction: no
+  dialogue, no actions — except for the fixed command list above.
+- Open findings from the test rounds (docs/TESTING.md §7, table "Open at the end of the
+  follow-up fix round"): a mail made of millions of empty MIME parts costs up to around 35 s
+  per fetch cycle, because the standard library's parser runs before every bound (O-2). The
+  placeholder of an unparsable mail can suppress a later genuine mail with the same Message-ID
+  as a duplicate (O-6). If the server answers the fetch of a single mail with `NO`
+  permanently, that mail blocks the fetch (O-7). Plus six low points (O-4, O-5, O-8 to O-11)
+  and the follow-up fix packages NF-2 to NF-7 from docs/ABNAHME-FIXRUNDE.md §8. The two
+  previously high findings O-1 (a poison mail stops the fetch) and O-3 (a forgeable sender
+  domain) are fixed before this release.
 
 ## [0.1.0] — 2026-09-08
 
-Erstes vollständiges Release. MailDigest liest ein Spiegel-Postfach, fasst jede Mail mit
-einem Sprachmodell zusammen, lässt eine zweite Instanz auf Phishing prüfen und stellt
-reinen Text an Telegram, Discord oder Signal zu.
+The first complete release. MailDigest reads a mirror mailbox, summarises every mail with a
+language model, has a second instance check it for phishing and delivers plain text to
+Telegram, Discord or Signal.
 
-**Diese Version ist noch nie gegen echte Gegenstellen gelaufen** — kein reales Postfach,
-keine reale LLM-API, kein realer Messenger. Siehe „Bekannte Grenzen".
+**This version has never run against real counterparts** — no real mailbox, no real LLM API,
+no real messenger. See "Known limitations".
 
-### Funktionen
+### Features
 
-- **Postfach.** IMAPS-Abruf ungelesener Mails aus einem dedizierten Mirror-Postfach,
-  Dedupe über die Message-ID mit persistentem Zustand in SQLite. Geschrieben wird nur das
-  Gelesen-Flag und — falls konfiguriert — ein server-seitiges `UID MOVE`.
-- **Zusammenfassung.** Ein Summarizer-Modell erzeugt Kopfzeile, Text, Kategorie und eine
-  Wichtigkeit (`high`/`normal`/`low`) in konfigurierbarer Sprache und Länge.
-  Custom-Instructions steuern Stil, Fokus und Wichtigkeitsbegriff.
-- **Kritiker.** Eine zweite, unabhängige Modell-Instanz mit eigenem Prompt und optional
-  eigenem Provider bewertet Phishing-Risiko und die Korrektheit der Zusammenfassung. Sie
-  bekommt die Custom-Instructions bewusst nicht zu sehen.
-- **Anhänge.** Text aus `text/plain` und PDF wird mitzusammengefasst; alles andere
-  erscheint als Zeile „Nicht verarbeitet" mit Name und Größe. Die Datei selbst wird nie
-  zugestellt.
-- **Zustellung.** Adapter für Telegram, Discord und Signal (`signal-cli`, Notiz an mich),
-  persistente Zustell-Warteschlange mit Wiederholversuchen, Split langer Nachrichten an
-  Zeilengrenzen auf das Limit des Zielsystems.
-- **Sammel-Digest.** Mails unterhalb der Zustellschwelle kommen einmal täglich gesammelt,
-  nach Kategorie gruppiert.
-- **Betrieb.** `maildigest run` als Dauerprozess mit sauberem SIGINT/SIGTERM-Shutdown,
-  `run --once` für Cron. Strukturierte JSON-Logzeilen, systemd-Unit in docs/BETRIEB.md.
-- **Einrichtung.** `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test` —
-  jedes Kommando mit Verbindungstest; `connect-mail` druckt die Anleitung für die
-  Weiterleitung bei Gmail, posteo, mailbox.org. `maildigest test --dry-run` fährt eine
-  `.eml`-Datei durch die echte Pipeline, ohne zu senden.
+- **Mailbox.** IMAPS fetch of unread mail from a dedicated mirror mailbox, dedupe via the
+  Message-ID with persistent state in SQLite. What gets written is only the seen flag and —
+  if configured — a server-side `UID MOVE`.
+- **Summary.** A summarizer model produces a headline, text, category and an importance
+  (`high`/`normal`/`low`) in a configurable language and length. Custom instructions steer
+  style, focus and the notion of importance.
+- **Critic.** A second, independent model instance with its own prompt and optionally its own
+  provider judges the phishing risk and the correctness of the summary. It deliberately does
+  not get to see the custom instructions.
+- **Attachments.** Text from `text/plain` and PDF is summarised along with the mail;
+  everything else appears as a "not processed" line with a name and size. The file itself is
+  never delivered.
+- **Delivery.** Adapters for Telegram, Discord and Signal (`signal-cli`, note to self), a
+  persistent delivery queue with retries, and a split of long messages at line boundaries to
+  the target system's limit.
+- **Collected digest.** Mail below the delivery threshold arrives once a day, collected and
+  grouped by category.
+- **Operation.** `maildigest run` as a long-lived process with a clean SIGINT/SIGTERM
+  shutdown, `run --once` for cron. Structured JSON log lines, a systemd unit in
+  docs/OPERATIONS.md.
+- **Setup.** `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test` — every
+  command with a connection test; `connect-mail` prints the instructions for forwarding with
+  Gmail, posteo and mailbox.org. `maildigest test --dry-run` drives an `.eml` file through
+  the real pipeline without sending.
 
-### Sicherheit
+### Security
 
-- **Rechte-Nullsummen-Prinzip.** Die beiden Modell-Stufen sind die einzigen, die fremden
-  Text interpretieren, und die einzigen ohne jede Fähigkeit: keine Tools, kein
-  Function-Calling, kein Netz- oder Dateizugriff. Der Request-Körper beider Provider
-  besteht aus einem geschlossenen Feldsatz.
-- **Sanitizer vor dem Modell.** Kein Modell sieht rohes HTML, rohe MIME-Teile oder
-  Anhangs-Binärdaten. Zero-Width- und Bidi-Steuerzeichen werden entfernt, Punycode- und
-  Homoglyphen-Domains gekennzeichnet, Links durch `[Link #n: domain]` ersetzt.
-- **Sanitizer nach dem Modell.** Die zugestellte Nachricht enthält nie einen klickbaren
-  Link, nie einen Anhang, nie Markup. Markdown wird neutralisiert — auch die nur am
-  Zeilenanfang wirkenden Formen —, Domains und Dateinamen erscheinen mit gebrochenem Punkt,
-  `@everyone`/`@here` entschärft. Telegram ohne `parse_mode`, Discord ohne Embeds.
-- **Modellfreie Erkennung.** Gefälschte Datenblock-Marker, Ballungen unsichtbarer Zeichen
-  und wörtliche Anweisungen an ein Sprachmodell setzen den Injection-Verdacht im Code,
-  bevor ein Modell befragt wird. Mehrere unabhängige Fälschungssignale heben das
-  Phishing-Risiko auch gegen ein schweigendes Modell auf `high`.
-- **Fail-closed.** Jeder Fehler in Sanitizer, Modell, Kritiker, Zustellung oder Zustand
-  führt zur fünfzeiligen Metadaten-Notiz statt zu ungeprüftem Inhalt. Nichts verschwindet
-  still.
-- **Anhangs-Extraktion im Subprozess** mit Zeit-, Speicher-, Input- und Output-Limit;
-  `pdfminer` wird im Elternprozess nie geladen.
-- **Kein Löschpfad auf dem Postfach.** Weder `\Deleted` noch `EXPUNGE` existieren im Code.
-  Ohne MOVE-Capability des Servers bleibt die Mail liegen — auf Kopieren+Löschen wird
-  bewusst nicht ausgewichen.
-- **Secrets** als `SecretStr`, Config-Datei mit `0600` bei jedem Schreiben, keine
-  Kommandozeilen-Optionen für Passwörter und Tokens, keine Secrets in Prompts, Logs oder
-  Datenbank.
-- **Invarianten-Review I1–I8** über die gesamte Codebasis, dokumentiert in
-  docs/SECURITY.md §7 und maschinell festgehalten in `tests/unit/test_invarianten.py`.
+- **The zero-privilege principle.** The two model stages are the only ones that interpret
+  foreign text, and the only ones without any capability: no tools, no function calling, no
+  network or file access. The request body of both providers consists of a closed field set.
+- **Sanitizer before the model.** No model sees raw HTML, raw MIME parts or attachment
+  binaries. Zero-width and bidi control characters are removed, punycode and homoglyph domains
+  flagged, links replaced by `[Link #n: domain]`.
+- **Sanitizer after the model.** The delivered message never contains a clickable link, never
+  an attachment, never markup. Markdown is neutralised — including the forms that only work at
+  the start of a line —, domains and filenames appear with a broken dot, `@everyone`/`@here`
+  are defused. Telegram without `parse_mode`, Discord without embeds.
+- **Model-free detection.** Forged data-block markers, clusters of invisible characters and
+  literal instructions to a language model set the injection suspicion in code, before any
+  model is asked. Several independent forgery signals raise the phishing risk to `high` even
+  against a silent model.
+- **Fail-closed.** Every error in the sanitizer, model, critic, delivery or state leads to the
+  five-line metadata note instead of unchecked content. Nothing disappears silently.
+- **Attachment extraction in a subprocess** with time, memory, input and output limits;
+  `pdfminer` is never loaded in the parent process.
+- **No delete path on the mailbox.** Neither `\Deleted` nor `EXPUNGE` exists in the code.
+  Without the server's MOVE capability the mail stays put — falling back to copy + delete is
+  deliberately not done.
+- **Secrets** as `SecretStr`, the config file at `0600` on every write, no command-line
+  options for passwords and tokens, no secrets in prompts, logs or the database.
+- **Invariant review I1–I8** across the whole codebase, documented in docs/SECURITY.md §7 and
+  pinned mechanically in `tests/unit/test_invarianten.py`.
 
-### Qualitätssicherung
+### Quality assurance
 
-- 1200+ Tests, darunter Property-Based-Tests über zufällige Modellausgaben, Fehlerinjektion
-  an jeder Pipeline-Stufe und ein Angriffskorpus.
-- Ein Whitebox-Durchlauf (12 Befunde, docs/TESTING.md §5) und ein Blackbox-Durchlauf durch
-  einen Agenten ohne Code-Zugriff (16 Befunde, §6). Alle Befunde ab `medium` sind behoben
-  und mit Regressionstest belegt.
-- Coverage: `sanitize/` und `output/` über 98 %, gesamt über 95 %.
+- 1200+ tests, among them property-based tests over random model outputs, fault injection at
+  every pipeline stage and an attack corpus.
+- One white-box run (12 findings, docs/TESTING.md §5) and one black-box run by an agent
+  without code access (16 findings, §6). All findings from `medium` upwards are fixed and
+  covered by a regression test.
+- Coverage: `sanitize/` and `output/` above 98 %, overall above 95 %.
 
-### Bekannte Grenzen
+### Known limitations
 
-- **Kein Lauf gegen echte Gegenstellen.** Alle Nachweise stammen aus Attrappen.
-- **Die zweite Blackbox-Runde fehlt.** Das eigene Testprotokoll verlangt sie nach den
-  beiden `high`-Befunden des ersten Durchlaufs; sie hat nicht stattgefunden.
-- **Kein OCR, keine Bildanalyse** — Phishing im Screenshot wird nur als unverarbeiteter
-  Anhang gemeldet.
-- **Keine Entschlüsselung von PGP/S-MIME.**
-- **Signal nur als „Notiz an mich"**, mit laufendem `signal-cli --daemon`.
-- **Neue Warnheuristiken sind ungeeicht** (Phrasenliste der Injection-Erkennung,
-  HTML-Divergenz-Schwelle, Kombinationsregel für `high`) — Fehlalarme sind wahrscheinlicher
-  als übersehene Fälle.
-- **`connect-mail` warnt nicht vorab**, wenn der Server kein `MOVE` kann oder
-  `move_processed_to` nicht existiert; der Fehler fällt erst im Betrieb auf, ohne
-  Datenverlust.
-- **Verarbeitungslatenz nie gemessen** (NF-4 bleibt offen).
-- Ein Postfach pro Installation, keine Antworten aus dem Messenger heraus, kein Zugriff auf
-  das echte Postfach.
+- **No run against real counterparts.** All evidence comes from mocks.
+- **The second black-box round is missing.** Our own test protocol requires it after the two
+  `high` findings of the first run; it has not taken place.
+- **No OCR, no image analysis** — phishing in a screenshot is only reported as an unprocessed
+  attachment.
+- **No decryption of PGP/S-MIME.**
+- **Signal only as "Note to Self"**, with a running `signal-cli --daemon`.
+- **New warning heuristics are uncalibrated** (the phrase list of the injection detection, the
+  HTML divergence threshold, the combination rule for `high`) — false alarms are more likely
+  than missed cases.
+- **`connect-mail` does not warn in advance** when the server cannot do `MOVE` or
+  `move_processed_to` does not exist; the error only shows up in production, without data
+  loss.
+- **Processing latency never measured** (NF-4 stays open).
+- One mailbox per installation, no replies from the messenger, no access to the real mailbox.
 
-### Doku
+### Docs
 
-- README mit Sicherheitsmodell-Diagramm, Quickstart, FAQ und einer ehrlichen Liste der
-  Grenzen; CHANGELOG angelegt.
-- In WP12 gegen den Code geprüft und korrigiert: das Nachrichtenbeispiel im README zeigte
-  eine Hinweiszeile („1 Link entfernt"), die das Programm nie erzeugt; SPEC-CLI §2 sagt
-  jetzt, wohin die Protokollzeilen der inneren Schichten gehen; docs/BETRIEB.md §5 kennt
-  `imap_postprocess_failed` und beschreibt `mail_processed` korrekt.
+- A README with a security model diagram, quickstart, FAQ and an honest list of limitations;
+  the CHANGELOG created.
+- Checked against the code and corrected in WP12: the message example in the README showed a
+  note line ("1 Link entfernt") the program never produces; SPEC-CLI §2 now says where the log
+  lines of the inner layers go; docs/OPERATIONS.md §5 knows `imap_postprocess_failed` and
+  describes `mail_processed` correctly.

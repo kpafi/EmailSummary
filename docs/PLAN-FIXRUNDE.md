@@ -384,7 +384,7 @@ ARCHITECTURE §3 (Dedupe-Key, `content_hash`, `from_addr` dekodiert) und §6 (Fr
 (zweimal abrufen ⇒ einmal verarbeiten) bleibt grün.
 
 **Ergebnis-Fakten für den Doku-Agenten:** Schema-Version 3 und Migrationsweg (für
-BETRIEB §4 Wartung und CHANGELOG), neue Logereignisse (BETRIEB §5), Bedrohungszeile.
+OPERATIONS §4 Wartung und CHANGELOG), neue Logereignisse (OPERATIONS §5), Bedrohungszeile.
 
 ---
 
@@ -466,7 +466,7 @@ HC-38 Teil 2.
 `tests/unit/test_telegram_discovery.py`, `tests/integration/test_runner_e2e.py`,
 `tests/unit/test_hot_schedule.py`. Doku: ADR-080 (neu: Geltungsbereich und Latenz der
 Fernauslösung), ADR-077 und ADR-049 Nachträge; SPEC-CLI §4 `run` und §5 `accept_commands`;
-README §„Vom Handy aus anstoßen"; BETRIEB §3 (Cron) und §5 (neue Logereignisse);
+README §„Vom Handy aus anstoßen"; OPERATIONS §3 (Cron) und §5 (neue Logereignisse);
 ARCHITECTURE §2 (Runner-Schleife).
 
 **Aufgaben:**
@@ -487,7 +487,7 @@ ARCHITECTURE §2 (Runner-Schleife).
 - **HC-27** nach E2. `run_once` ruft am Ende `poll_commands_once()` und behandelt jeden
   Befehl: `/status` antworten, `/digest` konsumieren und als `command_ignored_once` (INFO)
   loggen. Doku: SPEC §4 `run` (`--once`: „Befehle werden beim nächsten Lauf bedient; `/digest`
-  ist dort wirkungslos"), §5, README, BETRIEB §3 (Zeile in der Cron-Liste), ADR-080. Der
+  ist dort wirkungslos"), §5, README, OPERATIONS §3 (Zeile in der Cron-Liste), ADR-080. Der
   Einrichtungs-Tipp in `_setup_telegram` nennt beide Betriebsarten korrekt.
 - **HC-26.** `run_once`: `maybe_send_low_digest()` samt Flush in die ausnahmefeste Zone
   (`finally`) ziehen; Fehler des Digests abfangen und loggen, damit sie den `IngestError`
@@ -672,7 +672,7 @@ Ergebnisobjekte der Fixpakete (Anhang A), `git diff 14ad9ed..HEAD --stat`, diese
    geliefert haben: **HT-14** in §5 (FP-2), HT-7-Korrektur (FP-3), HT-12-Korrektur (FP-6),
    HC-37 (b) als Schichtgrenze (FP-6), die Doku-Klarstellung aus „Geprüft und verworfen"
    Nr. 6 (`run --once` läuft nicht unter den Signal-Handlern — Ctrl+C/Cron-Timeout erzeugt
-   den Zustand `sanitized` real; gehört nach BETRIEB §3 und hierher). §4: der Haken „Zweite
+   den Zustand `sanitized` real; gehört nach OPERATIONS §3 und hierher). §4: der Haken „Zweite
    Cold-Runde" bleibt offen mit dem Vermerk „läuft als §6 dieser Fixrunde".
 2. **`CHANGELOG.md`** §Unveröffentlicht: Unterabschnitt **„Behoben"** — je Befund die
    **Wirkung für den Nutzer**, nicht die Nummer allein (Nummern in Klammern); Unterabschnitt
@@ -686,7 +686,7 @@ Ergebnisobjekte der Fixpakete (Anhang A), `git diff 14ad9ed..HEAD --stat`, diese
    `<extra field>`, Terminal-Allowlist für Anbietertext, Servertext-Verzicht), I6
    (Kollisionspfad HC-10). §7.2: Phrasenliste (Miss-Richtung, bei `provider = "none"`
    einzige Quelle), zweite Cold-Runde „steht aus — §6 dieser Fixrunde".
-4. **`docs/BETRIEB.md`** §3 (Cron-Zeile zu Befehlen und zum Signal-Verhalten von `--once`),
+4. **`docs/OPERATIONS.md`** §3 (Cron-Zeile zu Befehlen und zum Signal-Verhalten von `--once`),
    §4 (Migration auf Schema 3, wie man sie erkennt), §5 (neue Logereignisse:
    `mail_id_collision`, `outbox_clock_skew_corrected`, `command_ignored_once`, …).
 5. **Konsistenzlauf** über README, SPEC-CLI, ARCHITECTURE, REQUIREMENTS, DECISIONS: (a) jede

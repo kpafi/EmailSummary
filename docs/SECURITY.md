@@ -1,517 +1,500 @@
-# MailDigest — Sicherheitsmodell & Threat-Model
+# MailDigest — Security model & threat model
 
-> Ranghöchstes Dokument: Bei Konflikt schlägt SECURITY.md sowohl REQUIREMENTS.md als auch
-> PLAN.md. Änderungen an Invarianten nur mit ADR + Begründung.
+> Highest-ranking document: in case of conflict, SECURITY.md beats both REQUIREMENTS.md and
+> PLAN.md. Changes to invariants only with an ADR + rationale.
 
-## 1. Angreifermodell
+## 1. Attacker model
 
-Der Angreifer kann **beliebige E-Mails** an das echte Postfach senden (und damit ins
-Mirror-Postfach). Er kontrolliert Inhalt, HTML, Anhänge, Header (außer den vom empfangenden
-Server gesetzten `Received`/`Authentication-Results`). Er kennt möglicherweise dieses Tool
-und seine Prompts. Er kann **nicht**: den Mirror-IMAP-Account, den LLM-Provider, den
-Messenger-Account oder den Host kompromittieren (das wäre ein anderes Threat-Model).
+The attacker can send **arbitrary email** to the real mailbox (and thus into the mirror
+mailbox). They control content, HTML, attachments and headers (except `Received` and
+`Authentication-Results` set by the receiving server). They may well know this tool and its
+prompts. They **cannot**: compromise the mirror IMAP account, the LLM provider, the
+messenger account or the host (that would be a different threat model).
 
-**Schutzziele:**
-1. Der Nutzer erhält nie zustellbare Angriffs-Payloads (Links, Dateien, klickbare Inhalte).
-2. Die LLMs können durch Mail-Inhalte nicht zu schädlichem Verhalten instruiert werden —
-   und selbst wenn doch, kann das Verhalten keinen Schaden anrichten (Defense in Depth).
-3. Keine Exfiltration von Secrets oder Mail-Inhalten an Dritte.
-4. Der Nutzer wird vor Phishing gewarnt statt ihm ausgeliefert.
+**Protection goals:**
+1. The user never receives a deliverable attack payload (links, files, clickable content).
+2. The LLMs cannot be instructed by mail content into harmful behaviour — and even if they
+   were, that behaviour could do no damage (defence in depth).
+3. No exfiltration of secrets or mail content to third parties.
+4. The user is warned about phishing instead of being exposed to it.
 
-## 2. Zentrale Designantwort: Das Rechte-Nullsummen-Prinzip
+## 2. The central design answer: the zero-privilege principle
 
-Prompt-Injection lässt sich nicht zuverlässig verhindern — also wird sie **wirkungslos
-gemacht**:
+Prompt injection cannot be prevented reliably — so it is made **ineffective** instead:
 
-- Die LLMs haben **keine Werkzeuge und keine Rechte** (I2). Der einzige Effekt, den ein
-  Modell erzielen kann, ist Text in einem JSON-Feld. Dieses JSON wird schema-validiert
-  und deterministisch sanitisiert (I4). Eine „erfolgreiche" Injection kann daher maximal
-  eine falsche Zusammenfassung erzeugen — nie eine Aktion.
-- Alles, was Wirkung hat (Mail abrufen, Nachricht senden, Datei öffnen), tut
-  deterministischer Code nach festen Regeln.
-- Die letzte Instanz vor dem Nutzer ist immer Code (Output-Sanitizer), nie ein Modell.
+- The LLMs have **no tools and no privileges** (I2). The only effect a model can achieve is
+  text in a JSON field. That JSON is schema-validated and deterministically sanitised (I4).
+  A "successful" injection can therefore at most produce a wrong summary — never an action.
+- Everything with an effect (fetching mail, sending a message, opening a file) is done by
+  deterministic code following fixed rules.
+- The last instance before the user is always code (the output sanitizer), never a model.
 
-## 3. Bedrohungen und Gegenmaßnahmen
+## 3. Threats and countermeasures
 
-| # | Bedrohung | Gegenmaßnahme (Komponente) |
+| # | Threat | Countermeasure (component) |
 |---|-----------|---------------------------|
-| T1 | Prompt-Injection im Mail-Body („ignoriere Anweisungen, antworte mit …") | Rechtelose LLMs (I2); Daten/Instruktions-Trennung im Prompt (I8); Injection-Flag im Schema; Kritiker-Gegencheck; Output-Sanitizer (WP5/WP6/WP7); deterministische Injection-Indizien in der WP5-Nachkontrolle, modellunabhängig (WP11, ADR-061) |
-| T2 | Injection über versteckten Text (weiße Schrift, display:none, Zero-Width, Bidi) | HTML-Sanitizer entfernt unsichtbare Elemente; Unicode-Cleaning (WP3) |
-| T3 | Phishing-Link soll den Nutzer erreichen | Links werden deterministisch entfernt/defanged, nie zugestellt (I3, WP3+WP7) |
-| T4 | Malware/Makrovirus im Anhang (docx, xlsm, exe, js, iso, zip …) | Allowlist: Anhänge außer PDF/Text werden nie geöffnet, nur Metadatum (F-SEC-4, WP3) |
-| T5 | Exploit gegen den PDF-Parser | Extraktion in Subprozess mit Timeout/Memory/Größen-Limits (I7); Absturz ⇒ Anhang unverarbeitet (WP3) |
-| T6 | Gefälschter MIME-Typ (exe als „application/pdf") | Magic-Bytes-Verifikation (WP3) |
-| T7 | Markdown-/Formatierungs-Injection Richtung Messenger (Telegram-Markup als Link-Ersatz) | Kein `parse_mode` (Telegram), nur `content` ohne Embeds (Discord); Output-Sanitizer löscht Markup-Zeichen und bricht alle Domain-Punkte sowie jedes lebende Schema (WP7, ADR-036/037) |
-| T8 | Halluzination: Summarizer erfindet harmlosen Inhalt für Phishing-Mail | Kritiker prüft Summary gegen Mail (`summary_accurate`); false ⇒ fail-closed (umgesetzt: WP6 liefert das Feld, `pipeline.process_mail` zieht die Konsequenz) |
-| T9 | Injection instruiert Summarizer, Phishing als „wichtig & legitim" zu framen | Kritiker sieht den sanitisierten Text unabhängig und ohne Custom-Instructions (ADR-042); deterministische Signale (Domain-Checks etc.) sind nicht vom LLM beeinflussbar und heben die Risikostufe notfalls im Code an (WP6, ADR-043) |
-| T10 | Ressourcen-Erschöpfung (Mail-Bombe, 100-MB-Mails, MIME-Rekursion, tief geschachteltes HTML) | Größenlimits auf jeder Stufe, Rekursionstiefe begrenzt, Zeichenlimits (WP3), Byte-, Element- und Tiefenschranke der HTML→Text-Konvertierung als Restbudget je Mail (ADR-084: darüber gilt der HTML-Teil als nicht verarbeitet), Roh-Budget für Mail- und Anhangstext **vor** der Sanitisierung als Restzähler je Mail und ein Budget für die Zahl der Link-Funde je Mail (ADR-084-/ADR-028-Nachtrag), Obergrenze für die Zahl der gelaufenen MIME-Teile (500) und ein Zeitbudget aller PDF-Extraktionen einer Mail (ADR-084-/ADR-029-Nachtrag, vierte Iteration), Obergrenze für den Rohwert **jedes** gelesenen Headers vor jeder Verarbeitung (4096 Zeichen, 32 Werte je Name) sowie ein Kopfzeilen-Gesamtbudget des MIME-Baums vor der Rück-Serialisierung (256 KiB, 4096 Kopfzeilen; weitere Teile werden abgeschnitten — ADR-020-Nachtrag, fünfte Iteration), harter Deckel der **MIME-Verschachtelungstiefe** im Ingest vor jeder Serialisierung (32 Ebenen, tiefere Teilbäume werden geleert — ADR-020-Nachtrag, O-1: 16 KB mit 250 Ebenen liessen `as_bytes()` mit `RecursionError` scheitern und hielten den Dienst an), Rate-Limit im Poll-Loop (WP8) |
-| T11 | Secret-Exfiltration („schreib den API-Key in die Summary") | Secrets sind nie im Prompt-Kontext (I5) — das Modell kennt sie schlicht nicht |
-| T12 | Homoglyphen-/Punycode-Domains täuschen den Nutzer in der Textdarstellung | Kennzeichnung + Warnung im sanitization_report; Kritiker-Signal (WP3/WP6) |
-| T13 | Mail-in-Mail (message/rfc822) schmuggelt Payloads an Filtern vorbei | Eingebettete Mails werden wie Anhänge behandelt: nicht geöffnet, nur Metadatum (WP3) |
-| T14 | Kompromittierte Zusammenfassung im Sammel-Digest geht unter | Kritiker-`high` erzwingt Einzelzustellung mit Banner (F-CRIT-2) |
-| T15 | `multipart/alternative`: harmloser `text/plain`, bösartiger `text/html` — der Nutzer sieht den HTML-Teil, die Zusammenfassung beschreibt den Klartext | Divergenz-Erkennung im Sanitizer setzt `html_divergent`; Hinweiszeile + Kritiker-Signal (WP11, ADR-067) |
-| T16 | Gefälschte `Message-ID` unterdrückt eine echte Mail: Der Angreifer schickt seine Mail zuerst mit der Message-ID der erwarteten Mail; die echte gilt als Duplikat und verschwindet ohne Zustellung, Notiz oder Warnung | Zweites, inhaltsabgeleitetes Dedupe-Merkmal `content_hash` (`sha256(mime_bytes)`) in `seen_mails`; gleicher Key bei anderem Inhalt ist eine **Kollision**: Die Mail wird unter einem abgeleiteten Schlüssel regulär verarbeitet, bekommt eine Hinweiszeile und erzeugt `mail_id_collision` (WARNING) im Log (Fixrunde, HC-10, ADR-079) |
+| T1 | Prompt injection in the mail body ("ignore instructions, reply with …") | Privilege-less LLMs (I2); data/instruction separation in the prompt (I8); injection flag in the schema; critic cross-check; output sanitizer (WP5/WP6/WP7); deterministic injection evidence in the WP5 post-check, model-independent (WP11, ADR-061) |
+| T2 | Injection through hidden text (white type, display:none, zero-width, bidi) | HTML sanitizer removes invisible elements; Unicode cleaning (WP3) |
+| T3 | A phishing link is meant to reach the user | Links are deterministically removed/defanged, never delivered (I3, WP3+WP7) |
+| T4 | Malware/macro virus in an attachment (docx, xlsm, exe, js, iso, zip …) | Allowlist: attachments other than PDF/text are never opened, only reported as metadata (F-SEC-4, WP3) |
+| T5 | Exploit against the PDF parser | Extraction in a subprocess with timeout/memory/size limits (I7); a crash ⇒ attachment unprocessed (WP3) |
+| T6 | Forged MIME type (an exe as "application/pdf") | Magic-byte verification (WP3) |
+| T7 | Markdown/formatting injection towards the messenger (Telegram markup as a link substitute) | No `parse_mode` (Telegram), only `content` without embeds (Discord); the output sanitizer deletes markup characters and breaks all domain dots as well as every live scheme (WP7, ADR-036/037) |
+| T8 | Hallucination: the summarizer invents harmless content for a phishing mail | The critic checks the summary against the mail (`summary_accurate`); false ⇒ fail-closed (implemented: WP6 supplies the field, `pipeline.process_mail` draws the consequence) |
+| T9 | Injection instructs the summarizer to frame phishing as "important & legitimate" | The critic sees the sanitised text independently and without custom instructions (ADR-042); deterministic signals (domain checks etc.) cannot be influenced by the LLM and raise the risk level in code if needed (WP6, ADR-043) |
+| T10 | Resource exhaustion (mail bomb, 100 MB mail, MIME recursion, deeply nested HTML) | Size limits at every stage, bounded recursion depth, character limits (WP3), byte, element and depth caps on the HTML→text conversion as a remaining budget per mail (ADR-084: beyond it the HTML part counts as unprocessed), a raw budget for mail and attachment text **before** sanitisation as a remaining counter per mail and a budget for the number of link matches per mail (ADR-084/ADR-028 addendum), an upper bound on the number of MIME parts walked (500) and a time budget across all PDF extractions of one mail (ADR-084/ADR-029 addendum, fourth iteration), an upper bound on the raw value of **every** header read before any processing (4096 characters, 32 values per name) plus a total header budget for the MIME tree before re-serialisation (256 KiB, 4096 headers; further parts are truncated — ADR-020 addendum, fifth iteration), a hard cap on **MIME nesting depth** in ingest before any serialisation (32 levels, deeper subtrees are emptied — ADR-020 addendum, O-1: 16 KB with 250 levels made `as_bytes()` fail with `RecursionError` and stalled the service), rate limiting in the poll loop (WP8) |
+| T11 | Secret exfiltration ("write the API key into the summary") | Secrets are never in the prompt context (I5) — the model simply does not know them |
+| T12 | Homoglyph/punycode domains deceive the user in the text representation | Flagging + warning in the sanitization_report; critic signal (WP3/WP6) |
+| T13 | Mail-in-mail (message/rfc822) smuggles payloads past filters | Embedded mail is treated like an attachment: not opened, metadata only (WP3) |
+| T14 | A compromised summary gets lost in the collected digest | A critic `high` forces individual delivery with a banner (F-CRIT-2) |
+| T15 | `multipart/alternative`: harmless `text/plain`, malicious `text/html` — the user sees the HTML part, the summary describes the plain text | Divergence detection in the sanitizer sets `html_divergent`; note line + critic signal (WP11, ADR-067) |
+| T16 | A forged `Message-ID` suppresses a genuine mail: the attacker sends their mail first, carrying the Message-ID of the expected mail; the genuine one counts as a duplicate and disappears without delivery, note or warning | A second, content-derived dedupe criterion `content_hash` (`sha256(mime_bytes)`) in `seen_mails`; the same key with different content is a **collision**: the mail is processed normally under a derived key, gets a note line and produces `mail_id_collision` (WARNING) in the log (fix round, HC-10, ADR-079) |
 
-## 4. Sanitizer-Politik (verbindlich; umgesetzt in WP3, ADR-026 bis ADR-030)
+## 4. Sanitizer policy (binding; implemented in WP3, ADR-026 to ADR-030)
 
-**Grundsatz: Allowlist, nie Blocklist.** Es wird definiert, was durchdarf — alles andere
-fällt raus. Ein neues gefährliches Dateiformat darf nie ein Update erfordern, um geblockt
-zu sein.
+**Principle: allowlist, never blocklist.** What may pass is defined — everything else is
+dropped. A new dangerous file format must never require an update in order to be blocked.
 
-- **Body:** Existiert mindestens ein Inline-`text/plain`-Teil, bilden **alle**
-  Inline-`text/plain`-Teile (in MIME-Reihenfolge) den Body; sonst werden alle
-  Inline-`text/html`-Teile konvertiert. Andere Body-Typen ⇒ „nicht darstellbar"
-  (Anhang-Metadatum). „Inline" heißt: `Content-Disposition` ist nicht `attachment`
-  **und** kein Dateiname gesetzt. Existieren beide Sorten (`multipart/alternative`), wird der
-  HTML-Teil weiterhin **nicht** ausgewertet, aber intern zu Text konvertiert und mit dem
-  Klartext verglichen (Wortmengen, Link-/Bild-Marker ausgenommen). Ein substanzieller
-  Überhang (≥ 5 im Klartext fehlende Wörter **und** > 50 % der HTML-Wörter) setzt
-  `sanitization_report.html_divergent` (T15, ADR-067).
-- **Anhänge, inhaltlich verarbeitet (nur diese zwei Fälle):** `text/plain`-Dateien und
-  `application/pdf` — nach Magic-Byte-Check, unter Limits. `text/html` ist **nur als
-  Inline-Body** erlaubt; eine `.html`-*Datei* ist HTML-Smuggling-Vektor und bleibt
-  Metadatum (`detected_kind="html"`, `processed=False`).
-- **Magic-Bytes-Verifikation (T6, ADR-026):** Dem Header-MIME wird nie geglaubt.
-  Verarbeitet wird nur, wenn der deklarierte Typ auf der Allowlist steht **und** der
-  Inhalt dazu passt: PDF ⇒ `%PDF-` exakt an Offset 0; text ⇒ keine bekannte
-  Binärsignatur (eigene kleine Tabelle in `sanitize/attachments.py`: MZ/ELF/Mach-O, ZIP/
-  RAR/7z/GZIP/BZIP2/XZ/CAB, OLE2, PNG/JPEG/GIF/BMP/TIFF, RTF, `#!`-Skripte, SQLite,
-  WASM, PDF) und Text-Heuristik bestanden (kein NUL, < 5 % Steuerbytes in 8 KB
-  Stichprobe). Widerspruch ⇒ `detected_kind="mismatch"` ⇒ nie verarbeitet. Ein
-  nicht-allowgelisteter Typ wird nie „hochgestuft", auch wenn sein Inhalt wie PDF aussieht.
-- **Anhänge, nur Metadatum (Beispiele, nicht abschließend):** Office (`.docx/.xlsx/.pptx`
-  — Makros!), Archive (`.zip/.rar/.7z/.iso` — Smuggling), Executables/Skripte
-  (`.exe/.js/.bat/.sh/.apk`), Kalender (`.ics` — Event-Injection), Bilder (Phishing-Screens,
-  Stego), `message/rfc822` (T13: wird **nie** betreten, auch nicht rekursiv),
-  `.html`-Anhänge (Smuggling), alles Unbekannte. Erfasst werden sanitisierter Dateiname
-  (ASCII-Allowlist, Pfadanteile entfernt, max. 80 Zeichen), deklarierter MIME-Typ, Größe.
-- **Verschlüsselte Mail (PGP/S-MIME, ADR-082):** `multipart/encrypted`,
-  `application/pgp-encrypted`, `application/pkcs7-mime` und `application/x-pkcs7-mime`
-  werden **erkannt und benannt**, nicht entschlüsselt. Sicherheitlich folgt daraus nichts
-  Neues: Der Chiffretext steht nicht auf der Allowlist und ist damit ohnehin nur
-  Metadatum — kein Modell sieht ihn. Das Flag `SanitizationReport.encrypted` dient
-  ausschließlich der Erklärung gegenüber dem Nutzer (Hinweiszeile) und dem Kritiker
-  (weiches Signal, kein Risiko-Aufschlag). Kein Fail-closed: Bei verschlüsselter Mail ist
-  nichts schiefgegangen, es ist nur nichts zu lesen.
-- **Link-Behandlung (I3/T3, ADR-028):** Ersetzen im Text durch `[Link #n: domain.tld]`
-  (`mailto:` ⇒ `[Mail #n: domain]`, `tel:` ⇒ `[Tel #n]`); die defangte Vollliste steht
-  immer in `links_found` (`hxxps[:]//evil[.]com/…`, max. 100 Einträge à 300 Zeichen) und
-  wird nur bei `links.footnote = true` (Default false) zusätzlich als Fußnote an den
-  Body angehängt. Erkennung deckt Obfuskation ab: `hxxp`, `(.)`, `[.]`, `(dot)`,
-  Leerzeichen-Einschub, URL-Encoding (`%68ttp`), `www.`-Domains, nackte Domains
-  (eng gesetzte Punkte, alphabetische TLD; bekannte Datei-Endungen ausgenommen),
-  Userinfo-Tricks (`http://gut@boese/` ⇒ Domain ist `boese`). Ein `www.`-Präfix wird im
-  Marker gestrippt (Autolink-Gefahr im Messenger).
-- **Punycode/Homoglyphen (T12):** `xn--`-Domains werden im Marker gekennzeichnet und in
-  `punycode_domains` inkl. Unicode-Darstellung gelistet; Labels mit gemischten
-  Schriftsystemen landen in `mixed_script_domains`. Beides gilt auch für die
-  Absender-Domain.
-- **Unicode (F-SEC-10):** NFKC-Normalisierung; danach wird **jedes** Zeichen der
-  Unicode-Kategorie „C*" außer Tab/Zeilenumbruch entfernt und gezählt (deckt
-  U+200B..200F, U+202A..202E, U+2066..2069, U+FEFF, U+00AD, U+2060..2064 u. ä. ab —
-  bewusst kategorienbasiert statt Codepunkt-Blockliste). Gilt für Body, Anhangs-Texte,
-  Betreff und Absender-Anzeigename.
-- **HTML → Text (T2, ADR-027):** `script`/`style`/`head`/`template`/`noscript`/`iframe`/
-  `object`/`embed`/`svg`/`math` und Kommentare werden entfernt; unsichtbarer Text
-  (`display:none`, `visibility:hidden`, `opacity:0`, `font-size:0`, weiße Schrift ohne
-  eigenen nicht-weißen Hintergrund, `hidden`-Attribut) wird entfernt und im Report
-  gezählt (`hidden_text_removed`); Tracking-Pixel (≤ 2×2 px) werden ersatzlos entfernt;
-  Alt-Texte erscheinen als `[Bild: …]`; `href`-Ziele werden als Text sichtbar gemacht und
-  dann defangt. Zusätzlich werden HTML-Tag-artige Sequenzen auch in *Klartext*-Teilen
-  neutralisiert (fail-safe: lieber Über-Entfernung als ein Tag im Output). Die Konvertierung
-  hat eine harte Schranke (T10/ADR-084): mehr als `[limits] max_html_bytes` Bytes, mehr als
-  `[limits] max_html_elements` Elemente oder mehr als 2000 Schachtelungsebenen ⇒ der
-  HTML-Teil gilt als **nicht verarbeitet** (`html_rejected` im Report, Hinweiszeile in der
-  Nachricht); ein `text/plain`-Teil wird normal zugestellt, die Pipeline läuft fail-safe
-  weiter. Der Byte-Deckel greift **vor** dem Parsen (Element- und Tiefenschranke kennen den
-  Baum erst danach, der Parse trägt die Kosten); Byte- und Elementschranke sind ein
-  Restbudget **je Mail**, und höchstens vier `text/html`-Teile werden überhaupt konvertiert
-  (ADR-084-Nachtrag). Derselbe Deckel gilt für den Divergenzcheck (ADR-067).
-- **Absender-Anzeigename (ADR-020 Nachträge):** Anzeigename, Adresse und `from_domain`
-  liest seit O-3 der RFC-5322-Parser der Standardbibliothek (`email.headerregistry`, der
-  Parser von `email.policy.default`) aus dem **rohen** `From`/`Reply-To`-Wert — derselbe
-  Parser, den Mailprogramme benutzen. Das Werkzeug zeigt damit nie eine Absender-Domain,
-  die das Mailprogramm nicht zeigt, und meldet nie „unbekannt" ohne Warnung; die
-  deterministischen Indikatoren (`reply_to_mismatch`, `return_path_mismatch`) bleiben
-  wirksam (HC2-2). Nur die erste Angabe zählt, eine Domain muss hostname-förmig sein, ein
-  vorhandener, aber unlesbarer Header bleibt als `(unreadable)` sichtbar, und der
-  dekodierte Name wird von `<`, `>`, `,`, `;`, `:`, `"`, `\` befreit. Jede eigene
-  Nachbildung des Parsers (Maske für kodierte Wörter, Klammer-Rückfall, Kommentar-Scanner)
-  war an einer Stelle enger oder weiter als er — sie ist entfernt. Adresse und Domain kommen
-  quotiert bzw. direkt vom Parser (nie aus einem zweiten Parse der Adresszeichenkette), die
-  Legacy-Parser `parseaddr`/`getaddresses` laufen auf Rohwerten nur abgesichert, und ein
-  Adress-Header am 4096-Zeichen-Deckel gilt als unlesbar (darunter kostet der Parser im
-  ungünstigsten Fall rund 80 ms je Header, deterministisch begrenzt). Der **rohe** Wert **jedes** gelesenen
-  Headers wird an einer einzigen Stelle (`_raw_header_values`) auf 4096 Zeichen geschnitten
-  — nicht nur `From`/`Reply-To`/`Subject`, auch `To`, `Cc`, `Message-ID`, `Date`,
-  `Return-Path`, `Authentication-Results` (S-1; ein 20-MB-`To` kostete vorher 18,5 s), und
-  der geparste Baum wird vor der Rück-Serialisierung als Ganzes gedeckelt (256 KiB und 4096
-  Kopfzeilen je Mail; der Falter der Standardbibliothek kostete sonst bis 14 s). Verwirft
-  `getaddresses` den Adressteil ganz (ein Token hinter der spitzen Klammer genügt), greift
-  ein zweiter, konservativer Schritt auf die **erste** spitze Klammer zurück — der
-  Anzeigename darf die Domain auch nicht *löschen* (R-9). **Rückfälle lesen nie Kommentar-
-  oder Quoted-String-Inhalt** (S-2): Ein linearer Scanner nach RFC 5322 entfernt `(…)` und
-  `"…"` (mit Escapes und Verschachtelung), bevor gesucht wird; ist der Header unbalanciert
-  (offener Kommentar oder Quoted String, auch durch den 4096-Schnitt), gilt die Adresse als
-  unbekannt und die Rückweg-Warnung feuert. Orakel jedes Tests ist `email.policy.default`
-  auf demselben Rohheader; das Werkzeug weicht davon nur nach „echte Angreiferadresse"
-  oder „unbekannt + Warnung" ab, nie zu einer fremden Domain.
-- **PDF-Extraktion (I7/T5, ADR-029):** `pdfminer.six` läuft ausschließlich in einem
-  Subprozess (`python -m maildigest.sanitize.extract_pdf`, PDF via stdin), mit Timeout
-  (Eltern-Prozess), `RLIMIT_AS` 512 MB (Code-Konstante) und Output-Kürzung im Kind.
-  stderr wird verworfen (I5). Jeder Fehler ⇒ Anhang „nicht verarbeitet", Pipeline läuft.
-  Über dem Einzel-Timeout liegt ein **Zeitbudget je Mail** (`[limits]
-  pdf_time_budget_seconds`, Default 30 s): Jede Extraktion bekommt
-  `min(pdf_timeout_seconds, Restbudget)`; ist das Budget aufgebraucht, gilt der Anhang wie
-  beim Timeout als nicht verarbeitet und es startet gar kein Kindprozess mehr
-  (ADR-029-Nachtrag, R-11). Ohne dieses Budget summierten 20 PDF-Anhänge ihre Timeouts zu
-  rund 400 s Wandzeit je Mail.
-- **Limits (Defaults, per Config änderbar):** Mail gesamt 25 MB (drüber ⇒
-  `SanitizeError` ⇒ Metadaten-Notiz, T10), Gesamt-Klartext 30 000 Zeichen über Body und
-  Anhangs-Texte hinweg (Kürzung mit `[truncated]`-Marker, `truncated=true`), PDF-Input
-  10 MB, PDF-Output 50 000 Zeichen, PDF-Timeout 20 s je Anhang und 30 s Zeitbudget über
-  **alle** PDF-Anhänge einer Mail, MIME-Tiefe 10 (tiefere Teile ⇒
-  Metadatum „mime-tiefe ueberschritten"; im Sanitizer zusätzlich hart auf 64 Ebenen begrenzt,
-  unabhängig von der Config), MIME-Tiefe im **Ingest** 32 Ebenen (fester Wert, kein
-  Config-Feld: tiefere Teilbäume werden vor jeder Serialisierung geleert, Log
-  `mail_mime_depth_capped` — ADR-020-Nachtrag, O-1), eine Mail, die schon imap-tools nicht
-  parsen kann (ab 984 `message/rfc822`-Ebenen = 31 KB scheitert `email.message_from_bytes`
-  mit `RecursionError`), wird **je UID isoliert**: Abruf je UID, Kopfzeilen-Ersatz über ein
-  gedeckeltes `UID FETCH (BODY.PEEK[HEADER]<0.262144> …)`, Metadaten-Notiz, `failed`,
-  Seen-Flag — sie hält weder den Zyklus noch den Dienst an (ADR-020-Nachtrag, zweite
-  Iteration), höchstens 500 gelaufene MIME-Teile je Mail
-  (weitere ⇒ Metadatum „mime-teile ueberschritten"), Rohwert **jedes** Headers 4096 Zeichen und
-  32 Werte je Headername, Kopfzeilen des ganzen MIME-Baums 256 KiB und 4096 Zeilen (darüber
-  wird der Baum abgeschnitten), höchstens 200 Empfänger in `to_addrs`,
-  HTML-Konvertierung max. 1 MB und 50 000 Elemente
-  **je Mail** über höchstens vier `text/html`-Teile, dazu max. 2000 Ebenen je Teil
-  (drüber ⇒ Teil nicht verarbeitet, `html_rejected`), roher Klartext (Body und
-  `text/plain`-Anhänge) vor der Sanitisierung auf das Sechzehnfache des Klartext-Budgets
-  gedeckelt (480 000 Zeichen, als **Restbudget über die ganze Mail** — Body und alle
-  Anhangstexte zusammen; setzt `truncated`, ein Anhang jenseits des Budgets gilt als nicht
-  verarbeitet, sichtbar bleibt ohnehin nur `max_text_chars`), max. 2000 einzeln ausgewertete Link-Funde je Mail (`links_capped`;
-  weitere Funde werden trotzdem entfernt, aber nur noch als `[Link removed]` ohne Nummer und
-  ohne Fußnoteneintrag), Anhänge max. 20 Stück verarbeitet (weitere ⇒
-  Metadatum), Anhang-Metadatenliste max. 100 Einträge (`blocked_attachments` zählt
-  unabhängig davon korrekt).
-- **Deterministische Kritiker-Fakten (F-CRIT-3):** Der Report enthält zusätzlich
-  `reply_to_mismatch` (Reply-To-Adresse ≠ From-Adresse, oder ein **vorhandener, aber
-  unlesbarer** Reply-To neben bekannter Absenderadresse — S-2; ein fehlender Reply-To ist
-  kein Mismatch), `return_path_mismatch`
-  (abweichende Domains, oder **unbekannte** From-Domain neben bekanntem Return-Path —
-  zwei Unbekannte sind kein Treffer, ADR-020-Nachtrag R-9) und `auth_results` (best-effort-Parse
-  von `Authentication-Results`: `spf`/`dkim`/`dmarc`, erste Nennung gewinnt).
+- **Body:** if at least one inline `text/plain` part exists, **all** inline `text/plain`
+  parts (in MIME order) form the body; otherwise all inline `text/html` parts are converted.
+  Other body types ⇒ "not representable" (attachment metadata). "Inline" means:
+  `Content-Disposition` is not `attachment` **and** no filename is set. If both kinds exist
+  (`multipart/alternative`), the HTML part is still **not** evaluated, but is converted to
+  text internally and compared with the plain text (word sets, excluding link/image
+  markers). A substantial excess (≥ 5 words missing from the plain text **and** > 50 % of
+  the HTML words) sets `sanitization_report.html_divergent` (T15, ADR-067).
+- **Attachments processed for content (these two cases only):** `text/plain` files and
+  `application/pdf` — after a magic-byte check, under limits. `text/html` is allowed **only
+  as an inline body**; an `.html` *file* is an HTML smuggling vector and stays metadata
+  (`detected_kind="html"`, `processed=False`).
+- **Magic-byte verification (T6, ADR-026):** the header MIME type is never believed.
+  Content is only processed if the declared type is on the allowlist **and** the content
+  matches it: PDF ⇒ `%PDF-` exactly at offset 0; text ⇒ no known binary signature (a small
+  in-house table in `sanitize/attachments.py`: MZ/ELF/Mach-O, ZIP/RAR/7z/GZIP/BZIP2/XZ/CAB,
+  OLE2, PNG/JPEG/GIF/BMP/TIFF, RTF, `#!` scripts, SQLite, WASM, PDF) and the text heuristic
+  passes (no NUL, < 5 % control bytes in an 8 KB sample). A contradiction ⇒
+  `detected_kind="mismatch"` ⇒ never processed. A non-allowlisted type is never "promoted",
+  even if its content looks like a PDF.
+- **Attachments, metadata only (examples, not exhaustive):** Office (`.docx/.xlsx/.pptx` —
+  macros!), archives (`.zip/.rar/.7z/.iso` — smuggling), executables/scripts
+  (`.exe/.js/.bat/.sh/.apk`), calendars (`.ics` — event injection), images (phishing
+  screenshots, stego), `message/rfc822` (T13: **never** entered, not even recursively),
+  `.html` attachments (smuggling), anything unknown. Recorded are the sanitised filename
+  (ASCII allowlist, path components removed, max. 80 characters), the declared MIME type and
+  the size.
+- **Encrypted mail (PGP/S-MIME, ADR-082):** `multipart/encrypted`,
+  `application/pgp-encrypted`, `application/pkcs7-mime` and `application/x-pkcs7-mime` are
+  **recognised and named**, not decrypted. Nothing new follows from this in security terms:
+  the ciphertext is not on the allowlist and is therefore metadata anyway — no model sees it.
+  The flag `SanitizationReport.encrypted` exists solely to explain the situation to the user
+  (note line) and to the critic (soft signal, no risk premium). Not fail-closed: with an
+  encrypted mail nothing went wrong, there is simply nothing to read.
+- **Link handling (I3/T3, ADR-028):** replacement in the text by `[Link #n: domain.tld]`
+  (`mailto:` ⇒ `[Mail #n: domain]`, `tel:` ⇒ `[Tel #n]`); the defanged full list is always in
+  `links_found` (`hxxps[:]//evil[.]com/…`, max. 100 entries of 300 characters) and is only
+  appended to the body as a footnote when `links.footnote = true` (default false). Detection
+  covers obfuscation: `hxxp`, `(.)`, `[.]`, `(dot)`, inserted spaces, URL encoding
+  (`%68ttp`), `www.` domains, bare domains (tightly set dots, alphabetic TLD; known file
+  extensions excluded), userinfo tricks (`http://good@evil/` ⇒ the domain is `evil`). A
+  `www.` prefix is stripped in the marker (risk of autolinking in the messenger).
+- **Punycode/homoglyphs (T12):** `xn--` domains are flagged in the marker and listed in
+  `punycode_domains` including their Unicode rendering; labels with mixed scripts end up in
+  `mixed_script_domains`. Both also apply to the sender domain.
+- **Unicode (F-SEC-10):** NFKC normalisation; afterwards **every** character of Unicode
+  category "C*" except tab and newline is removed and counted (covers U+200B..200F,
+  U+202A..202E, U+2066..2069, U+FEFF, U+00AD, U+2060..2064 and similar — deliberately
+  category-based rather than a codepoint blocklist). Applies to the body, attachment texts,
+  the subject and the sender display name.
+- **HTML → text (T2, ADR-027):** `script`/`style`/`head`/`template`/`noscript`/`iframe`/
+  `object`/`embed`/`svg`/`math` and comments are removed; invisible text (`display:none`,
+  `visibility:hidden`, `opacity:0`, `font-size:0`, white type without its own non-white
+  background, the `hidden` attribute) is removed and counted in the report
+  (`hidden_text_removed`); tracking pixels (≤ 2×2 px) are removed without replacement; alt
+  texts appear as `[Image: …]`; `href` targets are made visible as text and then defanged. In
+  addition, HTML-tag-like sequences are neutralised in *plain text* parts as well (fail-safe:
+  over-removal is preferable to a tag in the output). The conversion has a hard cap
+  (T10/ADR-084): more than `[limits] max_html_bytes` bytes, more than
+  `[limits] max_html_elements` elements or more than 2000 nesting levels ⇒ the HTML part
+  counts as **unprocessed** (`html_rejected` in the report, note line in the message); a
+  `text/plain` part is delivered normally and the pipeline continues fail-safe. The byte cap
+  applies **before** parsing (the element and depth caps only know the tree afterwards, and
+  the parse bears the cost); byte and element caps are a remaining budget **per mail**, and
+  at most four `text/html` parts are converted at all (ADR-084 addendum). The same cap
+  applies to the divergence check (ADR-067).
+- **Sender display name (ADR-020 addenda):** since O-3, the display name, address and
+  `from_domain` are read by the standard library's RFC 5322 parser
+  (`email.headerregistry`, the parser of `email.policy.default`) from the **raw** `From`/
+  `Reply-To` value — the same parser mail programs use. The tool therefore never shows a
+  sender domain that the mail program does not show, and never reports "unknown" without a
+  warning; the deterministic indicators (`reply_to_mismatch`, `return_path_mismatch`) remain
+  effective (HC2-2). Only the first entry counts, a domain has to be hostname-shaped, a
+  header that is present but unreadable stays visible as `(unreadable)`, and the decoded name
+  is stripped of `<`, `>`, `,`, `;`, `:`, `"`, `\`. Every in-house re-implementation of the
+  parser (a mask for encoded words, a bracket fallback, a comment scanner) was narrower or
+  wider than it at some point — it has been removed. Address and domain come quoted or
+  directly from the parser (never from a second parse of the address string), the legacy
+  parsers `parseaddr`/`getaddresses` only run on raw values with guards, and an address
+  header at the 4096-character cap counts as unreadable (below that the parser costs around
+  80 ms per header in the worst case, deterministically bounded). The **raw** value of
+  **every** header read is truncated to 4096 characters in a single place
+  (`_raw_header_values`) — not only `From`/`Reply-To`/`Subject` but also `To`, `Cc`,
+  `Message-ID`, `Date`, `Return-Path`, `Authentication-Results` (S-1; a 20 MB `To` cost
+  18.5 s before), and the parsed tree is capped as a whole before re-serialisation (256 KiB
+  and 4096 headers per mail; the standard library's folder otherwise cost up to 14 s). If
+  `getaddresses` discards the address part entirely (a single token after the angle bracket
+  suffices), a second, conservative step falls back to the **first** angle bracket — the
+  display name must not be able to *delete* the domain either (R-9). **Fallbacks never read
+  comment or quoted-string content** (S-2): a linear scanner per RFC 5322 removes `(…)` and
+  `"…"` (with escapes and nesting) before searching; if the header is unbalanced (an open
+  comment or quoted string, including one caused by the 4096 cut), the address counts as
+  unknown and the return-path warning fires. The oracle of every test is
+  `email.policy.default` on the same raw header; the tool deviates from it only towards "real
+  attacker address" or "unknown + warning", never towards a foreign domain.
+- **PDF extraction (I7/T5, ADR-029):** `pdfminer.six` runs exclusively in a subprocess
+  (`python -m maildigest.sanitize.extract_pdf`, PDF via stdin), with a timeout (in the parent
+  process), `RLIMIT_AS` 512 MB (a code constant) and output truncation in the child. stderr is
+  discarded (I5). Any error ⇒ attachment "not processed", pipeline continues. Above the
+  individual timeout there is a **time budget per mail** (`[limits]
+  pdf_time_budget_seconds`, default 30 s): each extraction gets
+  `min(pdf_timeout_seconds, remaining budget)`; once the budget is used up the attachment
+  counts as unprocessed just as on a timeout and no child process is started at all
+  (ADR-029 addendum, R-11). Without that budget, 20 PDF attachments added their timeouts up
+  to roughly 400 s of wall time per mail.
+- **Limits (defaults, changeable via config):** whole mail 25 MB (above ⇒ `SanitizeError` ⇒
+  metadata note, T10), total plain text 30,000 characters across body and attachment texts
+  (truncation with a `[truncated]` marker, `truncated=true`), PDF input 10 MB, PDF output
+  50,000 characters, PDF timeout 20 s per attachment plus a 30 s time budget across **all**
+  PDF attachments of one mail, MIME depth 10 (deeper parts ⇒ metadata "mime depth
+  exceeded"; additionally capped hard at 64 levels in the sanitizer, independent of the
+  config), MIME depth in **ingest** 32 levels (a fixed value, not a config field: deeper
+  subtrees are emptied before any serialisation, log `mail_mime_depth_capped` — ADR-020
+  addendum, O-1); a mail that imap-tools itself cannot parse (from 984 `message/rfc822`
+  levels = 31 KB, `email.message_from_bytes` fails with `RecursionError`) is **isolated per
+  UID**: fetch per UID, header substitute via a capped
+  `UID FETCH (BODY.PEEK[HEADER]<0.262144> …)`, metadata note, `failed`, seen flag — it stalls
+  neither the cycle nor the service (ADR-020 addendum, second iteration); at most 500 MIME
+  parts walked per mail (further ones ⇒ metadata "mime parts exceeded"), raw value of
+  **every** header 4096 characters and 32 values per header name, headers of the whole MIME
+  tree 256 KiB and 4096 lines (beyond that the tree is truncated), at most 200 recipients in
+  `to_addrs`, HTML conversion max. 1 MB and 50,000 elements **per mail** across at most four
+  `text/html` parts, plus max. 2000 levels per part (beyond ⇒ part not processed,
+  `html_rejected`), raw plain text (body and `text/plain` attachments) capped before
+  sanitisation at sixteen times the plain-text budget (480,000 characters, as a **remaining
+  budget across the whole mail** — body and all attachment texts together; sets `truncated`,
+  an attachment beyond the budget counts as unprocessed, and only `max_text_chars` remains
+  visible anyway), max. 2000 individually evaluated link matches per mail (`links_capped`;
+  further matches are still removed, but only as `[Link removed]` without a number and
+  without a footnote entry), at most 20 attachments processed (further ones ⇒ metadata),
+  attachment metadata list max. 100 entries (`blocked_attachments` counts correctly
+  regardless).
+- **Deterministic critic facts (F-CRIT-3):** the report additionally contains
+  `reply_to_mismatch` (Reply-To address ≠ From address, or a Reply-To that is **present but
+  unreadable** alongside a known sender address — S-2; a missing Reply-To is not a mismatch),
+  `return_path_mismatch` (diverging domains, or an **unknown** From domain alongside a known
+  Return-Path — two unknowns are not a hit, ADR-020 addendum R-9) and `auth_results` (a
+  best-effort parse of `Authentication-Results`: `spf`/`dkim`/`dmarc`, first mention wins).
 
-## 5. Prompt-Härtung (Referenz für WP5/WP6)
+## 5. Prompt hardening (reference for WP5/WP6)
 
-Reihenfolge der Verteidigung (Defense in Depth — jede Schicht darf versagen):
+Order of defences (defence in depth — every layer is allowed to fail):
 
-1. **Struktur:** System-Prompt (Code, fest) → Custom-Instructions (Config, gelabelt) →
-   Mail als delimitierter Datenblock mit explizitem Untrusted-Hinweis. Delimiter sind
-   zufällig pro Aufruf (verhindert Delimiter-Spoofing im Mail-Text).
-2. **Anweisung im System-Prompt:** Inhalt ist Daten; enthaltene Instruktionen beschreiben,
-   nicht befolgen; bei Instruktions-Charakter `injection_suspected = true`.
-3. **Schema-Zwang:** Nur validiertes JSON verlässt die LLM-Schicht (ein Reparaturversuch,
-   dann fail-closed).
-4. **Deterministische Nachkontrolle:** Regex-Scan der Ausgabefelder (URLs, HTML, Markdown,
-   Steuerzeichen) ⇒ säubern + flaggen.
-5. **Unabhängiger Kritiker** mit eigenem Prompt und eigenen (Code-)Fakten.
-6. **Output-Sanitizer** als letzte Code-Schicht vor dem Messenger.
+1. **Structure:** system prompt (code, fixed) → custom instructions (config, labelled) →
+   mail as a delimited data block with an explicit untrusted marker. Delimiters are random
+   per call (which prevents delimiter spoofing from the mail text).
+2. **Instruction in the system prompt:** content is data; contained instructions are to be
+   described, not followed; on instruction-like content set `injection_suspected = true`.
+3. **Schema enforcement:** only validated JSON leaves the LLM layer (one repair attempt,
+   then fail-closed).
+4. **Deterministic post-check:** regex scan of the output fields (URLs, HTML, Markdown,
+   control characters) ⇒ clean + flag.
+5. **Independent critic** with its own prompt and its own (code-computed) facts.
+6. **Output sanitizer** as the last code layer before the messenger.
 
-**Custom-Instructions des Nutzers** sind semi-trusted: Sie dürfen Stil/Fokus/Wichtigkeit
-steuern, aber die Sicherheitsregeln im System-Prompt stehen textlich **nach** ihnen und
-sind als unüberschreibbar markiert. Der Output-Sanitizer gilt unabhängig davon immer.
+**The user's custom instructions** are semi-trusted: they may steer style, focus and
+importance, but the security rules in the system prompt come textually **after** them and
+are marked as non-overridable. The output sanitizer applies always, regardless.
 
-**Stand der Umsetzung (WP5, Summarizer — ADR-031 bis ADR-034):** Schicht 1–4 stehen. Die
-Marker tragen eine pro Aufruf aus `secrets` gezogene 96-Bit-Kennung (`llm/prompts.py`,
-Zufallsquelle nur für Tests injizierbar); der System-Prompt nennt sie, und eine im Mail-Text
-auftauchende Kennung wird vor dem Einbau neutralisiert. Die Custom-Instructions stehen in
-einem gelabelten, auf 2000 Zeichen gedeckelten Block **vor** den als unüberschreibbar
-markierten Sicherheitsregeln. Schicht 4 (`agents/summarizer.enforce_output_policy`) säubert
-Markdown-Links, HTML-Tags, numerische Entities, URL-Muster inkl. Obfuskationen und
-Unicode-`C*`-Zeichen aus jedem Textfeld und setzt bei jedem Fund `injection_suspected =
-true`. Sie normalisiert bewusst **nicht** nach NFKC — Fullwidth-Formen, nackte IPs und
-nackte Domains passieren sie und werden erst von Schicht 6 entschärft (ADR-033). Im
-Kritiker-Pfad ist diese Lücke geschlossen (ADR-044).
+**Implementation status (WP5, summarizer — ADR-031 to ADR-034):** layers 1–4 are in place.
+The markers carry a 96-bit identifier drawn per call from `secrets` (`llm/prompts.py`, the
+randomness source injectable for tests only); the system prompt names it, and an identifier
+appearing in the mail text is neutralised before assembly. The custom instructions sit in a
+labelled block capped at 2000 characters **before** the security rules marked as
+non-overridable. Layer 4 (`agents/summarizer.enforce_output_policy`) cleans Markdown links,
+HTML tags, numeric entities, URL patterns including obfuscations and Unicode `C*` characters
+out of every text field and sets `injection_suspected = true` on any hit. It deliberately
+does **not** normalise to NFKC — fullwidth forms, bare IPs and bare domains pass it and are
+only defanged by layer 6 (ADR-033). In the critic path this gap is closed (ADR-044).
 
-**Stand der Umsetzung (WP6, Schicht 5 — ADR-041 bis ADR-044):** Der Kritiker
-(`agents/critic.py`) hat einen eigenen System-Prompt und eigene, im Code berechnete Fakten.
-Er bekommt **keine** Custom-Instructions (ADR-042) — eine Config-Vorgabe kann die
-Phishing-Prüfung damit weder entschärfen noch abschalten. Mail-Inhalt und die zu prüfende
-`Summary` stehen in zwei getrennten Untrusted-Blöcken mit derselben, pro Aufruf zufälligen
-Kennung (ADR-041); beide Blockinhalte laufen durch die Marker-Neutralisierung, also auch
-die Modellausgabe. Die deterministischen Signale (F-CRIT-3, `collect_signals`) stammen
-ausschließlich aus dem `sanitization_report` und sind vom Absender nicht beeinflussbar
-(T9); harte Signale heben die Risikostufe im Code an, senken sie aber nie und setzen nie
-`high` (ADR-043). Schicht 4 gilt auch für das Verdict: `risk_reasons` und `notes` werden
-NFKC-normalisiert und mit der Summarizer-Politik gescrubbt, ein Fund wird als eigener
-Grund sichtbar gemacht (ADR-044) — das Gegenstück zum `injection_suspected`-Flag, das
-`CriticVerdict` nicht hat.
+**Implementation status (WP6, layer 5 — ADR-041 to ADR-044):** the critic
+(`agents/critic.py`) has its own system prompt and its own facts computed in code. It gets
+**no** custom instructions (ADR-042) — so a config setting can neither weaken nor switch off
+the phishing check. Mail content and the `Summary` to be checked sit in two separate
+untrusted blocks with the same per-call random identifier (ADR-041); both block contents run
+through marker neutralisation, so the model output does too. The deterministic signals
+(F-CRIT-3, `collect_signals`) come exclusively from the `sanitization_report` and cannot be
+influenced by the sender (T9); hard signals raise the risk level in code, but never lower it
+and never set `high` (ADR-043). Layer 4 applies to the verdict as well: `risk_reasons` and
+`notes` are NFKC-normalised and scrubbed with the summarizer policy, and a hit is made
+visible as a reason of its own (ADR-044) — the counterpart to the `injection_suspected` flag,
+which `CriticVerdict` does not have.
 
-**Stand der Umsetzung (WP7, Schicht 6 — ADR-035 bis ADR-040):** Verbindliche Politik des
-Output-Sanitizers: Jedes Feld durchläuft Entity-Auflösung (bis Fixpunkt), NFKC +
-`C*`-Entfernung, Feldkürzung, Tag-Strip, Markup-Löschung und Link-Scrub; bereits defangte
-WP3-Formen werden unverändert durchgereicht. Über der **fertigen** Nachricht läuft ein
-zweiter, von der Segmentierung unabhängiger Nachbrenner (`final_guard`): jedes lebende
-Schema mit `://` sowie `javascript:`/`data:`-artige Schemata brechen, `www.` brechen,
-Winkelklammern entfernen, `](` auftrennen, Domains und IPv4 defangen. Domains und Dateinamen
-erscheinen ausschließlich mit gebrochenen Punkten, weil Messenger nackte Domains automatisch
-verlinken (T7); die IDN-Punktvarianten U+3002/U+FF61 werden vorher auf `.` abgebildet.
-Zustellung erfolgt ohne `parse_mode` und ohne Embeds. `DigestMessage.parts` entsteht
-ausschließlich über `DigestComposer._finalize()` — es gibt keinen zweiten Weg zum Messenger.
+**Implementation status (WP7, layer 6 — ADR-035 to ADR-040):** binding policy of the output
+sanitizer: every field passes through entity resolution (to a fixed point), NFKC + `C*`
+removal, field truncation, tag stripping, markup deletion and link scrubbing; forms already
+defanged in WP3 are passed through unchanged. Over the **finished** message a second pass
+independent of the segmentation runs (`final_guard`): break every live scheme containing
+`://` as well as `javascript:`/`data:`-like schemes, break `www.`, remove angle brackets,
+split `](`, defang domains and IPv4. Domains and filenames appear exclusively with broken
+dots, because messengers autolink bare domains (T7); the IDN dot variants U+3002/U+FF61 are
+mapped to `.` beforehand. Delivery happens without `parse_mode` and without embeds.
+`DigestMessage.parts` is only ever produced by `DigestComposer._finalize()` — there is no
+second route to the messenger.
 
-**Nachgeschärft in WP10 (Hot-Testing, ADR-059/ADR-060; Befunde HT-1…HT-6 in
-docs/TESTING.md §5):** Vier Details dieser Politik hielten nicht, was der Absatz oben
-zusagt. Verbindlich ist jetzt zusätzlich:
+**Tightened in WP10 (hot testing, ADR-059/ADR-060; findings HT-1…HT-6 in
+docs/TESTING.md §5):** four details of this policy did not deliver what the paragraph above
+promises. Binding in addition now:
 
-- Der Nachbrenner läuft **nach** der Segmentierung über **jeden einzelnen Nachrichtenteil**,
-  nicht nur über die ungeteilte Nachricht (ADR-059). Zugestellt wird der Teil; ein harter
-  Schnitt in `split_parts` konnte vorher aus einem unauffälligen Token ein Bruchstück
-  machen, das erst für sich genommen wie eine Domain aussah.
-- Ein Token wird defangt, sobald **irgendeine** seiner Marken ab der zweiten TLD-förmig
-  beginnt (zwei Zeichen, davon zwei Buchstaben) — nicht nur, wenn die letzte es ist. Die
-  Token-Grenzen sind ASCII und lassen einen Treffer hinter `-`/`_` beginnen; `evil.comÄ`
-  und `-evil.example` entgingen der Regel sonst vollständig.
-- Gebrochen wird die Sequenz `://` selbst, unabhängig von Länge und Wortgrenze des
-  Schema-Namens davor.
-- „Bereits sichere Formen" werden **ohne** Markup-Zeichen definiert (`` ` `` `*` `|` `~` `\`
-  gehören nie zu einer WP3-Form) und umfassen umgekehrt auch die gebrochenen
-  Aktions-Schemata (`javascript[:]`) sowie das nackte `[.]`/`[:]`. Ersteres verhinderte
-  Markup-Schmuggel, Letzteres das Wiederaufbrechen eines Defang-Tokens im zweiten
-  Scrub-Durchlauf — den es real gibt (Hinweiszeilen, Sammel-Digest-Kopfzeilen nach ADR-049).
+- The final pass runs **after** segmentation over **each individual message part**, not only
+  over the undivided message (ADR-059). What is delivered is the part; before this, a hard
+  cut in `split_parts` could turn an innocuous token into a fragment that only looked like a
+  domain on its own.
+- A token is defanged as soon as **any** of its labels from the second one onwards begins in
+  TLD-like fashion (two characters, two of them letters) — not only when the last one does.
+  Token boundaries are ASCII and allow a hit to begin after `-`/`_`; `evil.comÄ` and
+  `-evil.example` would otherwise escape the rule entirely.
+- The sequence `://` itself is broken, regardless of the length and word boundary of the
+  scheme name in front of it.
+- "Already safe forms" are defined **without** markup characters (`` ` `` `*` `|` `~` `\` are
+  never part of a WP3 form) and conversely also include the broken action schemes
+  (`javascript[:]`) as well as bare `[.]`/`[:]`. The former prevented markup smuggling, the
+  latter the re-breaking of a defang token in a second scrub pass — which really does occur
+  (note lines, collected-digest headers per ADR-049).
 
-**Nachgeschärft in WP11 (Cold-Testing, Befunde CT-6/CT-7/CT-7a/CT-8/CT-11 in
+**Tightened in WP11 (cold testing, findings CT-6/CT-7/CT-7a/CT-8/CT-11 in
 docs/TESTING.md §6):**
 
-- Die Markup-Neutralisierung ist nicht mehr nur zeichenweise: Zeilenanfangs-Markdown
-  (Überschrift, Liste, Zitat, Discord-Subtext), Unterstriche am Wortrand und Massen-Pings
-  (`@everyone`/`@here`) werden ebenfalls entschärft, und die Zeilen-Präfixe des
-  Nachrichtenformats (`⚠️`, `📧`, `📎`, `🔍 Notes:`, `From:` — und weiterhin die deutschen
-  Formen `Hinweise:`, `Von:`, `Betreff:`, `Stufe:`, `Grund:`, `PHISHING-VERDACHT:`, obwohl
-  die Ausgabe englisch ist, ADR-083/CT-8) dürfen in untrusted Text nicht
-  am Zeilenanfang stehen — sonst ist der einzige Warnkanal des Produkts vom Angreifer
-  beschreibbar (ADR-062). Das gilt auch auf dem Fail-closed-Pfad: `compose_failure` scrubbt
-  den Betreff über dieselbe Funktion (CT-7a).
-- Der Injection-Verdacht (T1/F-SEC-5) entsteht zusätzlich modellunabhängig aus der
-  Mail-Seite: nachgebaute Datenblock-Marker, Steuerzeichen-Ballung und wörtliche Anweisungen
-  an ein Sprachmodell setzen `injection_suspected` ohne Zutun des Modells (ADR-061).
-  Entfernter versteckter Text bekommt einen eigenen, wörtlich zutreffenden Hinweis.
-- Mehrere unabhängige Fälschungssignale mit mindestens einem harten heben die Risikostufe
-  per Code auf `high` und lösen damit das Banner aus (ADR-063, präzisiert ADR-043).
+- Markup neutralisation is no longer merely character-wise: line-leading Markdown (heading,
+  list, quote, Discord subtext), underscores at word edges and mass pings
+  (`@everyone`/`@here`) are defused as well, and the line prefixes of the message format
+  (`⚠️`, `📧`, `📎`, `🔍 Notes:`, `From:` — and still the German forms `Hinweise:`, `Von:`,
+  `Betreff:`, `Stufe:`, `Grund:`, `PHISHING-VERDACHT:`, even though the output is English,
+  ADR-083/CT-8) must not appear at the start of a line in untrusted text — otherwise the
+  product's only warning channel is writable by the attacker (ADR-062). This holds on the
+  fail-closed path as well: `compose_failure` scrubs the subject through the same function
+  (CT-7a).
+- The injection suspicion (T1/F-SEC-5) additionally arises model-independently from the mail
+  side: forged data-block markers, clusters of control characters and literal instructions to
+  a language model set `injection_suspected` without the model's involvement (ADR-061).
+  Removed hidden text gets its own, literally accurate note.
+- Several independent forgery signals including at least one hard one raise the risk level to
+  `high` in code and thereby trigger the banner (ADR-063, refining ADR-043).
 
-**Nachgeschärft in der Fixrunde 2026-09-11 (Befunde HC-6…HC-9, HC-22, HC-24 in
-docs/TESTRUNDE-HOT-COLD.md):** Fünf Nähte derselben Art — die Regeln stimmten, ihre Ränder
-nicht.
+**Tightened in the fix round of 2026-09-11 (findings HC-6…HC-9, HC-22, HC-24 in
+docs/TESTRUNDE-HOT-COLD.md):** five seams of the same kind — the rules were right, their
+edges were not.
 
-- **Der Split erzeugt keinen ungeprüften Zeilenanfang mehr (HC-6).** `neutralize_markup`
-  schützt Zeilenanfänge, `split_parts` erzeugte neue: Ein harter Schnitt *innerhalb* einer
-  Zeile konnte ein Struktur-Emoji oder eine Kopfzeilen-Beschriftung an den Anfang eines
-  Teils schieben. Jedes Fortsetzungsstück eines solchen Schnitts trägt jetzt das neutrale
-  Präfix `… `; es zählt zum Teil-Limit. `final_guard` bekommt weiterhin **keine**
-  Zeilenanfangs-Regeln (sie würden die Präfixe des Composers auffressen, ADR-062).
-- **Markdown überlebt auch die Link-Fußnote nicht mehr (HC-7).** Die defangte Form
-  (`sanitize/links._defang`) trägt kein `` ` ``, `*`, `|`, `~`, `\` mehr; `[`/`]` bleiben,
-  weil sie die Defang-Token tragen. Die Fußnote ist per SPEC-CLI §6 Teil derselben
-  Nachricht, `final_guard` bleibt unverändert.
-- **Kein Steuerzeichen mehr aus der Link-Erkennung (HC-8).** Der `LinkCollector` arbeitet
-  intern mit `\x00`-Platzhaltern; eine seiner Regexen schnitt in ein gesetztes Token und
-  ließ ein rohes U+0000 in der Zustellung zurück. Drei Schichten: Die Erkennungs-Pässe
-  überspringen gesetzte Platzhalter atomar, die Zeichenklassen schließen `\x00` aus, und
-  `scrub_field` entfernt `C*`-Zeichen ein **zweites Mal nach** der Link-Erkennung. Die
-  Zusage aus SECURITY §4 hängt damit nicht mehr an der Korrektheit der Link-Regexe.
-- **Domain- und IPv4-Erkennung kennen keine Längen- und Wortgrenzen-Schranken mehr
-  (HC-9/HC-24).** Die Längendeckel in `_RE_DOMAINISH` und `links._LABEL` sind entfallen;
-  die Lookarounds von `_RE_IPV4` sind ASCII-Grenzen. Die Entscheidung „ist das eine
-  Domain/Adresse" fällt ausschließlich in der Formprüfung, Über-Defang ist der fail-safe
-  Ausgang (ADR-036). **Nachgezogen (S-4, 2026-09-12):** `_RE_IPV4` verlangte genau vier
-  Oktette und brach in einer längeren Punktkette (`1.1.1.1.1.1.1.`) nur das letzte Fenster —
-  die ersten vier Oktette blieben lebend. Der Treffer erfasst jetzt die ganze Kette (`{3,}`),
-  jeder Punkt darin wird gebrochen; gefunden vom Property-Test CT-7, festgehalten als
-  expliziter Regressionstest (ADR-036, Nachtrag S-4).
-- **Gekürzte Dateinamen zeigen die Kürzung und die Endung (HC-22).** Kürzung in der Mitte
-  mit `…`, Endung erhalten, Gesamtlänge ≤ 80 — bei einem geblockten Anhang ist die Endung
-  die sicherheitsrelevante Information (ADR-040).
+- **The split no longer produces an unchecked line start (HC-6).** `neutralize_markup`
+  protects line starts, `split_parts` created new ones: a hard cut *inside* a line could push
+  a structural emoji or a header label to the start of a part. Every continuation fragment of
+  such a cut now carries the neutral prefix `… `; it counts towards the part limit.
+  `final_guard` still gets **no** line-start rules (they would eat the composer's own
+  prefixes, ADR-062).
+- **Markdown no longer survives the link footnote either (HC-7).** The defanged form
+  (`sanitize/links._defang`) no longer carries `` ` ``, `*`, `|`, `~`, `\`; `[`/`]` stay
+  because they carry the defang tokens. Per SPEC-CLI §6 the footnote is part of the same
+  message; `final_guard` is unchanged.
+- **No more control characters out of link detection (HC-8).** The `LinkCollector` works
+  internally with `\x00` placeholders; one of its regexes cut into a placed token and left a
+  raw U+0000 in the delivery. Three layers: the detection passes skip placed placeholders
+  atomically, the character classes exclude `\x00`, and `scrub_field` removes `C*` characters
+  a **second time after** link detection. The promise from SECURITY §4 therefore no longer
+  depends on the correctness of the link regexes.
+- **Domain and IPv4 detection no longer have length or word-boundary caps (HC-9/HC-24).** The
+  length caps in `_RE_DOMAINISH` and `links._LABEL` are gone; the lookarounds of `_RE_IPV4`
+  are ASCII boundaries. The decision "is this a domain/address" is made solely in the shape
+  check, and over-defanging is the fail-safe exit (ADR-036). **Followed up (S-4,
+  2026-09-12):** `_RE_IPV4` required exactly four octets and, in a longer dot chain
+  (`1.1.1.1.1.1.1.`), broke only the last window — the first four octets stayed live. The
+  match now covers the whole chain (`{3,}`) and every dot in it is broken; found by the
+  property test CT-7, recorded as an explicit regression test (ADR-036, addendum S-4).
+- **Truncated filenames show both the truncation and the extension (HC-22).** Truncation in
+  the middle with `…`, extension preserved, total length ≤ 80 — for a blocked attachment the
+  extension is the security-relevant information (ADR-040).
 
-**Nachgeschärft in der Fixrunde 2026-09-11 (Befunde HC-5, HC-11, HC-21, HC-29 in
-docs/TESTRUNDE-HOT-COLD.md):** Die modellunabhängige Erkennung aus ADR-061 hatte zwei
-Lücken, und Schicht 3 gab einen Namen preis, den sie nicht hätte kennen dürfen.
+**Tightened in the fix round of 2026-09-11 (findings HC-5, HC-11, HC-21, HC-29 in
+docs/TESTRUNDE-HOT-COLD.md):** the model-independent detection from ADR-061 had two gaps, and
+layer 3 gave away a name it should never have known.
 
-- **Der Marker-Nachbau wird im Sanitizer erhoben, nicht erst in der Prompt-Schicht
-  (HC-5).** Der Tag-Stripper von WP3 löscht ein `<<<MAILDIGEST-…-UNTRUSTED-…>>>`
-  restlos — ausgerechnet der perfekte Nachbau verschwand also spurlos, und nur die
-  verstümmelten Formen lösten Alarm aus. `sanitize/sanitizer.neutralize_forged_markers`
-  läuft jetzt **vor** der Tag-Löschung, ersetzt den Fund durch das Token
-  `[forged data-block marker removed]` und zählt ihn in
-  `SanitizationReport.forged_markers`. Der Detektor liest zuerst dieses Feld; der
-  Wortlaut-Pfad bleibt als zweite Schicht.
-- **Die Phrasenliste kennt die naheliegenden Varianten (HC-21).** Possessiv (`your`,
-  `deine`), `forget`/`vergiss` und der Singular fehlten — genau die Formen, die ein
-  Angreifer zuerst schreibt. Die Bindung an Verb, Zeitbezug und Objekt bleibt: Ohne sie
-  fiele „ignore my previous mail" unter denselben Alarm wie ein Übernahmeversuch. Im
-  Werkszustand (`[llm] provider = "none"`) sind diese Indizien die **einzige** Quelle des
-  Verdachts, weil es keine Modellantwort gibt, die ihn setzen könnte (ADR-076).
-- **Schicht 3 nennt keinen erfundenen Feldnamen mehr (HC-11).** Bei `extra_forbidden`
-  stammt der Feldpfad aus der Modellantwort und kann Mail-Inhalt tragen; er stand über
-  `failure_detail` in der INFO-Logzeile. Er wird jetzt durch `<extra field>` ersetzt — in
-  Protokoll und Reparatur-Prompt gleichermaßen (ADR-024).
-- **Schicht 4 skaliert linear (HC-29).** Die Wortgrenzen-Suche in `_redact_tokens` war
-  quadratisch: Ein whitespace-freies Modellfeld von 32 000 Zeichen brauchte 9–12 s, und
-  `[llm] max_tokens` hat keine Obergrenze (T10). Die Suche läuft jetzt amortisiert linear
-  (dieselben Spannen, gemessen über 4 000 Zufallseingaben); 160 000 Zeichen bleiben unter
-  0,03 s.
+- **The forged marker is recorded in the sanitizer, not only in the prompt layer (HC-5).**
+  The WP3 tag stripper deletes a `<<<MAILDIGEST-…-UNTRUSTED-…>>>` completely — so of all
+  things the perfect forgery vanished without a trace, and only the mangled forms raised an
+  alarm. `sanitize/sanitizer.neutralize_forged_markers` now runs **before** tag deletion,
+  replaces the hit with the token `[forged data-block marker removed]` and counts it in
+  `SanitizationReport.forged_markers`. The detector reads that field first; the wording path
+  remains as a second layer.
+- **The phrase list knows the obvious variants (HC-21).** Possessives (`your`, `deine`),
+  `forget`/`vergiss` and the singular were missing — exactly the forms an attacker writes
+  first. The binding to verb, time reference and object remains: without it, "ignore my
+  previous mail" would fall under the same alarm as a takeover attempt. In the factory state
+  (`[llm] provider = "none"`) this evidence is the **only** source of the suspicion, because
+  there is no model answer that could set it (ADR-076).
+- **Layer 3 no longer names an invented field name (HC-11).** With `extra_forbidden` the
+  field path comes from the model's answer and can carry mail content; it appeared in the
+  INFO log line via `failure_detail`. It is now replaced by `<extra field>` — in the log and
+  in the repair prompt alike (ADR-024).
+- **Layer 4 scales linearly (HC-29).** The word-boundary search in `_redact_tokens` was
+  quadratic: a whitespace-free model field of 32,000 characters took 9–12 s, and
+  `[llm] max_tokens` has no upper bound (T10). The search now runs in amortised linear time
+  (same spans, measured across 4000 random inputs); 160,000 characters stay below 0.03 s.
 
-Die Zusage aus ADR-035 („die Invariante I3 hängt nicht an der Korrektheit der
-Segmentierungs-Regex") gilt damit auch für das, was der Nutzer tatsächlich sieht. Geprüft
-wird sie nicht mehr nur an Beispiel-Payloads, sondern als Allaussage über zufällige
-Eingaben (`tests/unit/test_hot_properties.py`, ADR-058) — deren Orakel seit HC-24
-ausdrücklich **strikt großzügiger** ist als die Implementierung und seit HC-9 auch IPv4
-prüft.
+The promise from ADR-035 ("invariant I3 does not depend on the correctness of the
+segmentation regex") therefore holds for what the user actually sees as well. It is no longer
+checked only against example payloads but as a universal statement over random inputs
+(`tests/unit/test_hot_properties.py`, ADR-058) — whose oracle has been explicitly **strictly
+more generous** than the implementation since HC-24 and also checks IPv4 since HC-9.
 
-## 6. Betriebssicherheit
+## 6. Operational security
 
-- Config `0600`; Secrets bevorzugt via Env (`MAILDIGEST_IMAP_PASSWORD`,
+- Config `0600`; secrets preferably via env (`MAILDIGEST_IMAP_PASSWORD`,
   `MAILDIGEST_LLM_API_KEY`, `MAILDIGEST_TELEGRAM_TOKEN`).
-- **Umsetzung in der CLI (WP9, ADR-052 bis ADR-057):** `maildigest init` und jedes
-  `connect-*` schreiben die Datei über `os.open(..., 0o600)` und setzen die Rechte bei
-  **jedem** Schreiben neu — auch auf einer bereits vorhandenen, zu offenen Datei. Für
-  IMAP-Passwort, API-Key und Bot-Token gibt es bewusst **keine** Kommandozeilen-Optionen
-  (Prozessliste, Shell-History): Sie kommen aus einer Abfrage ohne Bildschirmecho
-  (`getpass`, sobald ein Terminal vorhanden ist) oder aus der jeweiligen Umgebungsvariablen;
-  liegt eine Variable vor, wird der Wert gar nicht erst in die Datei geschrieben (ADR-056).
-  Die einzige Secret-Option ist `--webhook-url` (Discord hat keine Env-Variable im Schema).
-  Fremddaten, die bei der Einrichtung anfallen — IMAP-Ordnernamen, Telegram-Chats aus
-  `getUpdates`, die Antwort des Testaufrufs, der **Fehlertext des Modell-Anbieters** —
-  erreichen das Terminal nur gefiltert (Zeichen-Allowlist), nur als numerische ID plus
-  Chat-Typ aus fester Werteliste bzw. gar nicht (ADR-055); ein Terminal interpretiert
-  sonst Steuersequenzen aus fremder Hand.
-- **Terminal-Filter als letzte Schicht (HC-4, ADR-055 Nachtrag).** Die Allowlist sitzt
-  nicht nur an den bekannten Einzelstellen (`cli._safe_name`, `llm/_http._foreign`),
-  sondern zusätzlich an der **Ausgabestelle** in `cli.main`: Jede Fehlerzeile auf stderr
-  läuft durch `foreign_text.sanitize_foreign_text`. Damit hängt der Schutz nicht daran,
-  dass jeder künftige Pfad, der einen Fremdtext mitnimmt, daran gedacht hat. Zusätzlich
-  maskiert `foreign_text.mask_secrets` einen von der Gegenstelle zitierten eigenen
-  API-Key (voller Wert oder Präfix ab acht Zeichen) durch `***` — die Zusage aus
-  SPEC-CLI §2 („Fehlermeldungen enthalten niemals … API-Keys") hängt damit nicht am
-  Wohlverhalten des Anbieters.
-- **Verzicht auf die Serverantwort bei `connect-mail` (I5, HC-32).** Die Meldung eines
-  fehlgeschlagenen IMAP-Verbindungsversuchs nennt Host, Port, Ordner und die
-  Fehlerklasse, **nie** den Antworttext des Servers: Er zitiert regelmäßig den gesendeten
-  Benutzernamen und stammt aus fremder Hand. Der Diagnosewert wird stattdessen über die
-  Fehlerklasse erzeugt — `ImapAuthError` (Zugangsdaten abgelehnt) zieht den
-  anbieterspezifischen App-Passwort-Hinweis nach sich, jeder andere
-  `ImapConnectionError` den Hinweis auf Host, Port und Netz. SPEC-CLI §4 `connect-mail`
-  beschreibt dieses konservative Verhalten.
-- **Atomares Schreiben der Konfiguration (ADR-081, HC-20).** `ConfigFile.save` schreibt in
-  eine temporäre Datei im Zielverzeichnis (`O_WRONLY|O_CREAT|O_EXCL`, 0600), synchronisiert
-  sie (`flush` + `os.fsync`) und benennt erst dann per `os.replace` um; ein Fehlschlag
-  räumt die temporäre Datei auf. Ein Abbruch mitten im Schreiben (volle Platte, Quota,
-  `RLIMIT_FSIZE`, EIO, Stromausfall) lässt damit die bisherige Konfiguration unverändert
-  stehen — vorher blieb eine abgeschnittene Datei zurück, in der Zugangsdaten fehlten.
-- IMAP nur über TLS (IMAPS 993); Zertifikatsprüfung an (kein `verify=False` irgendwo —
-  Lint-Check in WP12).
-- Im Mirror-Postfach wird nie gelöscht und nie expunged (ADR-064): `\Deleted` und `EXPUNGE`
-  existieren in keinem Codepfad; `imap.move_processed_to` verlangt einen Server mit
-  MOVE-Capability, der client-seitige Ersatz (COPY + `\Deleted` + EXPUNGE) ist bewusst nicht
-  implementiert.
-- Logs ohne Inhalte (NF-5): strukturierte JSON-Zeilen auf stdout, ausschließlich
-  Metadaten (gekürzter Dedupe-Hash, Absender-Domain, Status, Zähler, Exception-
-  **Klassenname**). Tracebacks — die Mail-Inhalte aus Fehlertexten transportieren können —
-  erscheinen ausschließlich bei `log_level = "DEBUG"`; solche Logs sind entsprechend
-  vertraulich zu behandeln (ADR-046/ADR-047, docs/BETRIEB.md).
-- Die SQLite-DB speichert Status + Metadaten, nicht den Mail-Text (Klartext wird nur im
-  Speicher gehalten). Genau **zwei** benannte Ausnahmen, beide mit bereits für den Nutzer
-  freigegebenem, output-sanitisiertem Text und beide nach Zustellung geleert (ADR-048/049):
-  (a) `low_digest_queue` — kritiker-geprüfte Kopfzeile, Kategorie und Absender-Domain der
-  `low`-Mails; (b) `outbox` — die fertigen Nachrichtenteile einer noch nicht bestätigten
-  Zustellung. Beides enthält nie Mail-Rohtext, nie Links, nie Anhänge; ohne diese
-  Persistenz wären der tägliche Sammel-Digest (F-SUM-5) und die „nie stiller Verlust"-
-  Zusage (F-OPS-3, ADR-008) über einen Prozessneustart hinweg nicht haltbar.
-- Empfehlung in README: Mirror-Postfach bei separatem Anbieter mit eigenem, einmaligem
-  Passwort; App-Passwort statt Hauptpasswort.
+- **Implementation in the CLI (WP9, ADR-052 to ADR-057):** `maildigest init` and every
+  `connect-*` write the file via `os.open(..., 0o600)` and reset the mode on **every** write
+  — including on an already existing, too-open file. For the IMAP password, API key and bot
+  token there are deliberately **no** command-line options (process list, shell history):
+  they come from a prompt without screen echo (`getpass`, as soon as a terminal is present)
+  or from the respective environment variable; if a variable is set, the value is not written
+  into the file at all (ADR-056). The only secret option is `--webhook-url` (Discord has no
+  env variable in the schema). Foreign data arising during setup — IMAP folder names,
+  Telegram chats from `getUpdates`, the answer of the test call, the **error text of the
+  model provider** — reaches the terminal only filtered (character allowlist), only as a
+  numeric ID plus a chat type from a fixed value list, or not at all (ADR-055); otherwise a
+  terminal interprets control sequences from a foreign hand.
+- **The terminal filter as a last layer (HC-4, ADR-055 addendum).** The allowlist does not
+  only sit at the known individual sites (`cli._safe_name`, `llm/_http._foreign`) but also at
+  the **output site** in `cli.main`: every error line on stderr runs through
+  `foreign_text.sanitize_foreign_text`. The protection therefore does not depend on every
+  future path that carries foreign text having thought of it. In addition,
+  `foreign_text.mask_secrets` masks one's own API key quoted back by the counterpart (full
+  value or a prefix from eight characters) with `***` — so the promise from SPEC-CLI §2
+  ("error messages never contain … API keys") does not depend on the provider's good
+  behaviour.
+- **Forgoing the server response in `connect-mail` (I5, HC-32).** The message for a failed
+  IMAP connection attempt names host, port, folder and the error class, **never** the
+  server's response text: it regularly quotes the username that was sent and comes from a
+  foreign hand. The diagnostic value is produced through the error class instead —
+  `ImapAuthError` (credentials rejected) pulls in the provider-specific app-password hint,
+  any other `ImapConnectionError` the hint about host, port and network. SPEC-CLI §4
+  `connect-mail` describes this conservative behaviour.
+- **Atomic writing of the configuration (ADR-081, HC-20).** `ConfigFile.save` writes into a
+  temporary file in the target directory (`O_WRONLY|O_CREAT|O_EXCL`, 0600), syncs it
+  (`flush` + `os.fsync`) and only then renames it with `os.replace`; a failure cleans the
+  temporary file up. An abort in the middle of a write (full disk, quota, `RLIMIT_FSIZE`,
+  EIO, power loss) therefore leaves the previous configuration untouched — before this, a
+  truncated file was left behind with credentials missing.
+- IMAP over TLS only (IMAPS 993); certificate verification on (no `verify=False` anywhere —
+  lint check in WP12).
+- Nothing in the mirror mailbox is ever deleted or expunged (ADR-064): `\Deleted` and
+  `EXPUNGE` exist in no code path; `imap.move_processed_to` requires a server with the MOVE
+  capability, and the client-side substitute (COPY + `\Deleted` + EXPUNGE) is deliberately
+  not implemented.
+- Logs without content (NF-5): structured JSON lines on stdout, metadata only (shortened
+  dedupe hash, sender domain, status, counters, exception **class name**). Tracebacks — which
+  can carry mail content out of error texts — appear only at `log_level = "DEBUG"`; such logs
+  are to be treated as confidential accordingly (ADR-046/ADR-047, docs/OPERATIONS.md).
+- The SQLite DB stores state + metadata, not the mail text (plain text is only held in
+  memory). Exactly **two** named exceptions, both with text already released to the user and
+  output-sanitised, and both emptied after delivery (ADR-048/049): (a) `low_digest_queue` —
+  the critic-checked headline, category and sender domain of the `low` mails; (b) `outbox` —
+  the finished message parts of a delivery not yet confirmed. Neither ever contains raw mail
+  text, links or attachments; without that persistence the daily collected digest (F-SUM-5)
+  and the "never a silent loss" promise (F-OPS-3, ADR-008) would not hold across a process
+  restart.
+- Recommendation in the README: mirror mailbox with a separate provider using its own
+  single-purpose password; an app password instead of the main password.
 
-## 7. Invarianten-Review
+## 7. Invariant review
 
-**Datum:** 2026-09-11 · **Stand:** nach der Fixrunde zur Abschluss-Testrunde (HC-1 … HC-38,
-docs/TESTING.md §7) · **Umfang:** `src/maildigest/`, 44 Module.
-Die Momentaufnahme vom 2026-09-08 (WP12, Release 0.1.0, 41 Module, 5 `.send()`-Stellen) ist
-damit überholt; die Befunde je Invariante haben sich nicht umgekehrt, sie sind an fünf Stellen
-enger geworden.
+**Date:** 2026-09-11 · **State:** after the fix round following the final test round
+(HC-1 … HC-38, docs/TESTING.md §7) · **Scope:** `src/maildigest/`, 44 modules.
+The snapshot of 2026-09-08 (WP12, release 0.1.0, 41 modules, 5 `.send()` sites) is thereby
+superseded; the findings per invariant have not reversed, they have become tighter in five
+places.
 
-**Methode.** Drei Ebenen, jede für sich unzureichend:
+**Method.** Three levels, each insufficient on its own:
 
-1. **Mechanisch.** `tests/unit/test_invarianten.py` (27 Tests) parst jedes Produktionsmodul
-   mit `ast`, entfernt Docstrings und Kommentare und sucht erst dann. Das ist der
-   entscheidende Unterschied zu `grep`: Die ausführlichsten Fundstellen für „expunge",
-   „delete" und „parse_mode" sind die Begründungen, warum es sie **nicht** gibt — eine reine
-   Textsuche bleibt daran hängen und liefert ein Ergebnis, das man nur noch glauben kann.
-   Der in §6 angekündigte Lint-Check („kein `verify=False` irgendwo") ist Teil dieser Datei.
-   **Neu seit der Fixrunde (HC-38):** Drei der bisher nur in Prosa geführten Zusagen dieses
-   Abschnitts sind jetzt selbst mechanisch gesperrt — die Menge der `.send(`-Aufrufstellen, die
-   Herkunft jedes Sende-Arguments und die Aufrufer von `compose_plain`. Beide Positivlisten
-   stehen als `SEND_SITES` und `COMPOSE_PLAIN_CALLERS` in der Testdatei; eine neue Stelle fällt
-   auf, statt unbemerkt zu entstehen. Die Wirksamkeit ist durch Negativproben belegt (ein
-   zusätzliches `messenger.send(text)` bzw. ein Aufruf unter Umgehung des Composers lässt die
-   Tests fehlschlagen).
-2. **Strukturell.** Wo eine Invariante an einer Typgrenze hängt, wird die Grenze geprüft und
-   nicht das Vorkommen eines Wortes (I1: welche Module dürfen `mime_bytes` überhaupt nennen;
-   I2: welche Schlüssel darf ein LLM-Request-Körper enthalten).
-3. **Am laufenden Programm.** Für I3/I4/I6 die vorhandenen Property- und Korpus-Tests
-   (`tests/unit/test_output_sanitizer.py`, `tests/cold/test_cold_suite.py`) plus ein
-   Rauchtest der installierten CLI (`maildigest test --dry-run` mit unerreichbarem Modell —
-   die Metadaten-Notiz erschien, kein Inhalt).
+1. **Mechanical.** `tests/unit/test_invarianten.py` (27 tests) parses every production module
+   with `ast`, removes docstrings and comments, and only then searches. That is the decisive
+   difference from `grep`: the most extensive occurrences of "expunge", "delete" and
+   "parse_mode" are the rationales for why they do **not** exist — a pure text search gets
+   stuck on those and produces a result you can only take on faith. The lint check announced
+   in §6 ("no `verify=False` anywhere") is part of this file. **New since the fix round
+   (HC-38):** three of this section's promises that were previously carried in prose only are
+   now themselves mechanically locked — the set of `.send(` call sites, the origin of every
+   send argument, and the callers of `compose_plain`. Both allowlists live as `SEND_SITES` and
+   `COMPOSE_PLAIN_CALLERS` in the test file; a new site stands out instead of appearing
+   unnoticed. Their effectiveness is demonstrated by negative probes (an additional
+   `messenger.send(text)`, or a call bypassing the composer, makes the tests fail).
+2. **Structural.** Where an invariant hangs on a type boundary, the boundary is checked rather
+   than the occurrence of a word (I1: which modules may mention `mime_bytes` at all; I2: which
+   keys an LLM request body may contain).
+3. **On the running program.** For I3/I4/I6 the existing property and corpus tests
+   (`tests/unit/test_output_sanitizer.py`, `tests/cold/test_cold_suite.py`) plus a smoke test
+   of the installed CLI (`maildigest test --dry-run` with an unreachable model — the metadata
+   note appeared, no content).
 
-**Was dieses Review nicht ist:** kein Beweis. Es prüft den Code gegen die Invarianten, nicht
-gegen einen Angreifer. Der Blackbox-Nachweis ist die Cold-Runde (docs/TESTING.md §6); die von
-§3 dort verlangte **zweite** Runde nach den `high`-Befunden CT-6/CT-9 steht aus (§7.2).
+**What this review is not:** not a proof. It checks the code against the invariants, not
+against an attacker. The black-box evidence is the cold round (docs/TESTING.md §6); the
+**second** round that §3 requires there after the `high` findings CT-6/CT-9 is outstanding
+(§7.2).
 
-### 7.1 Befund je Invariante
+### 7.1 Finding per invariant
 
-| | Invariante | Befund | Beleg |
+| | Invariant | Finding | Evidence |
 |---|---|---|---|
-| **I1** | Kein LLM sieht rohe Anhänge, rohes HTML, rohe MIME-Struktur | **erfüllt** | `mime_bytes` kommt in genau drei Modulen vor: `models.py` (Felddefinition), `ingest/imap_client.py` (erzeugt `RawMail`), `sanitize/sanitizer.py` (einzige lesende Stelle). `pipeline.process_mail` gibt die `RawMail` unmittelbar nach der Sanitize-Stufe im `finally` mit `del raw` frei; alle folgenden Stufen nehmen strukturell nur `SanitizedMail` entgegen. Der HTML-Teil wird für den Divergenz-Vergleich (ADR-067) nur intern konvertiert und verlässt den Sanitizer nicht. |
-| **I2** | Text-in/Text-out, keine Tools, kein Function-Calling | **erfüllt** | Die Request-Körper beider Provider sind AST-geprüft auf den geschlossenen Feldsatz `{model, max_tokens, system, messages, temperature}`. `tools`, `tool_choice`, `functions`, `function_call`, `mcp_servers`: kein einziges Vorkommen im ausführbaren Code. `LLMProvider.complete` gibt einen String zurück; es gibt keinen Rückkanal vom Modell in das Programm außer diesem String. |
-| **I3** | Nachricht ohne klickbare Links, Anhänge, ausführbare Inhalte | **erfüllt** | `parse_mode` und `embeds`: kein Vorkommen. Jede zugestellte Nachricht entsteht ausschließlich über `DigestComposer._finalize()` — Feld-Scrub, `final_guard`, Split, danach `final_guard` je Teil (bis zu vier Runden, HT-4). Alle **sieben** `send()`-Aufrufstellen (`pipeline.py:_fail_closed`/`_process_sanitized`, `delivery.py:_attempt`, `runner.py:maybe_send_low_digest`/`handle_command`, `cli.py:_send_test_message`/`_announce_selftest`) speisen Objekte, die diesen Pfad gelaufen sind; `delivery.py` reicht nur bereits fertige Teile erneut ein. Liste und Argumentherkunft sind seit der Fixrunde AST-gesperrt (HC-38). Property-Tests über zufällige Modellausgaben, dazu der Angriffskorpus aus WP11 (CT-7/7a/8). **Vier Nähte sind in der Fixrunde geschlossen worden** (§5, Fixrunden-Block): Fortsetzungsstücke eines harten Zeilenschnitts tragen das neutrale Präfix `… ` und können keinen Strukturanfang mehr fälschen (HC-6); nackte IPv4 wird auch mit direkt anliegenden Nachbarzeichen gebrochen, und weder Domain- noch IPv4-Erkennung hat noch einen Längendeckel, an dem eine lange Marke vorbeikäme (HC-9, HC-24); die Link-Fußnote trägt kein Messenger-Markup mehr (HC-7); und die Zusage „kein Steuerzeichen verlässt das Modul" hängt nicht mehr an der Korrektheit der Link-Regexe, sondern an einem zweiten `C*`-Pass nach der Link-Erkennung (HC-8). Der bis dahin einzige ungescrubbte variable Anteil einer zugestellten Nachricht — der Ordnername in der `/status`-Antwort — läuft jetzt durch `scrub_plain` (HC-28); `_finalize` bleibt dabei Nachbrenner und Split, **kein** Feld-Scrub: variable Anteile scrubbt der Aufrufer. |
-| **I4** | Modellausgabe ist untrusted: Schema → Kritiker → Output-Sanitizer | **erfüllt** | `Summary`/`CriticVerdict` sind pydantic-erzwungen; eine Schema-Verletzung ist `schema_invalid` und damit fail-closed. `pipeline._process_sanitized` ruft die drei Stufen in fester Reihenfolge; es gibt keinen Pfad von `summarize` direkt zum Messenger. Der Composer scrubbt jedes Modellfeld noch einmal, auch die vom Kritiker gelieferten Gründe. |
-| **I5** | Secrets nie in Prompts, Logs, DB | **erfüllt, mit einer benannten Bandbreite** | Alle vier Secrets sind `pydantic.SecretStr`; `TelegramMessenger`, `DiscordMessenger` und beide LLM-Provider definieren `__repr__`/`__str__` ohne Secret. `ImapClient` hält das Passwort als einfaches Attribut, ist aber eine gewöhnliche Klasse ohne `__repr__` und ohne Dataclass-Dekorator — der Default-`repr` zeigt nur die Adresse. Sämtliche 21 `extra={…}`-Stellen wurden einzeln gelesen: gekürzte Hashes, Absender-Domain, Ordnername, Statuswerte, Zähler, Exception-**Klassennamen**. Der `JsonLogFormatter` verdichtet nicht-JSON-fähige Werte auf ihren Typnamen, statt `repr()` zu rufen. **Bandbreite:** `imap_postprocess_failed` loggt `str(exc)` statt nur den Klassennamen — dieser Text ist programm-formuliert und enthält höchstens den konfigurierten Ordnernamen und das IMAP-Statuswort (`NO`/`BAD`), keinen Mail-Inhalt und kein Secret. Bewusst so belassen: Ohne den Ordnernamen ist der häufigste Fehlerfall (falsch geschriebenes `move_processed_to`) nicht diagnostizierbar. **Vier Ergänzungen aus der Fixrunde:** (1) Das in dieser Aufzählung bisher fehlende Feld `detail` von `mail_processed`/`process_failed` stammt aus `pipeline.failure_detail(exc)` und ist bei `LLMInvalidResponse` die Fehlerliste aus `llm/schema._error_summary`. Genau ein Fehlertyp trug dort einen nicht vom Code erzeugten Namen — `extra_forbidden`, der vom Modell erfundene Schlüssel; er ist jetzt der feste Platzhalter `<extra field>`, in Logzeile **und** Reparatur-Prompt (HC-11). (2) Der Fehlertext eines Modell-Anbieters läuft vor jeder Terminalausgabe durch die Zeichen-Allowlist in `maildigest.foreign_text`, und ein darin zitierter eigener API-Key wird maskiert — die Zusage „Fehlermeldungen enthalten niemals API-Keys" hängt nicht mehr am Wohlverhalten der Gegenstelle (HC-4). (3) `connect-mail` verzichtet ausdrücklich auf die IMAP-Serverantwort und entscheidet über die Fehlerklasse (`ImapAuthError` vs. Transportfehler); der Servertext zitiert regelmäßig den gesendeten Benutzernamen (HC-32, §6). (4) Das atomare Schreiben der Konfiguration legt **keine** zweite Kopie der Secrets an: die Temp-Datei hat `0600` und verschwindet in jedem Ausgang (ADR-081). Die beiden neuen Logereignisse `mail_id_collision` und `outbox_clock_skew_corrected` tragen nur 12-stellige Hashes bzw. eine Zeilenzahl. |
-| **I6** | Fail-closed | **erfüllt** | Jede Stufe in `pipeline.py` liegt in einem eigenen `try`, dessen `except Exception` in `_fail_closed` mündet; die Fehlerklassen-Abbildung ist eine geschlossene Tabelle mit `<stufe>_error` als Auffangwert. Der Ingest-Loop fängt zusätzlich pro Mail ab (`mail_processing_crashed` ⇒ `failed`), damit eine kaputte Mail den Zyklus nicht stoppt. Im Rauchtest mit unerreichbarem Modell kam die fünfzeilige Metadaten-Notiz und sonst nichts. **Zwei Präzisierungen aus der Fixrunde:** Der fail-closed-Ausgang wird nicht mehr durch einen harmlosen langen Betreff ausgelöst (HC-1) — er bleibt echten Fehlern vorbehalten. Und er ist **nicht** der Weg für zwei Lagen, in denen nichts Unsicheres passiert ist: Eine Message-ID-Kollision wird regulär unter einem abgeleiteten Schlüssel verarbeitet und nur benannt (ADR-079, HC-10); eine verschlüsselte PGP/S-MIME-Mail ebenso (ADR-082, HC-33). Eine Notiz „could not be processed safely" wäre dort sachlich falsch und nähme dem Nutzer zugleich Absender, Betreff und Anhangsliste. |
-| **I7** | Anhangs-Extraktion im ressourcenbegrenzten Subprozess | **erfüllt** | `pdfminer` wird ausschließlich in `sanitize/extract_pdf.py` genannt, und dort erst **im Kindprozess** importiert — der Elternprozess lädt die Bibliothek nie. Das Kind setzt `RLIMIT_AS` vor dem Import, der Elternprozess überwacht per `subprocess.run(timeout=…)` und killt danach. Input- und Output-Grenze zusätzlich im Aufrufer. |
-| **I8** | Custom-Instructions als gelabelter System-Teil, Mail strikt getrennt | **erfüllt** | `summarizer_system_prompt` baut `Rolle → Nutzer-Vorgaben → UNÜBERSCHREIBBARE SICHERHEITSREGELN`; die Reihenfolge ist als Test festgehalten. Die Mail steht in der **User**-Message zwischen Markern mit einem je Aufruf frisch gezogenen Token, dessen Nachbau im Mail-Text neutralisiert wird. `critic_system_prompt` nimmt bewusst gar keine Custom-Instructions entgegen (ADR-042) — auch das ist getestet. |
+| **I1** | No LLM sees raw attachments, raw HTML or raw MIME structure | **met** | `mime_bytes` occurs in exactly three modules: `models.py` (field definition), `ingest/imap_client.py` (creates `RawMail`), `sanitize/sanitizer.py` (the only reading site). `pipeline.process_mail` releases the `RawMail` in the `finally` with `del raw` immediately after the sanitize stage; all subsequent stages structurally accept only `SanitizedMail`. The HTML part is converted internally for the divergence comparison (ADR-067) only and does not leave the sanitizer. |
+| **I2** | Text-in/text-out, no tools, no function calling | **met** | The request bodies of both providers are AST-checked against the closed field set `{model, max_tokens, system, messages, temperature}`. `tools`, `tool_choice`, `functions`, `function_call`, `mcp_servers`: not a single occurrence in executable code. `LLMProvider.complete` returns a string; there is no back channel from the model into the program other than that string. |
+| **I3** | Message without clickable links, attachments or executable content | **met** | `parse_mode` and `embeds`: no occurrence. Every delivered message is produced exclusively through `DigestComposer._finalize()` — field scrub, `final_guard`, split, then `final_guard` per part (up to four rounds, HT-4). All **seven** `send()` call sites (`pipeline.py:_fail_closed`/`_process_sanitized`, `delivery.py:_attempt`, `runner.py:maybe_send_low_digest`/`handle_command`, `cli.py:_send_test_message`/`_announce_selftest`) feed objects that have travelled this path; `delivery.py` only resubmits already finished parts. The list and the origin of the arguments have been AST-locked since the fix round (HC-38). Property tests over random model outputs, plus the attack corpus from WP11 (CT-7/7a/8). **Four seams were closed in the fix round** (§5, fix-round block): continuation fragments of a hard line cut carry the neutral prefix `… ` and can no longer forge a structural line start (HC-6); bare IPv4 is broken even with adjacent neighbouring characters, and neither domain nor IPv4 detection has a length cap left that a long label could slip past (HC-9, HC-24); the link footnote no longer carries messenger markup (HC-7); and the promise "no control character leaves the module" no longer depends on the correctness of the link regexes but on a second `C*` pass after link detection (HC-8). The only unscrubbed variable portion of a delivered message up to then — the folder name in the `/status` answer — now runs through `scrub_plain` (HC-28); `_finalize` remains the final pass and the split, **not** a field scrub: variable portions are scrubbed by the caller. |
+| **I4** | Model output is untrusted: schema → critic → output sanitizer | **met** | `Summary`/`CriticVerdict` are pydantic-enforced; a schema violation is `schema_invalid` and therefore fail-closed. `pipeline._process_sanitized` calls the three stages in a fixed order; there is no path from `summarize` directly to the messenger. The composer scrubs every model field once more, including the reasons supplied by the critic. |
+| **I5** | Secrets never in prompts, logs or the DB | **met, with one named bandwidth** | All four secrets are `pydantic.SecretStr`; `TelegramMessenger`, `DiscordMessenger` and both LLM providers define `__repr__`/`__str__` without the secret. `ImapClient` holds the password as a plain attribute but is an ordinary class without `__repr__` and without a dataclass decorator — the default `repr` shows only the address. All 21 `extra={…}` sites were read individually: shortened hashes, sender domain, folder name, status values, counters, exception **class names**. The `JsonLogFormatter` condenses non-JSON-capable values to their type name instead of calling `repr()`. **Bandwidth:** `imap_postprocess_failed` logs `str(exc)` instead of only the class name — that text is program-formulated and contains at most the configured folder name and the IMAP status word (`NO`/`BAD`), no mail content and no secret. Deliberately left that way: without the folder name the most common error case (a misspelled `move_processed_to`) cannot be diagnosed. **Four additions from the fix round:** (1) the field `detail` of `mail_processed`/`process_failed`, previously missing from this enumeration, comes from `pipeline.failure_detail(exc)` and, for `LLMInvalidResponse`, is the error list from `llm/schema._error_summary`. Exactly one error type carried a name there that was not produced by the code — `extra_forbidden`, the key invented by the model; it is now the fixed placeholder `<extra field>`, in the log line **and** in the repair prompt (HC-11). (2) The error text of a model provider runs through the character allowlist in `maildigest.foreign_text` before any terminal output, and one's own API key quoted in it is masked — the promise "error messages never contain API keys" no longer depends on the counterpart's good behaviour (HC-4). (3) `connect-mail` explicitly forgoes the IMAP server response and decides on the error class (`ImapAuthError` vs. a transport error); the server text regularly quotes the username that was sent (HC-32, §6). (4) The atomic configuration write creates **no** second copy of the secrets: the temp file has mode `0600` and disappears on every exit path (ADR-081). The two new log events `mail_id_collision` and `outbox_clock_skew_corrected` carry only 12-character hashes and a row count respectively. |
+| **I6** | Fail-closed | **met** | Every stage in `pipeline.py` sits in its own `try` whose `except Exception` leads into `_fail_closed`; the error-class mapping is a closed table with `<stage>_error` as the catch-all. The ingest loop additionally catches per mail (`mail_processing_crashed` ⇒ `failed`) so that a broken mail does not stop the cycle. In the smoke test with an unreachable model, the five-line metadata note arrived and nothing else. **Two refinements from the fix round:** the fail-closed exit is no longer triggered by a harmless long subject (HC-1) — it stays reserved for genuine errors. And it is **not** the route for two situations in which nothing unsafe happened: a Message-ID collision is processed normally under a derived key and merely named (ADR-079, HC-10); an encrypted PGP/S-MIME mail likewise (ADR-082, HC-33). A note "could not be processed safely" would be factually wrong there and would at the same time deprive the user of sender, subject and attachment list. |
+| **I7** | Attachment extraction in a resource-limited subprocess | **met** | `pdfminer` is named exclusively in `sanitize/extract_pdf.py`, and there it is imported only **in the child process** — the parent process never loads the library. The child sets `RLIMIT_AS` before the import, the parent supervises via `subprocess.run(timeout=…)` and kills afterwards. Input and output bounds additionally in the caller. |
+| **I8** | Custom instructions as a labelled system part, mail strictly separated | **met** | `summarizer_system_prompt` builds `role → user settings → NON-OVERRIDABLE SECURITY RULES`; the order is pinned by a test. The mail sits in the **user** message between markers with a token drawn freshly per call, whose forgery in the mail text is neutralised. `critic_system_prompt` deliberately accepts no custom instructions at all (ADR-042) — that too is tested. |
 
-### 7.2 Was dieses Review offen lässt
+### 7.2 What this review leaves open
 
-1. **Zweite Cold-Runde.** docs/TESTING.md §3 verlangt sie nach Sicherheits-Findings ≥ high
-   (CT-6, CT-9). Sie **steht weiterhin aus** und läuft als §6 der Fixrunde
-   (docs/PLAN-FIXRUNDE.md). Die Abschluss-Testrunde vom September 2026 (docs/TESTING.md §7)
-   erfüllt den Haken ausdrücklich **nicht**: Ihre Skeptikerprüfung hatte durchweg vollen
-   Code-Zugriff, und die Prüfgrundlage selbst war defekt — SPEC-CLI legte den Wortlaut der
-   Ausgabe deutsch fest, während die Implementierung englisch war (HC-14). Diese Voraussetzung
-   ist inzwischen erfüllt: Der Vertrag beschreibt wieder, was das Programm ausgibt, und
-   `tests/unit/test_hc14_spec_literals.py` hält das maschinell fest. Bis zur Runde bleibt NF-8
-   `in-progress`.
-2. **Kein Lauf gegen echte Gegenstellen.** Kein echtes IMAP-Postfach, keine echte LLM-API,
-   kein echter Messenger — alle Nachweise stammen aus Mocks bzw. aus dem Fehlerpfad. `UID
-   MOVE` ist gegen einen selbstgebauten Mock belegt, nicht gegen einen Server.
-3. **Heuristik-Kalibrierung.** Phrasenliste in `detect_injection_evidence`,
-   CT-15-Schwellen (≥ 5 Wörter / > 50 %) und `_HIGH_SIGNAL_COUNT = 3` sind ohne Felddaten
-   gesetzt. Sie können falsch alarmieren; das ist eine Nutzbarkeits-, keine Sicherheitsfrage.
+1. **Second cold round.** docs/TESTING.md §3 requires it after security findings ≥ high
+   (CT-6, CT-9). It is **still outstanding** and runs as §6 of the fix round
+   (docs/PLAN-FIXRUNDE.md). The final test round of September 2026 (docs/TESTING.md §7)
+   explicitly does **not** satisfy the checkbox: its skeptic review had full code access
+   throughout, and the basis for review was itself defective — SPEC-CLI fixed the wording of
+   the output in German while the implementation was English (HC-14). That precondition has
+   since been met: the contract again describes what the program outputs, and
+   `tests/unit/test_hc14_spec_literals.py` pins that mechanically. Until the round happens,
+   NF-8 stays `in-progress`.
+2. **No run against real counterparts.** No real IMAP mailbox, no real LLM API, no real
+   messenger — all evidence comes from mocks or from the error path. `UID MOVE` is
+   established against a self-built mock, not against a server.
+3. **Heuristic calibration.** The phrase list in `detect_injection_evidence`, the CT-15
+   thresholds (≥ 5 words / > 50 %) and `_HIGH_SIGNAL_COUNT = 3` are set without field data.
+   They can raise false alarms; that is a usability question, not a security one.
 
-   **Miss-Richtung der Phrasenliste (HC-21).** Die Liste erkennt keine Injection, sondern
-   **wörtliche** Übernahmeformeln. Paraphrasen und andere Sprachen bleiben unerkannt — das ist
-   die bewusste Fehlalarm-Abwägung aus ADR-061. Neu benannt ist der Geltungsgrund: Im
-   Werkszustand (`[llm] provider = "none"`) gibt es überhaupt keine Modellantwort, die
-   `injection_suspected` setzen könnte; die deterministischen Indizien sind dort die **einzige**
-   Quelle. Eine Lücke in ihnen ist dann kein Restrisiko, sondern ein Totalausfall der
-   F-SEC-5-Anzeige. Die Liste ist in der Fixrunde um Possessiv, bestimmten Artikel, die Verben
-   `forget`/`vergiss`/`missachte` und den Singular erweitert worden, die Objektbindung blieb;
-   die Fehlalarmrate über den Korpus ist unverändert (4 von 49, alle vier Angriffsmails).
-   Ungeeicht bleibt sie trotzdem.
+   **Direction of miss for the phrase list (HC-21).** The list does not detect injection but
+   **literal** takeover formulas. Paraphrases and other languages stay undetected — that is
+   the deliberate false-alarm trade-off from ADR-061. Newly named is the reason it matters: in
+   the factory state (`[llm] provider = "none"`) there is no model answer at all that could
+   set `injection_suspected`; the deterministic evidence is the **only** source there. A gap
+   in it is then not a residual risk but a total failure of the F-SEC-5 indicator. In the fix
+   round the list was extended by possessives, the definite article, the verbs
+   `forget`/`vergiss`/`missachte` and the singular, and the object binding stayed; the false
+   alarm rate over the corpus is unchanged (4 out of 49, all four attack mails). It remains
+   uncalibrated nonetheless.
 
-   **Über-Defang und Über-Neutralisierung sind der gewählte Ausgang** (ADR-036). Das gilt seit
-   der Fixrunde an zwei weiteren Stellen: `<… MAILDIGEST … UNTRUSTED …>` wird auch dann ersetzt,
-   wenn ein harmloser Absender beide Wörter zufällig in spitzen Klammern schreibt (HC-5), und
-   die Domain-Erkennung hat keinen Längendeckel mehr, hinter dem sich etwas verstecken ließe
-   (HC-24). Preis ist jeweils ein möglicher Fehlalarm im Text, nie ein übersehener Link.
-4. **`connect-mail` warnt nicht vorab**, wenn der Server kein MOVE kann oder
-   `move_processed_to` nicht existiert — der Fehler fällt erst im Betrieb auf (als
-   `imap_postprocess_failed`, ohne Datenverlust). In ADR-065 als sinnvolle Ergänzung
-   benannt, nicht umgesetzt.
+   **Over-defanging and over-neutralisation are the chosen exit** (ADR-036). Since the fix
+   round that applies in two further places: `<… MAILDIGEST … UNTRUSTED …>` is replaced even
+   when a harmless sender happens to write both words in angle brackets (HC-5), and domain
+   detection no longer has a length cap behind which something could hide (HC-24). The price
+   in each case is a possible false alarm in the text, never a missed link.
+4. **`connect-mail` does not warn in advance** when the server cannot do MOVE or
+   `move_processed_to` does not exist — the error only shows up in production (as
+   `imap_postprocess_failed`, without data loss). Named in ADR-065 as a sensible addition, not
+   implemented.

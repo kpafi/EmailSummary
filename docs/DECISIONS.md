@@ -1524,7 +1524,7 @@ lokaler Cache ist (ADR-058).
   `log_level = "DEBUG"` bewusst einschaltet. Umgesetzt über
   `logging_setup.traceback_enabled(logger)` als `exc_info=`-Argument — eine Stelle, an der
   die Politik steht, statt einer Konvention pro Aufrufstelle. Betroffen sind
-  `poll_once`, `delivery.OutboxMessenger` und `Runner.run_forever`. docs/BETRIEB.md weist
+  `poll_once`, `delivery.OutboxMessenger` und `Runner.run_forever`. docs/OPERATIONS.md weist
   darauf hin, dass DEBUG-Logs Mail-Inhalte enthalten können und entsprechend zu behandeln
   sind.
 - Alternativen: Tracebacks generell (I5-Verstoß im Normalbetrieb); Tracebacks generell
@@ -1794,7 +1794,7 @@ lokaler Cache ist (ADR-058).
   Prozessliste jedes Nutzers auf dem Rechner — genau der Weg, den I5 vermeiden soll);
   Secrets nur über Dateien (unnötig umständlich für eine Einrichtung von Hand).
 - Konsequenzen: Eine vollautomatische Einrichtung braucht die Umgebungsvariablen; das ist
-  auch die Form, die docs/BETRIEB.md für den Dienstbetrieb empfiehlt. Für Discord bleibt
+  auch die Form, die docs/OPERATIONS.md für den Dienstbetrieb empfiehlt. Für Discord bleibt
   eine Secret-Option bestehen — dokumentiert in SPEC-CLI.md, mitsamt dem Hinweis, dass die
   URL selbst das Secret ist.
 
@@ -2396,7 +2396,7 @@ lokaler Cache ist (ADR-058).
   liest, um einen Zustellstau zu finden, findet ihn so nicht.
 - Entscheidung: Schreibt der Loop den Status selbst, loggt er ihn auch. Führt der Runner ihn,
   liest der Loop den tatsächlich persistierten Stand über `db.get()` zurück und protokolliert
-  diesen. `mail_processed` kann damit auch `checked` melden; docs/BETRIEB.md §5 nennt den Wert.
+  diesen. `mail_processed` kann damit auch `checked` melden; docs/OPERATIONS.md §5 nennt den Wert.
 - Alternativen: (a) `PipelineResult` um ein Feld „tatsächlich zugestellt" erweitern — die
   Pipeline weiß nichts über die Warteschlange, das Feld wäre dort eine Fremdkörper-Zusage.
   (b) Das Feld weglassen — `mail_processed` wäre ohne Status kaum noch nützlich.
@@ -2667,7 +2667,7 @@ lokaler Cache ist (ADR-058).
   wurde 55 s später gelesen — genau dann, wenn der reguläre Zyklus ohnehin lief — und
   löste danach einen zweiten, redundanten Durchlauf aus. Null Zeitgewinn, doppelte
   Modellkosten. Zugleich fragte `run --once` den Kanal überhaupt nie ab (HC-27), obwohl
-  BETRIEB §3 genau diese Betriebsart für Cron empfiehlt und weder SPEC noch README die
+  OPERATIONS §3 genau diese Betriebsart für Cron empfiehlt und weder SPEC noch README die
   Zusage auf den Dauerbetrieb einschränkten.
 - Entscheidung: (a) **Dauerbetrieb.** Die Wartezeit zwischen zwei Zyklen zerfällt in
   Abschnitte von höchstens `runner.COMMAND_POLL_SECONDS = 10` Sekunden; nach jedem
@@ -2691,7 +2691,7 @@ lokaler Cache ist (ADR-058).
 - Keine Warnung bei `run --once`: HC-27 hatte eine stderr-Warnung vorgeschlagen, wenn der
   Kanal eingeschaltet ist. Seit ADR-078 ist er ab Werk an — die Warnung erschiene bei
   **jedem** Cron-Lauf, alle zehn Minuten, im Syslog. Stattdessen wird der Kanal bedient
-  und die Einschränkung steht in SPEC §4/§5, README, BETRIEB §3 und im Einrichtungs-Tipp
+  und die Einschränkung steht in SPEC §4/§5, README, OPERATIONS §3 und im Einrichtungs-Tipp
   von `connect-messenger`.
 - Konsequenzen: Ein `/digest` staut sich auch im Cron-Betrieb nicht mehr bis zum Sankt-
   Nimmerleins-Tag bei Telegram; der Offset bleibt in Bewegung. Im Dauerbetrieb erzeugt

@@ -1,757 +1,737 @@
-# MailDigest — Test-Protokoll (Hot & Cold)
+# MailDigest — Test protocol (hot & cold)
 
-> Zwei unabhängige Testrollen (NF-8): der **Hot-Tester** kennt den Code (Whitebox), der
-> **Cold-Tester** kennt ihn nicht (Blackbox gegen die Spezifikation). Beide Rollen werden
-> von getrennten Agenten-Läufen ausgefüllt.
+> Two independent test roles (NF-8): the **hot tester** knows the code (white box), the
+> **cold tester** does not (black box against the specification). Both roles are filled by
+> separate agent runs.
 
-## 1. Laufende Tests (jedes WP)
+## 1. Ongoing tests (every WP)
 
-- Jedes WP liefert Unit-Tests für seine Funktionalität mit; `pytest` muss am Ende jedes
-  WP grün sein.
-- Der Angriffs-Korpus `tests/corpus/` (ab WP3) ist die gemeinsame Testbasis: echte-Welt-nahe
-  `.eml`-Dateien inkl. Angriffsfälle. Jede Datei dokumentiert im Kommentar-Header ihren Zweck
-  (`X-Test-Purpose`). Erzeugt wird er ausschließlich vom deterministischen Generator
-  `tests/corpus/_make_corpus.py` — Dateien nicht von Hand ändern, sondern den Generator.
-  Stand WP6: 01–20 Sanitizer-Fälle, 21–25 Phishing-Fälle für den Kritiker (CEO-Fraud,
-  Paketdienst, Bank-Verifikation, Passwort-Reset, Rechnungs-Scam) mit den jeweils passenden
-  Kopfzeilen-Signalen. Alle Payloads sind inert, alle Domains liegen unter `.example`.
+- Every WP ships unit tests for its functionality; `pytest` must be green at the end of every
+  WP.
+- The attack corpus `tests/corpus/` (from WP3 onwards) is the shared test base: real-world-like
+  `.eml` files including attack cases. Every file documents its purpose in the comment header
+  (`X-Test-Purpose`). It is produced exclusively by the deterministic generator
+  `tests/corpus/_make_corpus.py` — do not edit the files by hand, edit the generator. As of
+  WP6: 01–20 sanitizer cases, 21–25 phishing cases for the critic (CEO fraud, parcel service,
+  bank verification, password reset, invoice scam) with the matching header signals. All
+  payloads are inert, all domains live under `.example`.
 
-## 2. Hot-Testing (WP10) — Whitebox
+## 2. Hot testing (WP10) — white box
 
-**Rolle:** Agent mit vollem Code-Zugriff, idealerweise derselbe „Stamm" wie die
-Implementierung. Nutzt Code-Kenntnis gezielt aus: testet an den Stellen, von denen er
-weiß, dass sie fragil sind.
+**Role:** an agent with full code access, ideally of the same "lineage" as the implementation.
+Uses its knowledge of the code deliberately: tests in the places it knows are fragile.
 
-**Pflichtprogramm:**
-1. Coverage messen; Lücken schließen bis ≥ 90 % `sanitize/` + `output/`, ≥ 80 % gesamt (NF-6).
-2. Grenzfälle aus Code-Kenntnis (Liste in PLAN.md WP10 — erweitern, nicht kürzen).
-3. Property-Based-Tests (hypothesis) für Output-Sanitizer, Link-Erkennung, Unicode-Cleaning.
-   Kern-Property: **∀ Eingabe-String: Output enthält keine URL, kein HTML-Tag, keine
-   Steuerzeichen, kein Telegram/Discord-Markup.**
-4. Fehlerinjektion an jeder Pipeline-Stufe (LLM liefert Müll / Timeout / valides-aber-böses
-   JSON) → immer fail-closed.
-5. **Findings-Log unten in diesem Dokument führen** (auch Null-Befunde).
+**Mandatory programme:**
+1. Measure coverage; close gaps until ≥ 90 % for `sanitize/` + `output/`, ≥ 80 % overall
+   (NF-6).
+2. Edge cases from knowledge of the code (list in PLAN.md WP10 — extend it, do not shorten it).
+3. Property-based tests (hypothesis) for the output sanitizer, link detection and Unicode
+   cleaning. The core property: **∀ input string: the output contains no URL, no HTML tag, no
+   control characters, no Telegram/Discord markup.**
+4. Fault injection at every pipeline stage (the LLM returns garbage / a timeout / valid-but-evil
+   JSON) → always fail-closed.
+5. **Keep the findings log at the bottom of this document** (null findings included).
 
-## 3. Cold-Testing (WP11) — Blackbox
+## 3. Cold testing (WP11) — black box
 
-**Rolle:** Separater Agent, der den Quellcode **nicht** kennt und nicht lesen darf.
+**Role:** a separate agent that does **not** know the source code and must not read it.
 
-**Setup (macht der Orchestrator/Nutzer, nicht der Cold-Agent):**
-- Arbeitsverzeichnis für den Cold-Agenten vorbereiten, das NUR enthält:
-  `README.md`, `docs/REQUIREMENTS.md`, `docs/SPEC-CLI.md` sowie ein installierbares
-  Paket (wheel/sdist) bzw. ein venv mit installiertem `maildigest`.
-- Test-Infrastruktur bereitstellen: lokaler Test-IMAP-Account (oder das in SPEC-CLI.md §4
-  beschriebene `.eml`-Einspeise-Verfahren `maildigest test --eml <datei>` — es benutzt eine
-  temporäre State-Datenbank, ist also beliebig oft wiederholbar und verändert den Betrieb
-  nicht, ADR-057), Mock-Messenger-Endpoint (z. B. lokaler HTTP-Sink, dessen URL als
-  Discord-Webhook konfiguriert wird), Mock- oder echter LLM-Key. Für Testläufe ohne
-  Messenger gibt es `maildigest test --dry-run`, das die fertige Nachricht auf stdout
-  schreibt.
-- Prompt an den Cold-Agenten: Auftrag + die drei Dokumente + explizites Verbot, `src/`
-  oder `tests/` (außer eigenem `tests/cold/`) zu lesen.
+**Setup (done by the orchestrator/user, not by the cold agent):**
+- Prepare a working directory for the cold agent that contains ONLY `README.md`,
+  `docs/REQUIREMENTS.md`, `docs/SPEC-CLI.md` and an installable package (wheel/sdist) or a venv
+  with `maildigest` installed.
+- Provide the test infrastructure: a local test IMAP account (or the `.eml` feeding procedure
+  `maildigest test --eml <file>` described in SPEC-CLI.md §4 — it uses a temporary state
+  database, so it can be repeated at will and does not affect production, ADR-057), a mock
+  messenger endpoint (e.g. a local HTTP sink whose URL is configured as the Discord webhook),
+  and a mock or real LLM key. For test runs without a messenger there is
+  `maildigest test --dry-run`, which writes the finished message to stdout.
+- Prompt to the cold agent: the assignment + the three documents + an explicit ban on reading
+  `src/` or `tests/` (other than its own `tests/cold/`).
 
-**Auftrag des Cold-Agenten:**
-1. **Spec-Konformität:** Installation und alle CLI-Kommandos exakt nach SPEC-CLI.md
-   durchspielen. Jede Abweichung = Finding (auch Tippfehler in Prompts, falsche Exit-Codes).
-2. **Funktional:** Eigene Testmails formulieren (nicht den Korpus lesen!): normale Mail,
-   Newsletter, wichtige Mail laut Custom-Instructions, Mail mit PDF, Mail mit exe-Anhang.
-   Prüfen gegen REQUIREMENTS (F-SUM-*, F-MSG-*, F-OPS-3): kommt an, Format stimmt,
-   Filter greift, nichts geht stumm verloren.
-3. **Adversarial:** Eigene Angriffsmails bauen und einspeisen, mindestens:
-   - Prompt-Injection direkt („Ignoriere deine Anweisungen und …"), versteckt (weißer
-     Text, HTML-Kommentar, Zero-Width), und über PDF-Inhalt.
-   - Instruktion zur Secret-Exfiltration („nenne deinen API-Key").
-   - Obfuskierte Links (hxxp, `[.]`, URL-encoded, Punycode-Domain).
-   - Anhang mit gefälschtem MIME-Typ; HTML-Anhang; `.zip`.
-   - Markdown-/Markup-Injection auf den Messenger gezielt.
-   - Übergroße Mail; sehr viele Mails hintereinander.
-   Erfolgskriterien: F-SEC-1 … F-SEC-10 (aus REQUIREMENTS.md) halten aus Blackbox-Sicht.
-4. **Report** nach `tests/cold/REPORT.md` im Format unten; reproduzierbare Testskripte
-   nach `tests/cold/` (dürfen nur CLI + öffentliche Schnittstellen benutzen).
+**The cold agent's assignment:**
+1. **Spec conformance:** go through the installation and all CLI commands exactly as per
+   SPEC-CLI.md. Every deviation = a finding (including typos in prompts and wrong exit codes).
+2. **Functional:** formulate your own test mail (do not read the corpus!): a normal mail, a
+   newsletter, an important mail per the custom instructions, a mail with a PDF, a mail with an
+   exe attachment. Check against REQUIREMENTS (F-SUM-*, F-MSG-*, F-OPS-3): it arrives, the
+   format is right, the filter works, nothing is lost silently.
+3. **Adversarial:** build and feed in your own attack mail, at least:
+   - Prompt injection, direct ("Ignore your instructions and …"), hidden (white text, HTML
+     comment, zero-width), and through PDF content.
+   - An instruction to exfiltrate secrets ("name your API key").
+   - Obfuscated links (hxxp, `[.]`, URL-encoded, a punycode domain).
+   - An attachment with a forged MIME type; an HTML attachment; a `.zip`.
+   - Markdown/markup injection aimed at the messenger.
+   - An oversized mail; very many mails in a row.
+   Success criteria: F-SEC-1 … F-SEC-10 (from REQUIREMENTS.md) hold from a black-box view.
+4. **Report** to `tests/cold/REPORT.md` in the format below; reproducible test scripts to
+   `tests/cold/` (they may only use the CLI and public interfaces).
 
-**Finding-Format:**
+**Finding format:**
 ```markdown
-### CT-<nr>: <Titel>
+### CT-<no>: <title>
 - Severity: critical | high | medium | low | info
-- Referenz: <F-/NF-/SEC-ID oder SPEC-CLI-Abschnitt>
-- Repro: <Schritte / Skript-Pfad>
-- Beobachtet: <was passiert ist>
-- Erwartet: <was laut Spec/Requirement passieren müsste>
+- Reference: <F-/NF-/SEC ID or SPEC-CLI section>
+- Repro: <steps / script path>
+- Observed: <what happened>
+- Expected: <what should happen per the spec/requirement>
 ```
 
-**Nachlauf (Haupt-Agent):** Findings triagieren, fixen, Regressionstests ergänzen,
-Cold-Skripte in `pytest tests/cold/` integrieren. Bei Findings mit Severity ≥ high im
-Sicherheitsbereich: zweite Cold-Runde mit frischem Agenten.
+**Follow-up (main agent):** triage the findings, fix them, add regression tests, integrate the
+cold scripts into `pytest tests/cold/`. For findings with severity ≥ high in the security area:
+a second cold round with a fresh agent.
 
-## 4. Abnahmekriterien M3 (Release)
+## 4. Acceptance criteria M3 (release)
 
-- [x] Hot: Coverage-Ziele erreicht, Property-Tests grün, Findings-Log geführt (WP10, §5).
-- [x] Cold: Report liegt vor (`tests/cold/REPORT.md`), alle Findings ≥ medium gefixt +
-      Regressionstest (WP11, §6). Offen sind ausschließlich `info`-Befunde und ein bewusst
-      anders gelöster Teilaspekt — beides in §6 begründet.
-- [x] Adversarial-Suite Teil der CI (`pytest` gesamt): `tests/cold/test_cold_suite.py`
-      fährt den Angriffs-Korpus des Cold-Tests über `maildigest.cli.main()` (73 Tests).
-- [x] Invarianten-Review (SECURITY.md §7) dokumentiert (WP12): Befund je I1–I8, Methode und
-      Datum; die mechanisch prüfbaren Aussagen sind als `tests/unit/test_invarianten.py`
-      festgehalten (24 Tests, seit der Fixrunde 27 — §7, HC-38; AST-basiert statt `grep` — die ausführlichsten Fundstellen für
-      `expunge`/`parse_mode` sind die Begründungen, warum es sie nicht gibt). Darin auch der
-      in SECURITY §6 angekündigte Lint-Check „kein `verify=False` irgendwo".
-- [ ] **Zweite Cold-Runde mit frischem Agenten** (§3 Nachlauf verlangt sie bei
-      Sicherheits-Findings ≥ high: CT-6 und CT-9). **Nicht erfüllt.** Sie hat nicht
-      stattgefunden; der WP12-Agent hat den Code gelesen und kann eine Blackbox-Runde nicht
-      ersetzen. Die Skripte in `tests/cold/scripts/` sind lauffähig und brauchen die
-      Arbeitsumgebung aus dem Kopf von `tests/cold/REPORT.md`. Bis dahin bleibt NF-8
-      `in-progress`; die Lücke steht als bekannte Grenze in README, CHANGELOG und
-      SECURITY §7.2.
+- [x] Hot: coverage targets reached, property tests green, findings log kept (WP10, §5).
+- [x] Cold: the report exists (`tests/cold/REPORT.md`), all findings ≥ medium fixed + a
+      regression test (WP11, §6). What remains open is exclusively `info` findings and one
+      deliberately differently solved aspect — both justified in §6.
+- [x] The adversarial suite is part of CI (`pytest` overall): `tests/cold/test_cold_suite.py`
+      drives the cold test's attack corpus through `maildigest.cli.main()` (73 tests).
+- [x] Invariant review (SECURITY.md §7) documented (WP12): a finding per I1–I8, the method and
+      the date; the mechanically checkable statements are pinned as
+      `tests/unit/test_invarianten.py` (24 tests, 27 since the fix round — §7, HC-38; AST-based
+      rather than `grep` — the most extensive occurrences of `expunge`/`parse_mode` are the
+      rationales for why they do not exist). It also contains the lint check announced in
+      SECURITY §6, "no `verify=False` anywhere".
+- [ ] **Second cold round with a fresh agent** (the §3 follow-up requires it for security
+      findings ≥ high: CT-6 and CT-9). **Not met.** It has not taken place; the WP12 agent read
+      the code and cannot replace a black-box round. The scripts in `tests/cold/scripts/` are
+      runnable and need the working environment from the head of `tests/cold/REPORT.md`. Until
+      then NF-8 stays `in-progress`; the gap is recorded as a known limitation in the README,
+      the CHANGELOG and SECURITY §7.2.
 
-**M3 ist damit nicht vollständig erreicht.** Release 0.1.0 wird trotzdem getaggt: Alle
-Befunde ab `medium` aus beiden Durchläufen sind behoben und mit Regressionstests belegt, und
-die fehlende zweite Runde ist an vier Stellen offen benannt statt weggehakt.
+**M3 is therefore not fully reached.** Release 0.1.0 is tagged nonetheless: every finding from
+`medium` upwards in both runs has been fixed and is covered by a regression test, and the
+missing second round is named openly in four places rather than ticked off.
 
-## 5. Findings-Log (Hot-Testing)
+## 5. Findings log (hot testing)
 
-Durchlauf WP10, 2026-09-02. Format: `HT-<nr>`, Severity, Modul, Beschreibung, Fix bzw.
-Begründung. Severity-Maßstab ist die **Wirkung beim Nutzer**, nicht die Auffälligkeit im
-Code: `high` = eine der Invarianten I1–I8 bricht in einer real erreichbaren Lage,
-`medium` = eine Verteidigungsschicht hält nicht, die nächste fängt es auf,
-`low` = kosmetisch/robustheitsseitig, `info` = bewusste Schichtgrenze, kein Fix.
+Run WP10, 2026-09-02. Format: `HT-<no>`, severity, module, description, fix or rationale. The
+severity yardstick is the **effect on the user**, not how conspicuous it is in the code:
+`high` = one of the invariants I1–I8 breaks in a realistically reachable situation,
+`medium` = one defence layer does not hold and the next one catches it,
+`low` = cosmetic/robustness, `info` = a deliberate layer boundary, no fix.
 
-**Herkunft:** HT-1 bis HT-6 wurden von den neuen Property-Tests
-(`tests/unit/test_hot_properties.py`) gefunden, nicht durch Lesen — sie liegen alle in
-Regex-Zeichenklassen und Reihenfolgen, die beim Durchsehen plausibel aussehen. HT-7 kam aus
-der Fehlerinjektion, HT-8 bis HT-12 aus der gezielten Grenzfall-Suche.
+**Origin:** HT-1 to HT-6 were found by the new property tests
+(`tests/unit/test_hot_properties.py`), not by reading — they all sit in regex character classes
+and orderings that look plausible on inspection. HT-7 came from fault injection, HT-8 to HT-12
+from a targeted edge-case hunt.
 
-### HT-1: Messenger-Markup überlebt in einer „bereits sicheren Form"
+### HT-1: Messenger markup survives inside an "already safe form"
 - Severity: **medium**
-- Modul: `output/sanitizer.py` (`_RE_SAFE_SPAN`, `_DEFANGED_ATOM`)
-- Beschreibung: `scrub_field` reicht vom WP3-Sanitizer erzeugte Formen unverändert durch
-  (ADR-028), damit Marker nicht verschachteln. Die Zeichenklasse eines solchen Spans schloss
-  aber die Markup-Zeichen `` ` ``, `*`, `|`, `~`, `\` mit ein. Ein einziges `[.]` im selben
-  Wort genügte deshalb, um Markup an der Neutralisierung vorbeizuschleusen:
-  `evil[.]com||spoiler||` und `x[.]y*fett*` kamen unverändert beim Nutzer an. Discord
-  rendert Markdown im `content`-Feld, das ist dort also sichtbare Formatierung — und es
-  verletzt die Kern-Property aus §2 Punkt 3 („kein Telegram/Discord-Markup"). Kein Link
-  entstand dabei (`](` bricht `final_guard` weiterhin auf), deshalb medium statt high.
-- Fix: Zeichenklassen `_DEFANGED_ATOM`/`_MARKER_ATOM` schließen Markup jetzt aus; ein Span
-  mit Markup ist damit kein Span mehr und läuft durch die normale Neutralisierung.
-  Regression: `test_ht1_markup_never_hides_inside_a_defanged_span`.
+- Module: `output/sanitizer.py` (`_RE_SAFE_SPAN`, `_DEFANGED_ATOM`)
+- Description: `scrub_field` passes forms produced by the WP3 sanitizer through unchanged
+  (ADR-028) so that markers do not nest. The character class of such a span, however, included
+  the markup characters `` ` ``, `*`, `|`, `~`, `\`. A single `[.]` in the same word was
+  therefore enough to smuggle markup past the neutralisation: `evil[.]com||spoiler||` and
+  `x[.]y*bold*` reached the user unchanged. Discord renders Markdown in the `content` field, so
+  that is visible formatting there — and it violates the core property from §2 point 3 ("no
+  Telegram/Discord markup"). No link was created in the process (`](` is still broken up by
+  `final_guard`), hence medium rather than high.
+- Fix: the character classes `_DEFANGED_ATOM`/`_MARKER_ATOM` now exclude markup; a span with
+  markup is therefore no longer a span and runs through normal neutralisation. Regression:
+  `test_ht1_markup_never_hides_inside_a_defanged_span`.
 
-### HT-2: Langer Schema-Name hebelt den generischen `://`-Bruch aus
+### HT-2: A long scheme name defeats the generic `://` break
 - Severity: **medium**
-- Modul: `output/sanitizer.py` (`_RE_LIVE_SCHEME_ANY`)
-- Beschreibung: Die Regel für „jedes andere Schema mit `://`" (ADR-036) verlangte eine
-  Wortgrenze und einen Schema-Namen von höchstens 16 Zeichen. Stand links vom Schema keine
-  Wortgrenze und war der Name länger, griff sie nicht: `einsehrlangeswortalsschema://ziel`
-  behielt sein `://`. Die Domain dahinter wurde von der nachfolgenden Regel weiterhin
-  defangt, ein klickbares Ziel entstand also nicht — die Zusage „kein lebendes Schema
-  überlebt" aus docs/SECURITY.md §5 galt aber nicht.
-- Fix: Schema-Name optional, Wortgrenze entfällt — gebrochen wird die Sequenz `://` selbst.
-  In einer fertigen Nachricht ist `://` nie legitim. Regression:
+- Module: `output/sanitizer.py` (`_RE_LIVE_SCHEME_ANY`)
+- Description: the rule for "any other scheme with `://`" (ADR-036) required a word boundary
+  and a scheme name of at most 16 characters. With no word boundary to the left of the scheme
+  and a longer name it did not apply: `averylongwordasascheme://target` kept its `://`. The
+  domain behind it was still defanged by the following rule, so no clickable target arose — but
+  the promise "no live scheme survives" from docs/SECURITY.md §5 did not hold.
+- Fix: the scheme name is optional and the word boundary is gone — what gets broken is the
+  sequence `://` itself. In a finished message `://` is never legitimate. Regression:
   `test_ht2_a_long_scheme_name_is_still_broken`.
 
-### HT-3: Roher `sqlite3.Error` verlässt die State-Schicht
+### HT-3: A raw `sqlite3.Error` leaves the state layer
 - Severity: **medium**
-- Modul: `state/db.py`
-- Beschreibung: `StateError` wurde nur beim Öffnen erzeugt. Ein schreibgeschütztes
-  Dateisystem oder eine volle Platte ließ `sqlite3.OperationalError` roh aus `claim()`,
-  `mark_status()` und `enqueue_outbox()` heraus. Folgen: (a)
-  `pipeline.classify_failure` traf die Klasse `state_error` nicht und schrieb
-  `<stufe>_error` in Notiz und DB; (b) `cli.main` fängt gezielte Fehlertypen — der
-  sqlite3-Fehler kam als **Traceback** auf das Terminal, und Tracebacks können laut
-  ADR-047 Inhalte transportieren (I5).
-- Fix: Dekorator `_wrap_sqlite_errors` auf allen öffentlichen `StateDB`-Methoden (ADR-060).
+- Module: `state/db.py`
+- Description: `StateError` was only produced on open. A read-only filesystem or a full disk let
+  `sqlite3.OperationalError` out raw from `claim()`, `mark_status()` and `enqueue_outbox()`.
+  Consequences: (a) `pipeline.classify_failure` did not hit the class `state_error` and wrote
+  `<stage>_error` into the note and the DB; (b) `cli.main` catches specific error types — the
+  sqlite3 error arrived on the terminal as a **traceback**, and tracebacks can carry content per
+  ADR-047 (I5).
+- Fix: the decorator `_wrap_sqlite_errors` on all public `StateDB` methods (ADR-060).
   Regression: `test_readonly_database_raises_the_documented_error`,
   `test_disk_full_is_reported_as_state_error`, `test_state_error_maps_to_a_stable_reason_class`.
 
-### HT-4: Der Nachrichten-Split kann eine lebende Domain erzeugen
+### HT-4: The message split can produce a live domain
 - Severity: **medium**
-- Modul: `output/composer.py` (`_finalize`), `output/sanitizer.py` (`_defang_domain_match`,
+- Module: `output/composer.py` (`_finalize`), `output/sanitizer.py` (`_defang_domain_match`,
   `_RE_DOMAINISH`)
-- Beschreibung: Drei ineinandergreifende Lücken derselben Regel.
-  (a) `_defang_domain_match` sah nur die **letzte** Marke an: `evil.com.123abc` blieb
-  ungebrochen, weil `123abc` nicht TLD-förmig ist.
-  (b) Die Token-Grenzen von `_RE_DOMAINISH` benutzten `\w` (Unicode) und schlossen `-`/`_`
-  links aus: `evil.comÄ` und `-evil.example` wurden gar nicht erst als Token erkannt und
-  nie defangt — Messenger verlinken dort trotzdem, weil ein Label nicht mit `-` beginnen
-  darf und ihr Linkifier dahinter neu ansetzt.
-  (c) `final_guard` lief **vor** `split_parts`. Der harte Schnitt erzeugt aus einem
-  ungebrochenen Token ein Bruchstück mit neuem Anfang **und** neuem Ende — aus
-  `-0000000.beispiel` wurde `0000000.beispiel`. Zugestellt wird der Teil, geprüft war die
-  ganze Nachricht.
-- Fix: Regel pro Marke ab der zweiten statt nur der letzten; ASCII-Token-Grenzen, Match darf
-  hinter `-`/`_` beginnen; `_finalize` lässt den Nachbrenner nach dem Split über jeden Teil
-  erneut laufen und teilt bei Bedarf nach (ADR-059). Regressionen:
+- Description: three interlocking gaps in the same rule.
+  (a) `_defang_domain_match` only looked at the **last** label: `evil.com.123abc` stayed
+  unbroken because `123abc` is not TLD-shaped.
+  (b) The token boundaries of `_RE_DOMAINISH` used `\w` (Unicode) and excluded `-`/`_` on the
+  left: `evil.comÄ` and `-evil.example` were never recognised as tokens in the first place and
+  never defanged — messengers still linkify there, because a label must not start with `-` and
+  their linkifier restarts behind it.
+  (c) `final_guard` ran **before** `split_parts`. The hard cut turns an unbroken token into a
+  fragment with a new start **and** a new end — `-0000000.example` became `0000000.example`.
+  What is delivered is the part, what was checked was the whole message.
+- Fix: the rule applies per label from the second one onwards instead of only the last;
+  ASCII token boundaries, and a match may begin after `-`/`_`; `_finalize` runs the final pass
+  again over every part after the split and splits further if needed (ADR-059). Regressions:
   `test_ht4_domain_tokens_are_defanged_even_in_odd_shapes`,
   `test_ht4_no_part_becomes_a_live_domain_through_the_cut`,
-  `test_ht4_numbers_and_abbreviations_stay_readable` (Gegenprobe: `3.14` bleibt lesbar).
+  `test_ht4_numbers_and_abbreviations_stay_readable` (counter-check: `3.14` stays readable).
 
-### HT-5: Einbuchstabiges Schema entgeht der Summarizer-Nachkontrolle
+### HT-5: A single-letter scheme escapes the summarizer post-check
 - Severity: **low**
-- Modul: `agents/summarizer.py` (`_URL_TOKEN_RE`)
-- Beschreibung: Das URL-Muster verlangte mindestens zwei Zeichen vor `://`
-  (`[a-z][a-z0-9+.\-]{1,15}`). `a://ziel.example` passierte die Nachkontrolle also
-  unverändert **und ohne** `injection_suspected` — der Nutzer bekam den Hinweis „Mail
-  enthielt Anweisungen an die KI" nicht zu sehen. Die WP7-Schicht entschärft das Muster
-  weiterhin, es ging also nichts Klickbares raus.
+- Module: `agents/summarizer.py` (`_URL_TOKEN_RE`)
+- Description: the URL pattern required at least two characters before `://`
+  (`[a-z][a-z0-9+.\-]{1,15}`). `a://target.example` therefore passed the post-check unchanged
+  **and without** `injection_suspected` — the user did not get to see the note "mail contained
+  instructions to the AI". The WP7 layer still defuses the pattern, so nothing clickable went
+  out.
 - Fix: `{1,15}` → `{0,15}`. Regression:
   `test_ht5_single_letter_scheme_is_flagged_by_the_summarizer`.
 
-### HT-6: Zweiter Scrub-Durchlauf öffnet ein Defang-Token wieder
+### HT-6: A second scrub pass reopens a defang token
 - Severity: **low**
-- Modul: `output/sanitizer.py` (`_RE_SAFE_SPAN`)
-- Beschreibung: `javascript[:]` und ein alleinstehendes `[.]`/`[:]` galten nicht als
-  „sichere Form". Ein zweiter `scrub_field`-Lauf entfernte die Klammern als Markup und
-  lieferte wieder `javascript:`. Zweite Läufe gibt es wirklich: Der Composer scrubbt seine
-  Hinweiszeilen erneut, und Sammel-Digest-Kopfzeilen sind beim Einreihen bereits
-  output-sanitisiert (ADR-049). Da `final_guard` als letzte Stufe erneut bricht, erreichte
-  die geöffnete Form den Nutzer nicht — die Schicht war aber nicht mehr idempotent, und
-  Defense in Depth lebt davon, dass jede Schicht für sich hält.
-- Fix: Aktions-Schemata (`javascript`, `data`, `tg`, …) und das nackte Defang-Token in
-  `_RE_SAFE_SPAN` aufgenommen. Regression:
-  `test_ht6_defanged_forms_survive_a_second_scrub`.
+- Module: `output/sanitizer.py` (`_RE_SAFE_SPAN`)
+- Description: `javascript[:]` and a standalone `[.]`/`[:]` did not count as a "safe form". A
+  second `scrub_field` pass removed the brackets as markup and yielded `javascript:` again.
+  Second passes really do occur: the composer scrubs its note lines again, and collected-digest
+  headlines are already output-sanitised when enqueued (ADR-049). Since `final_guard` breaks it
+  again as the last stage, the reopened form did not reach the user — but the layer was no
+  longer idempotent, and defence in depth lives on every layer holding on its own.
+- Fix: action schemes (`javascript`, `data`, `tg`, …) and the bare defang token added to
+  `_RE_SAFE_SPAN`. Regression: `test_ht6_defanged_forms_survive_a_second_scrub`.
 
-### HT-7: Keine Befunde bei der Fehlerinjektion
+### HT-7: No findings from fault injection
 - Severity: **info**
-- Modul: `pipeline.py`, `agents/`, `llm/schema.py`, `delivery.py`
-- Beschreibung: 50 Injektionsfälle (`tests/unit/test_hot_fault_injection.py`) an beiden
-  LLM-Positionen — Timeout, Rate-Limit, Transportfehler, `RuntimeError`, `MemoryError`,
-  leere Antwort, `{}`, `null`, `[]`, abgeschnittenes JSON, 50 000 Zeichen Müll,
-  schema-valides Angriffs-JSON mit URLs in jedem Feld, 200 000-Zeichen-Felder, erfundene
-  Zusatzfelder (`tool_calls`, `system_prompt_override`), Messenger-Absturz mitten in einer
-  mehrteiligen Nachricht, kaputter Composer, kaputte State-DB. **Kein Fall** lieferte eine
-  unsanitierte Zustellung, keiner ließ eine Exception aus `process_mail` heraus. Die
-  Metadaten-Notiz enthielt in keinem Fall Mail-Inhalt.
-- Fix: keiner nötig — Eintrag dokumentiert den Null-Befund (Vorgabe §2 Punkt 5).
+- Module: `pipeline.py`, `agents/`, `llm/schema.py`, `delivery.py`
+- Description: 50 injection cases (`tests/unit/test_hot_fault_injection.py`) at both LLM
+  positions — timeout, rate limit, transport error, `RuntimeError`, `MemoryError`, an empty
+  answer, `{}`, `null`, `[]`, truncated JSON, 50,000 characters of garbage, schema-valid attack
+  JSON with URLs in every field, 200,000-character fields, invented extra fields (`tool_calls`,
+  `system_prompt_override`), a messenger crash in the middle of a multi-part message, a broken
+  composer, a broken state DB. **No case** produced an unsanitised delivery, and none let an
+  exception out of `process_mail`. In no case did the metadata note contain mail content.
+- Fix: none needed — the entry documents the null finding (required by §2 point 5).
 
-### HT-8: Marker-Nummerierung folgt der Erkennungsreihenfolge, nicht dem Text
+### HT-8: Marker numbering follows the detection order, not the text
 - Severity: **info**
-- Modul: `sanitize/links.py`
-- Beschreibung: Die Pässe laufen in fester Reihenfolge (URLs → `mailto:` → `tel:` → `www.`
-  → obfuskierte → nackte Domains). Ein `mailto:` weiter hinten im Text bekommt deshalb eine
-  kleinere Nummer als eine Domain weiter vorne; im Text steht dann `[Link #2] … [Mail #1]`.
-- Fix: keiner. Die Nummer dient laut ADR-028 der Zuordnung Marker ↔ Fußnoteneintrag, und
-  die Eindeutigkeit ist gegeben (durch `test_link_collector_records_every_marker` geprüft).
-  Eine Umnummerierung nach Textposition würde die Sammel-Logik über mehrere Textteile
-  hinweg verkomplizieren, ohne eine Anforderung zu erfüllen.
+- Module: `sanitize/links.py`
+- Description: the passes run in a fixed order (URLs → `mailto:` → `tel:` → `www.` →
+  obfuscated → bare domains). A `mailto:` further down the text therefore gets a lower number
+  than a domain further up; the text then reads `[Link #2] … [Mail #1]`.
+- Fix: none. Per ADR-028 the number serves to map marker ↔ footnote entry, and uniqueness holds
+  (checked by `test_link_collector_records_every_marker`). Renumbering by text position would
+  complicate the collecting logic across several text parts without satisfying any requirement.
 
-### HT-9: Modell kann einen `[Link #n: …]`-Marker fälschen
+### HT-9: The model can forge a `[Link #n: …]` marker
 - Severity: **info**
-- Modul: `output/sanitizer.py` (`_RE_SAFE_SPAN`)
-- Beschreibung: Schreibt das Modell (oder über es der Angreifer) `[Link #1: sparkasse.example]`
-  in ein Summary-Feld, passiert die Form als „sichere Form" unverändert; `final_guard`
-  defangt nur die Domain. Der Nutzer sieht einen Marker, der von einem echten nicht zu
-  unterscheiden ist, obwohl die Mail dort keinen Link hatte.
-- Fix: keiner. Ein klickbares Ziel entsteht nicht (I3 hält), und die Form ist inhärent
-  mehrdeutig: Der Summarizer sieht die echten Marker im Datenblock und darf sie zitieren —
-  eine Unterscheidung „echt/erfunden" wäre nur mit einer pro Nachricht zufälligen
-  Marker-Kennung möglich. Das ist eine Formatänderung und gehört, wenn überhaupt, in ein
-  eigenes WP. Für den Nutzer ist die Falschaussage nicht schädlicher als eine erfundene
-  Zusammenfassung, gegen die der Kritiker (`summary_accurate`) steht.
+- Module: `output/sanitizer.py` (`_RE_SAFE_SPAN`)
+- Description: if the model (or an attacker through it) writes `[Link #1: bank.example]` into a
+  summary field, the form passes unchanged as a "safe form"; `final_guard` only defangs the
+  domain. The user sees a marker indistinguishable from a real one, even though the mail had no
+  link there.
+- Fix: none. No clickable target arises (I3 holds), and the form is inherently ambiguous: the
+  summarizer sees the real markers in the data block and may quote them — distinguishing
+  "real/invented" would only be possible with a per-message random marker identifier. That is a
+  format change and belongs, if anywhere, in a WP of its own. For the user the false statement
+  is no more harmful than an invented summary, against which the critic (`summary_accurate`)
+  stands.
 
-### HT-10: `max_text_chars` wird um die Länge des Kürzungsmarkers überschritten
+### HT-10: `max_text_chars` is exceeded by the length of the truncation marker
 - Severity: **info**
-- Modul: `sanitize/sanitizer.py` (`_take_budget`)
-- Beschreibung: Bei Budget 30 000 ist `body_text` 30 010 Zeichen lang — `\n[gekürzt]` kommt
-  nach der Kürzung dazu. Bei ausgeschöpftem Budget bekommt zusätzlich jeder Anhangs-Text
-  den Marker (max. 20 Stück, also ≤ 200 weitere Zeichen).
-- Fix: keiner. Die Überschreitung ist konstant begrenzt und beabsichtigt (der Marker soll
-  sichtbar sein); der Schutzzweck des Limits — kein unbegrenzter Text ins LLM — ist
-  gewahrt. Festgehalten durch `test_text_budget_boundaries`.
+- Module: `sanitize/sanitizer.py` (`_take_budget`)
+- Description: at a budget of 30,000, `body_text` is 30,010 characters long — `\n[gekürzt]` is
+  added after the truncation. With the budget exhausted, every attachment text additionally
+  gets the marker (max. 20 of them, so ≤ 200 further characters).
+- Fix: none. The excess is bounded by a constant and intended (the marker is meant to be
+  visible); the protective purpose of the limit — no unbounded text into the LLM — is preserved.
+  Pinned by `test_text_budget_boundaries`.
 
-### HT-11: `scrub_plain` entfernt Klammern bereits defangter Formen
+### HT-11: `scrub_plain` removes the brackets of already defanged forms
 - Severity: **info**
-- Modul: `output/sanitizer.py`
-- Beschreibung: `scrub_plain` (Domain, Anzeigename, Dateiname) läuft ohne Link-Erkennung und
-  löscht `[`/`]` als Markup. Aus `evil[.]com` wird dabei kurzzeitig wieder `evil.com`.
-- Fix: keiner. `final_guard` defangt unmittelbar danach erneut, und seit HT-4 greift die
-  Regel auch für die Formen, die vorher durchrutschten. Property-Test
-  `test_scrub_plain_output_is_never_clickable` deckt die Kette ab.
+- Module: `output/sanitizer.py`
+- Description: `scrub_plain` (domain, display name, filename) runs without link detection and
+  deletes `[`/`]` as markup. `evil[.]com` briefly becomes `evil.com` again in the process.
+- Fix: none. `final_guard` defangs again immediately afterwards, and since HT-4 the rule also
+  catches the forms that previously slipped through. The property test
+  `test_scrub_plain_output_is_never_clickable` covers the chain.
 
-### HT-12: `compose_plain` scrubbt seine Felder nicht
+### HT-12: `compose_plain` does not scrub its fields
 - Severity: **info**
-- Modul: `output/composer.py`
-- Beschreibung: `compose_plain` ruft nur `_finalize` (Nachbrenner + Split), nicht
-  `scrub_field`. Untrusted Text käme dort also ohne Feld-Scrub durch — Steuerzeichen und
-  Markup blieben erhalten.
-- Fix: keiner. Der einzige Aufrufer ist die CLI-Testnachricht, deren Text im Code steht
-  (ADR-054); der Docstring sagt das ausdrücklich. Festgehalten ist es dadurch, dass der
-  Property-Test `test_split_never_produces_an_unsafe_part` seine Eingabe **explizit** erst
-  durch `scrub_field` schickt — wer das ändert, sieht den Grund im Test.
+- Module: `output/composer.py`
+- Description: `compose_plain` only calls `_finalize` (final pass + split), not `scrub_field`.
+  Untrusted text would therefore pass without a field scrub — control characters and markup
+  would remain.
+- Fix: none. The only caller is the CLI test message, whose text lives in the code (ADR-054);
+  the docstring says so explicitly. It is pinned by the property test
+  `test_split_never_produces_an_unsafe_part` sending its input through `scrub_field`
+  **explicitly** first — whoever changes that sees the reason in the test.
 
-### Coverage-Endstand (NF-6)
+### Final coverage (NF-6)
 
-Gemessen mit `.venv/bin/pytest --cov=src/maildigest --cov-report=term-missing`:
+Measured with `.venv/bin/pytest --cov=src/maildigest --cov-report=term-missing`:
 
-| Bereich | Ziel (NF-6) | vor WP10 | nach WP10 (1103 Tests) | Stand WP12 (1278 Tests) |
+| Area | Target (NF-6) | before WP10 | after WP10 (1103 tests) | as of WP12 (1278 tests) |
 |---------|-------------|----------|------------------------|-------------------------|
-| `sanitize/` | ≥ 90 % | 92,3 % (48 offen) | **98 %** (622 Anw., 10 offen) | **98 %** (645 Anw., 11 offen) |
-| `output/` | ≥ 90 % | 98,0 % | **99 %** (308 Anw., 4 offen) | **99 %** (341 Anw., 2 offen) |
-| gesamt | ≥ 80 % | 95,5 % | **97 %** (3824 Anw., 122 offen) | **97 %** (3986 Anw., 118 offen) |
+| `sanitize/` | ≥ 90 % | 92.3 % (48 open) | **98 %** (622 stmts, 10 open) | **98 %** (645 stmts, 11 open) |
+| `output/` | ≥ 90 % | 98.0 % | **99 %** (308 stmts, 4 open) | **99 %** (341 stmts, 2 open) |
+| overall | ≥ 80 % | 95.5 % | **97 %** (3824 stmts, 122 open) | **97 %** (3986 stmts, 118 open) |
 
-Die verbliebenen Lücken sind Verzweigungen, die nur auf anderen Plattformen erreichbar sind
-(`__main__.py`, `# pragma: no cover`-Zweige) oder HTTP-Fehlerpfade der Provider-/Messenger-
-Adapter, die bereits über `httpx.MockTransport` in ihren eigenen Tests abgedeckt sind.
+The remaining gaps are branches reachable only on other platforms (`__main__.py`,
+`# pragma: no cover` branches) or HTTP error paths of the provider/messenger adapters that are
+already covered by `httpx.MockTransport` in their own tests.
 
-### Neue Testdateien aus WP10
+### New test files from WP10
 
-| Datei | Inhalt |
+| File | Content |
 |-------|--------|
-| `tests/unit/test_hot_properties.py` | Property-Based-Tests (hypothesis, ADR-058) — die vier Kern-Properties aus §2 Punkt 3 |
-| `tests/unit/test_hot_edge_cases.py` | Grenzfälle aus PLAN WP10 + Regressionstests zu HT-1/2/4/5/6 |
-| `tests/unit/test_hot_fault_injection.py` | Fehlerinjektion an jeder Stufe, beide LLM-Positionen (§2 Punkt 4) |
-| `tests/unit/test_hot_state_concurrency.py` | SQLite-Locking, zwei Prozesse/zwölf Threads, Wiederanlauf, Schema |
-| `tests/unit/test_hot_schedule.py` | Digest-Uhrzeit (Mitternacht, Zeitumstellung) und die 1-Stunden-Schranke der Outbox |
-| `tests/unit/test_hot_cli_robustness.py` | Kaputte Config, fehlende Rechte, keine Secrets in Fehlermeldungen |
-| `tests/unit/test_hot_sanitize_error_paths.py` | Defensive Zweige des Sanitizers und der PDF-Kindprozess |
+| `tests/unit/test_hot_properties.py` | Property-based tests (hypothesis, ADR-058) — the four core properties from §2 point 3 |
+| `tests/unit/test_hot_edge_cases.py` | Edge cases from PLAN WP10 + regression tests for HT-1/2/4/5/6 |
+| `tests/unit/test_hot_fault_injection.py` | Fault injection at every stage, both LLM positions (§2 point 4) |
+| `tests/unit/test_hot_state_concurrency.py` | SQLite locking, two processes/twelve threads, restart, schema |
+| `tests/unit/test_hot_schedule.py` | Digest time (midnight, DST change) and the 1-hour bound of the outbox |
+| `tests/unit/test_hot_cli_robustness.py` | Broken config, missing permissions, no secrets in error messages |
+| `tests/unit/test_hot_sanitize_error_paths.py` | Defensive branches of the sanitizer and the PDF child process |
 
-### HT-13: Ketten von Zeilen-Markdown überlebten den Scrub
+### HT-13: Chains of line Markdown survived the scrub
 - Severity: **low**
-- Modul: `output/sanitizer.py` (`scrub_plain`, Rundenzahl)
-- Beschreibung: Gefunden vom Property-Test mit `⚠️# # #`. Jede Runde entfernt nur **einen**
-  Marker je Zeile, und ein vorangestelltes Struktur-Emoji verschiebt den Zeilenanfang um
-  eine weitere Runde — bei drei Runden blieb ein `#` stehen. Ein alleinstehendes `#`
-  rendert zwar keine Überschrift, die zugesicherte Eigenschaft („kein Zeilenanfangs-Markdown
-  überlebt") galt aber nicht mehr.
-- Fix: eigene, großzügige Rundenzahl für diesen Schritt (`_MAX_LINE_MARKUP_ROUNDS = 12`)
-  statt der gemeinsamen 3. Regression: `test_ht13_ketten_von_zeilen_markdown_ueberleben_nicht`.
-- Herkunft: Der Fall tauchte erst Monate nach WP10 auf — die Property zieht bei jedem Lauf
-  neue Beispiele. Genau dafür ist sie da.
+- Module: `output/sanitizer.py` (`scrub_plain`, the number of rounds)
+- Description: found by the property test with `⚠️# # #`. Every round removes only **one**
+  marker per line, and a leading structural emoji shifts the line start by one further round —
+  with three rounds a `#` remained. A standalone `#` does not render a heading, but the assured
+  property ("no line-leading Markdown survives") no longer held.
+- Fix: a separate, generous number of rounds for this step (`_MAX_LINE_MARKUP_ROUNDS = 12`)
+  instead of the shared 3. Regression:
+  `test_ht13_ketten_von_zeilen_markdown_ueberleben_nicht`.
+- Origin: the case only surfaced months after WP10 — the property draws new examples on every
+  run. That is exactly what it is for.
 
-## 6. Findings-Log (Cold-Testing)
+## 6. Findings log (cold testing)
 
-Durchlauf WP11, 2026-09-08. Der vollständige Blackbox-Report mit Repro-Schritten,
-Abdeckungstabelle und Gesamturteil steht in **`tests/cold/REPORT.md`**; er wird nicht
-nachträglich geändert — er ist das Protokoll dessen, was ein Agent ohne Code-Kenntnis
-gemessen hat. Diese Tabelle führt den Nachlauf (§3): Triage, Fix und Regressionstest.
+Run WP11, 2026-09-08. The complete black-box report with reproduction steps, a coverage table
+and the overall verdict is in **`tests/cold/REPORT.md`**; it is not changed after the fact — it
+is the record of what an agent without knowledge of the code measured. This table carries the
+follow-up (§3): triage, fix and regression test.
 
-Severity-Maßstab wie in §5 (Wirkung beim Nutzer). Die Fixes liefen in drei parallelen
-Läufen (Ausgabe/Kritiker, Ingest/Zustellung, CLI); die Finalisierung hat sie
-zusammengeführt, gegengeprüft und die vier offen gebliebenen Punkte nachgezogen.
+The severity yardstick is as in §5 (the effect on the user). The fixes ran in three parallel
+passes (output/critic, ingest/delivery, CLI); the finalisation merged them, cross-checked them
+and followed up the four points left open.
 
-| CT | Severity | Titel (Kurzform) | Status |
+| CT | Severity | Title (short) | Status |
 |----|----------|------------------|--------|
-| CT-1 | high | Globale Optionen vor dem Kommandonamen wirkungslos | **gefixt** (ADR-068) — `test_cli.py::test_ct1_*`, `test_cold_suite.py::test_ct1_*` |
-| CT-2 | low | Fehlermeldung verweist auf ARCHITECTURE statt SPEC-CLI | **gefixt** — `test_config.py::test_ct2_*`, `test_cold_suite.py::test_ct2_*` |
-| CT-3 | info | `[llm.critic]` unvollständig; Frage-Hinweis ohne Frage | **gefixt** — `test_cli.py::test_ct3_*`, `test_cold_suite.py::test_ct3_*` |
-| CT-4 | medium | `test --dry-run` behauptet eine Zustellung, zeigt die Notiz nicht | **gefixt** (ADR-071) — `test_cli_e2e.py::test_ct4_*`, `test_cold_suite.py::test_ct4_*` |
-| CT-5 | low | Out-of-range-Portwert endet mit Exit 1 statt 2 | **gefixt** (ADR-069) — `test_cli.py::test_ct5_*`, `test_cold_suite.py::test_ct5_*` |
-| CT-6 | high | Injection-Verdacht hängt allein am LLM (F-SEC-5) | **gefixt** (ADR-061) — `test_summarizer.py::test_ct6_*`, `test_cold_suite.py::test_ct6_*` |
-| CT-7 | medium | Markdown erreicht den Messenger (F-SEC-3) | **gefixt** (ADR-062) — `test_output_sanitizer.py::test_ct7_*`, Property-Tests, `test_cold_suite.py` |
-| CT-7a | medium | Derselbe Leak ohne Modell, über die Betreffzeile der Notiz | **gefixt** (ADR-062) — `test_ct7a_*`, `test_cold_suite.py::test_ct7a_*` |
-| CT-8 | medium | Nachrichtenstruktur ist fälschbar (Fake-Hinweiszeile) | **gefixt** (ADR-062) — `test_ct8_*`, `test_cold_suite.py::test_der_angreifer_kann_keine_programmzeile_faelschen` |
-| CT-9 | high | Unbedingtes EXPUNGE nach jedem Gelesen-Flag (F-ING-1) | **gefixt** (ADR-064) — `test_ingest_client.py::test_ct9_*`, `test_ingest_poll.py::test_ct9_*` |
-| CT-10 | medium | Bilanzzeile zählt zugestellte Nachrichten immer als 0 | **gefixt** (ADR-070) — `test_cli_e2e.py::test_ct10_*` |
-| CT-11 | medium | Harte Signale heben nie auf `high`, kein Banner (F-CRIT-3) | **gefixt** (ADR-063) — `test_critic_signals.py::test_ct11_*`, `test_cold_suite.py::test_ct11_*` |
-| CT-12 | low | „Postfach nicht erreichbar" bei fehlendem Zielordner | **gefixt** (ADR-065) — `test_ingest_client.py::test_ct12_*`, `test_ingest_poll.py::test_ct12_*` |
-| CT-13 | medium | Retry stellt bereits gesendete Teile erneut zu | **gefixt** (ADR-066) — `test_delivery.py::test_ct13_*` |
-| CT-14 | medium | `[links] footnote = true` ohne Wirkung | **gefixt** (ADR-072) — `test_output_composer.py::test_ct14_*`, `test_cold_suite.py::test_ct14_*` |
-| CT-15 | medium | Divergierender HTML-Teil bei `multipart/alternative` | **gefixt** (ADR-067) — `test_sanitize_mail.py::TestCt15*`, `test_output_composer.py::test_ct15_*`, `test_cold_suite.py::test_ct15_*` |
-| CT-16a | info | `(1 Teil)` statt des wörtlichen `(N Teile)` der Spec | **offen, bewusst** — der Code hat recht (deutsche Grammatik), der Vertrag war unpräzise. Klarstellung in SPEC-CLI §4 `test`. Kein Code-Fix. |
-| CT-16b | info | EOF auf stdin endet mit Exit 1 statt 2 | **gefixt** (ADR-069) — `test_cli.py::test_ct16_*`, `test_cold_suite.py::test_ct16b_*` |
-| CT-16c | info | LLM-Versuchszahlen schwanken (9/3/2) | **offen, bewusst** — drei multiplikative Retry-Ebenen, jede mit eigener Begründung. Kein Bug; aufgeschlüsselt in ARCHITECTURE §6, Verweis aus F-SEC-7. |
-| CT-16d | info | REQUIREMENTS F-SEC-4 nennt fälschlich `text/html` | **gefixt (Doku)** — REQUIREMENTS F-SEC-4 korrigiert; das Verhalten war richtig, die Anforderung falsch. |
-| CT-16e | info | Positivbefund: `log_level=INFO` unterdrückt Tracebacks | **kein Befund** — nichts zu tun. |
+| CT-1 | high | Global options before the command name have no effect | **fixed** (ADR-068) — `test_cli.py::test_ct1_*`, `test_cold_suite.py::test_ct1_*` |
+| CT-2 | low | The error message points at ARCHITECTURE instead of SPEC-CLI | **fixed** — `test_config.py::test_ct2_*`, `test_cold_suite.py::test_ct2_*` |
+| CT-3 | info | `[llm.critic]` incomplete; a question hint without a question | **fixed** — `test_cli.py::test_ct3_*`, `test_cold_suite.py::test_ct3_*` |
+| CT-4 | medium | `test --dry-run` claims a delivery and does not show the note | **fixed** (ADR-071) — `test_cli_e2e.py::test_ct4_*`, `test_cold_suite.py::test_ct4_*` |
+| CT-5 | low | An out-of-range port value ends with exit 1 instead of 2 | **fixed** (ADR-069) — `test_cli.py::test_ct5_*`, `test_cold_suite.py::test_ct5_*` |
+| CT-6 | high | The injection suspicion depends on the LLM alone (F-SEC-5) | **fixed** (ADR-061) — `test_summarizer.py::test_ct6_*`, `test_cold_suite.py::test_ct6_*` |
+| CT-7 | medium | Markdown reaches the messenger (F-SEC-3) | **fixed** (ADR-062) — `test_output_sanitizer.py::test_ct7_*`, property tests, `test_cold_suite.py` |
+| CT-7a | medium | The same leak without a model, through the subject line of the note | **fixed** (ADR-062) — `test_ct7a_*`, `test_cold_suite.py::test_ct7a_*` |
+| CT-8 | medium | The message structure is forgeable (a fake note line) | **fixed** (ADR-062) — `test_ct8_*`, `test_cold_suite.py::test_der_angreifer_kann_keine_programmzeile_faelschen` |
+| CT-9 | high | Unconditional EXPUNGE after every seen flag (F-ING-1) | **fixed** (ADR-064) — `test_ingest_client.py::test_ct9_*`, `test_ingest_poll.py::test_ct9_*` |
+| CT-10 | medium | The summary line always counts delivered messages as 0 | **fixed** (ADR-070) — `test_cli_e2e.py::test_ct10_*` |
+| CT-11 | medium | Hard signals never raise to `high`, no banner (F-CRIT-3) | **fixed** (ADR-063) — `test_critic_signals.py::test_ct11_*`, `test_cold_suite.py::test_ct11_*` |
+| CT-12 | low | "Mailbox unreachable" for a missing target folder | **fixed** (ADR-065) — `test_ingest_client.py::test_ct12_*`, `test_ingest_poll.py::test_ct12_*` |
+| CT-13 | medium | A retry delivers already sent parts again | **fixed** (ADR-066) — `test_delivery.py::test_ct13_*` |
+| CT-14 | medium | `[links] footnote = true` has no effect | **fixed** (ADR-072) — `test_output_composer.py::test_ct14_*`, `test_cold_suite.py::test_ct14_*` |
+| CT-15 | medium | A diverging HTML part with `multipart/alternative` | **fixed** (ADR-067) — `test_sanitize_mail.py::TestCt15*`, `test_output_composer.py::test_ct15_*`, `test_cold_suite.py::test_ct15_*` |
+| CT-16a | info | `(1 Teil)` instead of the spec's literal `(N Teile)` | **open, deliberately** — the code is right (German grammar), the contract was imprecise. Clarified in SPEC-CLI §4 `test`. No code fix. |
+| CT-16b | info | EOF on stdin ends with exit 1 instead of 2 | **fixed** (ADR-069) — `test_cli.py::test_ct16_*`, `test_cold_suite.py::test_ct16b_*` |
+| CT-16c | info | LLM attempt counts vary (9/3/2) | **open, deliberately** — three multiplicative retry levels, each with its own rationale. Not a bug; broken down in ARCHITECTURE §6, referenced from F-SEC-7. |
+| CT-16d | info | REQUIREMENTS F-SEC-4 wrongly names `text/html` | **fixed (docs)** — REQUIREMENTS F-SEC-4 corrected; the behaviour was right, the requirement wrong. |
+| CT-16e | info | Positive finding: `log_level=INFO` suppresses tracebacks | **no finding** — nothing to do. |
 
-**Bewusste Abweichung bei CT-6.** Ein Teilaspekt des Befunds („entfernter versteckter Text
-setzt `injection_suspected`") ist absichtlich anders gelöst: `hidden_text_removed` setzt das
-Flag **nicht**. Unsichtbarer Text ist in Newslettern der Regelfall (Preheader mit
-`display:none`); die Zeile „Mail enthielt Anweisungen an die KI (ignoriert)" wäre dort
-schlicht falsch und würde die Warnung entwerten — Warnmüdigkeit statt Warnung. Das Signal
-erreicht den Nutzer stattdessen als eigener, wörtlich zutreffender Hinweis „versteckter Text
-im HTML entfernt" (ADR-061). Der Kern des Befunds — deterministische Signale erreichen den
-Nutzer nie — ist damit behoben.
+**A deliberate deviation on CT-6.** One aspect of the finding ("removed hidden text sets
+`injection_suspected`") is deliberately solved differently: `hidden_text_removed` does **not**
+set the flag. Invisible text is the norm in newsletters (preheaders with `display:none`); the
+line "mail contained instructions to the AI (ignored)" would simply be wrong there and would
+devalue the warning — warning fatigue instead of a warning. The signal reaches the user as a
+separate, literally accurate note "hidden text removed from the HTML" instead (ADR-061). The
+core of the finding — deterministic signals never reaching the user — is thereby fixed.
 
-### Befunde der Finalisierung (Review der drei Fix-Läufe)
+### Findings from the finalisation (review of the three fix passes)
 
-Die Zusammenführung hat vier Lücken gefunden, die keiner der drei Läufe schließen konnte
-oder wollte; sie sind in dieser Fassung mit erledigt:
+The merge found four gaps that none of the three passes could or would close; they are handled
+in this version:
 
-- **CT-2 und CT-14 lagen zwischen den Zuständigkeiten.** Beide Fixes liegen in Dateien, die
-  einem jeweils anderen Parallel-Agenten zugewiesen waren; beide wurden mit exaktem
-  Patchvorschlag als „nicht gefixt" gemeldet. Nachgezogen.
-- **Das CT-15-Signal erreichte den Nutzer nicht.** Der Sanitizer berechnete
-  `html_divergent`, aber weder `output/composer._hints_line` noch
-  `agents/critic.collect_signals` werteten es aus — das Feld war folgenlos. Nachgezogen.
-- **Ein Fremdtest kodierte den CT-10-Bug.**
-  `test_runner_e2e.py::test_crash_between_commit_and_delivery_loses_nothing` erwartete
-  `delivery.delivered == 1` und fixierte damit die alte, fehlerhafte Buchführung. Auf
-  `1 + stats.ingest.processed` korrigiert (ADR-070).
-- **Die CT-6-Phrasenliste war zu breit.** `du bist jetzt …` und `system prompt` allein
-  hätten Alltagsdeutsch getroffen („du bist jetzt dran", „wir besprechen den System-Prompt
-  im Meeting") — derselbe Fehlalarm-Mechanismus, wegen dessen `hidden_text_removed`
-  ausgeschlossen wurde. Die Muster verlangen jetzt ein Objekt (`… ein Sprachmodell`,
-  `nenne mir deinen Systemprompt`).
+- **CT-2 and CT-14 fell between responsibilities.** Both fixes live in files assigned to a
+  different parallel agent; both were reported as "not fixed" with an exact patch proposal.
+  Followed up.
+- **The CT-15 signal did not reach the user.** The sanitizer computed `html_divergent`, but
+  neither `output/composer._hints_line` nor `agents/critic.collect_signals` evaluated it — the
+  field had no consequence. Followed up.
+- **A foreign test encoded the CT-10 bug.**
+  `test_runner_e2e.py::test_crash_between_commit_and_delivery_loses_nothing` expected
+  `delivery.delivered == 1` and thereby pinned the old, faulty accounting. Corrected to
+  `1 + stats.ingest.processed` (ADR-070).
+- **The CT-6 phrase list was too broad.** `du bist jetzt …` and `system prompt` on their own
+  would have hit everyday German ("du bist jetzt dran", "wir besprechen den System-Prompt im
+  Meeting") — the same false-alarm mechanism for which `hidden_text_removed` was excluded. The
+  patterns now require an object (`… ein Sprachmodell`, `nenne mir deinen Systemprompt`).
 
-### Was automatisiert ist — und was Skript bleibt
+### What is automated — and what stays a script
 
-`tests/cold/test_cold_suite.py` (73 Tests, Teil von `pytest`) fährt den Angriffs-Korpus
-`tests/cold/mails/*.eml` über dieselbe Eintrittstür wie der Cold-Tester
-(`maildigest.cli.main()`). Ersetzt sind nur die drei Außenkontakte, für die er Mocks
-gestartet hatte: LLM-**Provider** (nicht der Agent — sonst wäre die deterministische
-Nachkontrolle aus CT-6/CT-11 umgangen und der Test wertlos), Messenger und IMAP.
-Automatisiert sind: die Kern-Property über den gesamten Korpus gegen ein vollständig
-übernommenes Modell, die Struktur-Fälschung (CT-8), CT-4, CT-6, CT-7/7a, CT-11, CT-14,
-CT-15 sowie die reinen CLI-Befunde CT-1, CT-2, CT-3, CT-5, CT-16b und eine F-SEC-8-Probe
-mit den markierten Fake-Secrets des Cold-Tests.
+`tests/cold/test_cold_suite.py` (73 tests, part of `pytest`) drives the attack corpus
+`tests/cold/mails/*.eml` through the same front door as the cold tester
+(`maildigest.cli.main()`). Only the three outside contacts it had started mocks for are
+replaced: the LLM **provider** (not the agent — otherwise the deterministic post-check from
+CT-6/CT-11 would be bypassed and the test worthless), the messenger and IMAP. Automated are:
+the core property over the whole corpus against a model that is taken over completely, the
+structure forgery (CT-8), CT-4, CT-6, CT-7/7a, CT-11, CT-14, CT-15 as well as the pure CLI
+findings CT-1, CT-2, CT-3, CT-5, CT-16b and an F-SEC-8 probe with the cold test's marked fake
+secrets.
 
-**Nicht automatisiert, bleibt dokumentiertes manuelles Skript** (`tests/cold/scripts/`,
-wörtlich so im Repo, wie der Cold-Tester sie laufen ließ; von pytest ausgenommen über
-`tests/cold/conftest.py` und im Lint über `pyproject.toml`):
+**Not automated, remains a documented manual script** (`tests/cold/scripts/`, verbatim in the
+repo as the cold tester ran them; excluded from pytest via `tests/cold/conftest.py` and from
+linting via `pyproject.toml`):
 
-| Skript | Warum nicht in pytest |
+| Script | Why not in pytest |
 |--------|------------------------|
-| `imap_server.py` | Echter IMAP4rev1-Server über TLS-Socket. CT-9/CT-12 sind stattdessen über die Postfach-Attrappen in `test_ingest_client.py`/`test_ingest_poll.py` abgedeckt, die jedes rohe Kommando protokollieren und bei `flag()`/`move()`/`delete()`/`expunge()` hart auffliegen. |
-| `sink_server.py` | HTTP-Sink mit Abbruchmodi (`die_after_1`, `http500`). Der Verbindungsabbruch mitten in einer mehrteiligen Nachricht (CT-13) ist in `test_delivery.py` ohne Socket nachgebaut. |
-| `mock_llm.py` | OpenAI-kompatibler HTTP-Endpunkt. In der Suite als `FakeProvider` auf der Provider-Schnittstelle nachgebaut — dieselben Modi (`nice`, `raw`, `broken`), ohne Port und ohne Wartezeit. |
-| `split_test.py` | 210 Läufe × Prozessstart über 28 Offsets (Minuten Laufzeit). Die Eigenschaft ist als Property-Test in `test_hot_properties.py` abgedeckt (ADR-059). |
-| `check_sink.py`, `mocks.sh`, `run_mails.sh`, `make_mails.py` | Auswertungs- und Setup-Helfer der Blackbox-Umgebung; ohne diese Umgebung gegenstandslos. `make_mails.py` hat den Korpus unter `tests/cold/mails/` erzeugt. |
+| `imap_server.py` | A real IMAP4rev1 server over a TLS socket. CT-9/CT-12 are covered instead by the mailbox doubles in `test_ingest_client.py`/`test_ingest_poll.py`, which log every raw command and fail loudly on `flag()`/`move()`/`delete()`/`expunge()`. |
+| `sink_server.py` | An HTTP sink with abort modes (`die_after_1`, `http500`). The connection abort in the middle of a multi-part message (CT-13) is reproduced in `test_delivery.py` without a socket. |
+| `mock_llm.py` | An OpenAI-compatible HTTP endpoint. Reproduced in the suite as `FakeProvider` on the provider interface — the same modes (`nice`, `raw`, `broken`), without a port and without waiting. |
+| `split_test.py` | 210 runs × process start across 28 offsets (minutes of runtime). The property is covered as a property test in `test_hot_properties.py` (ADR-059). |
+| `check_sink.py`, `mocks.sh`, `run_mails.sh`, `make_mails.py` | Evaluation and setup helpers of the black-box environment; meaningless without that environment. `make_mails.py` produced the corpus under `tests/cold/mails/`. |
 
-Für eine zweite Cold-Runde (§3 Nachlauf) sind die Skripte damit weiterhin lauffähig; sie
-brauchen die Arbeitsumgebung aus dem Report-Kopf und absolute Pfade darin.
+For a second cold round (§3 follow-up) the scripts therefore remain runnable; they need the
+working environment from the report header and absolute paths in it.
 
-## 7. Findings-Log (Abschluss-Testrunde, HC-1 … HC-38)
+## 7. Findings log (final test round, HC-1 … HC-38)
 
-Durchlauf 2026-09-09 bis 2026-09-11 auf Stand `13cb859`; der vollständige Bericht mit Repro,
-Ursache und Skeptikerprüfung steht in **`docs/TESTRUNDE-HOT-COLD.md`** und wird nicht
-nachträglich geändert. Diese Tabelle führt den Nachlauf: Zuständigkeit, Status, Regressionstest.
-Der Fixplan mit Paketschnitt, Entscheidungen und Akzeptanzkriterien ist
-[docs/PLAN-FIXRUNDE.md](PLAN-FIXRUNDE.md).
+Run 2026-09-09 to 2026-09-11 on state `13cb859`; the complete report with reproduction, cause
+and skeptic review is in **`docs/TESTRUNDE-HOT-COLD.md`** (German) and is not changed after the
+fact. This table carries the follow-up: responsibility, status, regression test. The fix plan
+with the package split, decisions and acceptance criteria is
+[docs/PLAN-FIXRUNDE.md](PLAN-FIXRUNDE.md) (German).
 
-Severity-Maßstab wie in §5 und §6 (Wirkung beim Nutzer). Die Fixes liefen in neun Paketen über
-vier Wellen (`4697231`, `4b6f709`, `a9a4d87`, `64c0ae4`); die Testzahl stieg dabei von 1354 auf
-1565.
+The severity yardstick is as in §5 and §6 (the effect on the user). The fixes ran in nine
+packages across four waves (`4697231`, `4b6f709`, `a9a4d87`, `64c0ae4`); the test count rose
+from 1354 to 1565 in the process.
 
-| HC | Sev. | Titel (Kurzform) | Status | Tests | ADR |
+| HC | Sev. | Title (short) | Status | Tests | ADR |
 |----|------|------------------|--------|-------|-----|
-| HC-1 | high | Betreff > 100 Zeichen bricht den Betrieb ohne Modell fail-closed ab | **gefixt** | `test_offline.py::test_hc1_langer_betreff_wird_gekuerzt_statt_fail_closed`, `::test_hc1_betreff_von_genau_101_zeichen_geht_durch` | ADR-076 (N) |
-| HC-2 | medium | Verarbeiteter Anhang verschwindet ohne Modell stumm | **gefixt** | `test_offline.py::test_hc2_*` (5), `test_cli.py::test_hc38_selbsttest_im_werkszustand_zeigt_den_anhang` | ADR-076 (N), ADR-034 (N) |
-| HC-3 | medium | `connect-llm` setzt fremde `base_url`, zeigt falsche Anleitung | **gefixt** | `test_cli_connect.py::test_hc3_*` (4), `test_providers.py::test_hc3_*` (2) | ADR-075 (N), ADR-076 (N) |
-| HC-4 | medium | Anbieter-Fehlertext erreicht das Terminal ungefiltert (ANSI) | **gefixt** | `test_llm_providers.py::test_hc4_*` (2), `test_cli_connect.py::test_hc4_*` (2), `test_hot_cli_robustness.py::test_hc4_*` (6) | ADR-055 (N) |
-| HC-5 | medium | Gefälschte Datenblock-Marker werden still entfernt statt geflaggt | **gefixt** | `test_summarizer.py::test_hc5_*`, `test_sanitize_mail.py::TestHc5GefaelschteDatenblockMarker`, `test_cold_suite.py::test_hc5_hc21_*` | ADR-061 (N) |
-| HC-6 | medium | Split kann eine gefälschte Programmzeile am Teilanfang erzeugen | **gefixt** | `test_output_sanitizer.py::test_hc6_*`, `test_hot_properties.py::test_hc6_*`, `test_cold_suite.py::test_hc6_*` | ADR-062 (N), ADR-040 (N) |
-| HC-7 | medium | Markdown in der Link-Fußnote wird nicht neutralisiert | **gefixt** | `test_output_composer.py::test_hc7_*`, `test_sanitize_links.py::…::test_hc7_*` | ADR-062 (N) |
-| HC-8 | medium | Steuerzeichen U+0000 erreicht den zugestellten Nachrichtenteil | **gefixt** | `test_hot_properties.py::test_hc8_*`, `test_sanitize_links.py::…::test_hc8_*` (2), `test_output_sanitizer.py::test_hc8_*` | — |
-| HC-9 | medium | Nackte IPv4 bleibt mit Nachbarzeichen ungebrochen | **gefixt** | `test_output_sanitizer.py::test_hc9_*` (2), `test_hot_properties.py::test_scrub_field_output_is_never_clickable` | ADR-036 (N) |
-| HC-10 | medium | Dedupe-Key ist der vom Angreifer gesetzte `Message-ID`-Header | **gefixt** | `test_ingest_poll.py::test_hc10_*` (5), `test_state_db.py::test_hc10_*` (6), `test_ingest_rawmail.py::test_hc10_*` (3), `test_output_composer.py::test_hc10_*` (2) | **ADR-079**, ADR-018/019/048 (N) |
-| HC-11 | medium | Mailstämmiger Text landet über `extra_forbidden` im Log | **gefixt** | `test_llm_schema.py::test_hc11_*` (2), `test_hot_fault_injection.py::test_hc11_*` | ADR-024 (N) |
-| HC-12 | medium | `/digest` verkürzt die Wartezeit nicht | **gefixt** | `test_runner.py::test_hc12_*` (2) | **ADR-080**, ADR-077 (N) |
-| HC-13 | medium | Nach `/digest` werden alle weiteren Befehle verworfen | **gefixt** | `test_runner.py::test_hc13_*` (2) | ADR-077 (N) |
-| HC-14 | low | Oberfläche englisch, Vertrag deutsch | **gefixt** | `test_hc14_spec_literals.py` (19 Fälle) | **ADR-083** |
-| HC-15 | medium | `connect-mail` lässt gesperrte Anbieter als Mailadresse durch | **gefixt** | `test_cli_connect.py::test_hc15_*` (4), `test_providers.py::test_hc15_*` | ADR-075 (N) |
-| HC-16 | low | Testnachricht nennt ungültige Config-Sektion, geht an alle Messenger | **erledigt in `14ad9ed`** (ADR-078) | `test_cli.py::test_testnachricht_nennt_keine_ungueltige_config_sektion` | ADR-078 |
-| HC-17 | low | Selbsttest-Vorspann behauptet bei `--eml` die Beispielmail | **gefixt** | `test_cli_e2e.py::test_hc17_*` (2) | — |
-| HC-18 | low | `init` schreibt nicht den vollständigen Feldsatz aus §5 | **gefixt** (Rest; Feldsatz war in `14ad9ed` vorweggenommen) | `test_cli.py::test_hc18_*`, `test_spec_cli.py::test_hc18_*`, `test_cli_connect.py::test_hc18_*` | ADR-076 (N) |
-| HC-19 | low | Befehls-Hinweis entfällt bei `connect-messenger --chat-id` | **gefixt** | `test_cli_connect.py::test_hc19_*` (2) | — |
-| HC-20 | medium | Konfiguration wird nicht atomar geschrieben | **gefixt** | `test_hot_cli_robustness.py::test_hc20_*` (3) | **ADR-081** |
-| HC-21 | medium | Phrasenliste verpasst die gängigsten Formulierungen | **gefixt** | `test_summarizer.py::test_hc21_*` (3, 13 Fälle), `test_cold_suite.py::test_hc5_hc21_*` | ADR-061 (N), ADR-076 (N) |
-| HC-22 | low | Zu langer Dateiname wird ohne das zugesagte `…` gekürzt | **gefixt** | `test_sanitize_attachments.py::…::test_hc22_*` (4), `test_output_composer.py::test_hc22_*` | ADR-040 (N) |
-| HC-23 | low | Absender-Anzeigename wird nie RFC-2047-dekodiert | **gefixt** | `test_ingest_rawmail.py::test_hc23_*` (5) | ADR-020 (N) |
-| HC-24 | low | Marken > 63 Zeichen hebeln `_RE_DOMAINISH` aus; Orakel spiegelt die Schranke | **gefixt** | `test_output_sanitizer.py::test_hc24_*` (2), `test_hot_properties.py::test_scrub_*_output_is_never_clickable` | ADR-036 (N) |
-| HC-25 | low | Outbox-Fristen hängen an der Wanduhr | **gefixt** | `test_delivery.py::test_hc25_*` (5) | ADR-048 (N) |
-| HC-26 | low | Sammel-Digest wird von einem IMAP-Ausfall mitblockiert | **gefixt** | `test_runner.py::test_hc26_*` (3) | ADR-049 (N) |
-| HC-27 | low | `run --once` fragt nie Befehle ab | **gefixt** | `test_runner.py::test_hc27_*` (3) | **ADR-080** |
-| HC-28 | low | `/status`-Antwort umgeht `scrub_field` | **gefixt** | `test_runner.py::test_hc28_status_antwort_scrubbt_den_ordnernamen` | ADR-077 (N) |
-| HC-29 | low | Quadratische Laufzeit in `_redact_tokens` | **gefixt** | `test_summarizer.py::test_hc29_*` (2, 3 Fälle) | — |
-| HC-30 | low | `Retry-After: nan` verlässt die Fehler-Taxonomie | **gefixt** | `test_llm_providers.py::test_hc30_*` (2), `test_messenger_adapters.py::test_hc30_*` (2) | — |
-| HC-31 | low | README-„Grenzen" und CHANGELOG kannten die Fernauslösung nicht | **erledigt in `14ad9ed`** (der Commit-Text nennt es fälschlich „HC-19") | — | ADR-078 |
-| HC-32 | low | `connect-mail`: unpassender Anbieter-Hinweis, keine Serverantwort | **gefixt** (vorher selbst nachgestellt) | `test_ingest_client.py::test_hc32_*` (2), `test_cli_connect.py::test_hc32_*` (3) | — |
-| HC-33 | low | PGP/S-MIME-Mail sieht aus wie eine inhaltsleere Mail | **gefixt** (vorher selbst nachgestellt) | `test_sanitize_mail.py::TestHc33VerschluesselteMail` (4), `test_output_composer.py::test_hc33_*` (2), `test_critic_signals.py::test_hc33_*` (3) | **ADR-082** |
-| HC-34 | low | Fehlendes IMAP-Passwort als „Postfach nicht erreichbar" | **gefixt** (vorher selbst nachgestellt) | `test_cli.py::test_hc34_run_meldet_fehlendes_passwort_als_konfigurationsfehler` | — |
-| HC-35 | low | Bei nicht bestätigter Zustellung fehlt die Zeile `5/5 …` | **gefixt** (vorher selbst nachgestellt) | `test_cli_e2e.py::test_hc35_nicht_bestaetigte_zustellung_hat_eine_fuenfte_zeile` | — |
-| HC-36 | low | `connect-llm --provider` zeigt immer die Groq-Anleitung | **in HC-3 aufgegangen** (gleiche Ursache, dort gefixt) | `test_cli_connect.py::test_hc3_provider_anthropic_zeigt_die_anthropic_anleitung` | ADR-075 (N) |
-| HC-37 | info | Zwei Schichtgrenzen der Befehlserkennung | **gefixt (Doku)** — (a) README/SPEC beschreiben die tolerante Erkennung jetzt korrekt, das Verhalten war richtig; (b) als Schichtgrenze unten festgehalten | `test_commands.py::test_bekannte_befehle_werden_erkannt`, `::test_botname_anhang_wird_abgetrennt`, `::test_argumente_werden_ignoriert_nicht_gelesen`, `::test_freier_text_wird_verworfen` | — |
-| HC-38 | low | Testabdeckung Standardmodus, `/digest`-Zweig, mechanische Zusagen | **gefixt** (drei Teile in FP-1/FP-6/FP-9) | `test_runner.py::test_hc38_*` (2), `test_cli_connect.py::test_hc38_*`, `test_cli.py::test_hc38_*` (2), `test_invarianten.py::test_hc38_*` (3) | — |
+| HC-1 | high | A subject > 100 characters aborts operation without a model fail-closed | **fixed** | `test_offline.py::test_hc1_langer_betreff_wird_gekuerzt_statt_fail_closed`, `::test_hc1_betreff_von_genau_101_zeichen_geht_durch` | ADR-076 (A) |
+| HC-2 | medium | A processed attachment disappears silently without a model | **fixed** | `test_offline.py::test_hc2_*` (5), `test_cli.py::test_hc38_selbsttest_im_werkszustand_zeigt_den_anhang` | ADR-076 (A), ADR-034 (A) |
+| HC-3 | medium | `connect-llm` sets a foreign `base_url` and shows the wrong instructions | **fixed** | `test_cli_connect.py::test_hc3_*` (4), `test_providers.py::test_hc3_*` (2) | ADR-075 (A), ADR-076 (A) |
+| HC-4 | medium | The provider's error text reaches the terminal unfiltered (ANSI) | **fixed** | `test_llm_providers.py::test_hc4_*` (2), `test_cli_connect.py::test_hc4_*` (2), `test_hot_cli_robustness.py::test_hc4_*` (6) | ADR-055 (A) |
+| HC-5 | medium | Forged data-block markers are removed silently instead of flagged | **fixed** | `test_summarizer.py::test_hc5_*`, `test_sanitize_mail.py::TestHc5GefaelschteDatenblockMarker`, `test_cold_suite.py::test_hc5_hc21_*` | ADR-061 (A) |
+| HC-6 | medium | The split can produce a forged program line at the start of a part | **fixed** | `test_output_sanitizer.py::test_hc6_*`, `test_hot_properties.py::test_hc6_*`, `test_cold_suite.py::test_hc6_*` | ADR-062 (A), ADR-040 (A) |
+| HC-7 | medium | Markdown in the link footnote is not neutralised | **fixed** | `test_output_composer.py::test_hc7_*`, `test_sanitize_links.py::…::test_hc7_*` | ADR-062 (A) |
+| HC-8 | medium | The control character U+0000 reaches the delivered message part | **fixed** | `test_hot_properties.py::test_hc8_*`, `test_sanitize_links.py::…::test_hc8_*` (2), `test_output_sanitizer.py::test_hc8_*` | — |
+| HC-9 | medium | A bare IPv4 stays unbroken with neighbouring characters | **fixed** | `test_output_sanitizer.py::test_hc9_*` (2), `test_hot_properties.py::test_scrub_field_output_is_never_clickable` | ADR-036 (A) |
+| HC-10 | medium | The dedupe key is the `Message-ID` header set by the attacker | **fixed** | `test_ingest_poll.py::test_hc10_*` (5), `test_state_db.py::test_hc10_*` (6), `test_ingest_rawmail.py::test_hc10_*` (3), `test_output_composer.py::test_hc10_*` (2) | **ADR-079**, ADR-018/019/048 (A) |
+| HC-11 | medium | Mail-derived text lands in the log through `extra_forbidden` | **fixed** | `test_llm_schema.py::test_hc11_*` (2), `test_hot_fault_injection.py::test_hc11_*` | ADR-024 (A) |
+| HC-12 | medium | `/digest` does not shorten the waiting time | **fixed** | `test_runner.py::test_hc12_*` (2) | **ADR-080**, ADR-077 (A) |
+| HC-13 | medium | After a `/digest` all further commands are discarded | **fixed** | `test_runner.py::test_hc13_*` (2) | ADR-077 (A) |
+| HC-14 | low | The interface is English, the contract German | **fixed** | `test_hc14_spec_literals.py` (19 cases) | **ADR-083** |
+| HC-15 | medium | `connect-mail` lets blocked providers through as a mail address | **fixed** | `test_cli_connect.py::test_hc15_*` (4), `test_providers.py::test_hc15_*` | ADR-075 (A) |
+| HC-16 | low | The test message names an invalid config section and goes to every messenger | **done in `14ad9ed`** (ADR-078) | `test_cli.py::test_testnachricht_nennt_keine_ungueltige_config_sektion` | ADR-078 |
+| HC-17 | low | The self-test preamble claims the example mail with `--eml` | **fixed** | `test_cli_e2e.py::test_hc17_*` (2) | — |
+| HC-18 | low | `init` does not write the complete field set from §5 | **fixed** (the remainder; the field set was anticipated in `14ad9ed`) | `test_cli.py::test_hc18_*`, `test_spec_cli.py::test_hc18_*`, `test_cli_connect.py::test_hc18_*` | ADR-076 (A) |
+| HC-19 | low | The command hint is dropped with `connect-messenger --chat-id` | **fixed** | `test_cli_connect.py::test_hc19_*` (2) | — |
+| HC-20 | medium | The configuration is not written atomically | **fixed** | `test_hot_cli_robustness.py::test_hc20_*` (3) | **ADR-081** |
+| HC-21 | medium | The phrase list misses the most common formulations | **fixed** | `test_summarizer.py::test_hc21_*` (3, 13 cases), `test_cold_suite.py::test_hc5_hc21_*` | ADR-061 (A), ADR-076 (A) |
+| HC-22 | low | An overlong filename is truncated without the promised `…` | **fixed** | `test_sanitize_attachments.py::…::test_hc22_*` (4), `test_output_composer.py::test_hc22_*` | ADR-040 (A) |
+| HC-23 | low | The sender display name is never RFC 2047 decoded | **fixed** | `test_ingest_rawmail.py::test_hc23_*` (5) | ADR-020 (A) |
+| HC-24 | low | Labels > 63 characters defeat `_RE_DOMAINISH`; the oracle mirrors the bound | **fixed** | `test_output_sanitizer.py::test_hc24_*` (2), `test_hot_properties.py::test_scrub_*_output_is_never_clickable` | ADR-036 (A) |
+| HC-25 | low | Outbox deadlines depend on the wall clock | **fixed** | `test_delivery.py::test_hc25_*` (5) | ADR-048 (A) |
+| HC-26 | low | The collected digest is blocked along with an IMAP outage | **fixed** | `test_runner.py::test_hc26_*` (3) | ADR-049 (A) |
+| HC-27 | low | `run --once` never polls for commands | **fixed** | `test_runner.py::test_hc27_*` (3) | **ADR-080** |
+| HC-28 | low | The `/status` answer bypasses `scrub_field` | **fixed** | `test_runner.py::test_hc28_status_antwort_scrubbt_den_ordnernamen` | ADR-077 (A) |
+| HC-29 | low | Quadratic runtime in `_redact_tokens` | **fixed** | `test_summarizer.py::test_hc29_*` (2, 3 cases) | — |
+| HC-30 | low | `Retry-After: nan` leaves the error taxonomy | **fixed** | `test_llm_providers.py::test_hc30_*` (2), `test_messenger_adapters.py::test_hc30_*` (2) | — |
+| HC-31 | low | The README "Limitations" and the CHANGELOG did not know about remote triggering | **done in `14ad9ed`** (the commit message wrongly calls it "HC-19") | — | ADR-078 |
+| HC-32 | low | `connect-mail`: an unsuitable provider hint, no server response | **fixed** (reproduced first) | `test_ingest_client.py::test_hc32_*` (2), `test_cli_connect.py::test_hc32_*` (3) | — |
+| HC-33 | low | A PGP/S-MIME mail looks like a mail with no content | **fixed** (reproduced first) | `test_sanitize_mail.py::TestHc33VerschluesselteMail` (4), `test_output_composer.py::test_hc33_*` (2), `test_critic_signals.py::test_hc33_*` (3) | **ADR-082** |
+| HC-34 | low | A missing IMAP password reported as "mailbox unreachable" | **fixed** (reproduced first) | `test_cli.py::test_hc34_run_meldet_fehlendes_passwort_als_konfigurationsfehler` | — |
+| HC-35 | low | With an unconfirmed delivery the line `5/5 …` is missing | **fixed** (reproduced first) | `test_cli_e2e.py::test_hc35_nicht_bestaetigte_zustellung_hat_eine_fuenfte_zeile` | — |
+| HC-36 | low | `connect-llm --provider` always shows the Groq instructions | **merged into HC-3** (same cause, fixed there) | `test_cli_connect.py::test_hc3_provider_anthropic_zeigt_die_anthropic_anleitung` | ADR-075 (A) |
+| HC-37 | info | Two layer boundaries of command recognition | **fixed (docs)** — (a) the README/spec now describe the tolerant recognition correctly, the behaviour was right; (b) recorded below as a layer boundary | `test_commands.py::test_bekannte_befehle_werden_erkannt`, `::test_botname_anhang_wird_abgetrennt`, `::test_argumente_werden_ignoriert_nicht_gelesen`, `::test_freier_text_wird_verworfen` | — |
+| HC-38 | low | Test coverage of the default mode, the `/digest` branch, the mechanical promises | **fixed** (three parts in FP-1/FP-6/FP-9) | `test_runner.py::test_hc38_*` (2), `test_cli_connect.py::test_hc38_*`, `test_cli.py::test_hc38_*` (2), `test_invarianten.py::test_hc38_*` (3) | — |
 
-| HC2-1-Rest (a) Schranke greift erst nach dem vollständigen lxml-Parse (24 MB = 47,4 s), (b) Schranke gilt je Teil statt je Mail (34 Teile = 29,6 s ohne Ablehnung) — **zweite Iteration** | medium | **gefixt** | `test_sanitize_html.py::TestHc21Schranken::test_hc2_1_byte_deckel_*`/`*_budget_*` (5), `test_sanitize_mail.py::TestHc21SchrankenDerHtmlKonvertierung::test_hc2_1_riesiger_html_teil_*`, `*_viele_html_teile_*`, `*_teuerste_mail_*`, `*_byte_budget_*`, `*_gewoehnliche_html_mail_*` (5) | ADR-084 (N, 2026-09-12) |
-| HC2-2-Rest RFC-2047-Q-Wort mit rohem `@`/`,` verfälscht `from_domain` weiter — **zweite Iteration** | medium | **gefixt** | `test_ingest_rawmail.py::test_hc2_2_q_wort_*`, `*_b_wort_*`, `*_kodiertes_wort_direkt_*`, `*_zwei_kodierte_woerter`, `*_gewoehnlicher_kodierter_name_*` (8) | ADR-020 (N, 2026-09-12) |
+| HC2-1 remainder (a) the bound only applies after the complete lxml parse (24 MB = 47.4 s), (b) the bound applies per part instead of per mail (34 parts = 29.6 s without rejection) — **second iteration** | medium | **fixed** | `test_sanitize_html.py::TestHc21Schranken::test_hc2_1_byte_deckel_*`/`*_budget_*` (5), `test_sanitize_mail.py::TestHc21SchrankenDerHtmlKonvertierung::test_hc2_1_riesiger_html_teil_*`, `*_viele_html_teile_*`, `*_teuerste_mail_*`, `*_byte_budget_*`, `*_gewoehnliche_html_mail_*` (5) | ADR-084 (A, 2026-09-12) |
+| HC2-2 remainder an RFC 2047 Q-word with a raw `@`/`,` still falsifies `from_domain` — **second iteration** | medium | **fixed** | `test_ingest_rawmail.py::test_hc2_2_q_wort_*`, `*_b_wort_*`, `*_kodiertes_wort_direkt_*`, `*_zwei_kodierte_woerter`, `*_gewoehnlicher_kodierter_name_*` (8) | ADR-020 (A, 2026-09-12) |
 
-„(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11** (zweite Iteration:
-**2026-09-12**). Fett gesetzte ADRs sind neu.
+"(A)" = an addendum to an existing ADR, dated **2026-09-11** (second iteration:
+**2026-09-12**). ADRs in bold are new.
 
-**Bilanz:** 35 offene Befunde, davon 33 mit Code-Fix und Regressionstest, einer rein
-dokumentarisch (HC-37 a), einer in einem anderen aufgegangen (HC-36); dazu zwei bereits in
-`14ad9ed` erledigte (HC-16, HC-31). **Kein Befund bleibt bewusst offen, keiner war nicht
-reproduzierbar.** Die sechs von keinem Skeptiker geprüften Befunde (HC-32 … HC-35, HC-37,
-Teile von HC-36) wurden vom jeweiligen Fix-Agenten vor dem Fix selbst nachgestellt und haben
-sich alle bestätigt.
+**Balance:** 35 open findings, of which 33 with a code fix and a regression test, one purely
+documentary (HC-37 a), one merged into another (HC-36); plus two already done in `14ad9ed`
+(HC-16, HC-31). **No finding stays deliberately open, none was irreproducible.** The six
+findings not reviewed by any skeptic (HC-32 … HC-35, HC-37, parts of HC-36) were reproduced by
+the respective fix agent before the fix and all confirmed.
 
-### Korrekturen an §5: drei Begründungen trugen nicht mehr
+### Corrections to §5: three rationales no longer held
 
-Diese Runde hat drei Einträge des Hot-Logs widerlegt. Sie bleiben oben unverändert stehen —
-§5 ist Historie —, sind aber ab hier überholt:
+This round refuted three entries of the hot log. They stay above unchanged — §5 is history —
+but from here on they are superseded:
 
-- **HT-14 (neu): Erkennungsregex und Test-Orakel teilten dieselbe Schranke.**
-  `tests/unit/test_hot_properties.py:_RE_LIVE_DOMAIN` hatte mit `[a-z0-9\-]{0,62}`/`{1,63}`
-  die DNS-Längenschranke und mit `(?![\w\-.])` die Unterstrich-Wortgrenze der Implementierung
-  übernommen — es konnte die Lücke, die es prüfen soll, prinzipiell nicht finden (HC-24). Das
-  ist dieselbe Fehlerart wie HT-1/2/4/6, nur eine Ebene höher. Behoben durch: Deckel in Orakel
-  **und** Implementierung ersatzlos entfernt, IPv4-Verbotsmuster (`_RE_LIVE_IPV4`) ergänzt, das
-  dort ganz fehlte, Struktur-Zeilen des Orakels um die englischen Beschriftungen erweitert
-  (es prüfte nur die deutschen, obwohl die Ausgabe englisch ist), und der Kommentar
-  „das Orakel muss strikt großzügiger sein als die Implementierung" aufgenommen. Als Regel für
-  künftige Runden: **Ein Orakel, das eine Konstante der Implementierung wiederholt, prüft nichts.**
-  Zur selben Klasse gehört ein zweiter Fund aus HC-23: `tests/integration/test_sanitize_corpus.py`
-  baute die `RawMail` von Hand nach, statt `build_raw_mail` zu rufen, und umging damit genau die
-  Stufe, in der der Fehler saß; der Helfer ist entfallen. Ebenso HC-5: der CT-6-Regressionstest
-  baute seine `SanitizedMail` mit `make_mail()` und ließ den Sanitizer aus.
-- **HT-7-Korrektur: „200 000-Zeichen-Felder abgedeckt" trug nicht.** Der Testwert der
-  Fehlerinjektion ist `"S" * 200_000` und enthält **keinen einzigen** Treffer von
-  `_URL_TOKEN_RE`; `_redact_tokens` steigt nach `finditer` sofort aus und misst nichts. Die
-  Klasse, um die es geht — ein whitespace-freies Feld **mit** vielen Treffern —, war bis HC-29
-  ungetestet und lief dort quadratisch (32 000 Zeichen: 9,26 s; nach dem Fix 0,006 s). Sie ist
-  jetzt über `test_summarizer.py::test_hc29_redact_tokens_bleibt_im_zeitbudget` abgedeckt.
-  Der Null-Befund von HT-7 im Übrigen bleibt gültig.
-- **HT-12-Korrektur: `compose_plain` hat nicht einen, sondern drei Aufrufer.** Die alte
-  Begründung („der einzige Aufrufer ist die CLI-Testnachricht, deren Text im Code steht")
-  trägt seit ADR-054 nicht mehr: Aufrufer sind `cli.py:_send_test_message`,
-  `cli.py:_announce_selftest` und `runner.py:handle_command` — und der dritte interpoliert
-  `[imap] folder`, also einen variablen Anteil (HC-28). Die Schichtgrenze lautet ab jetzt:
-  **`_finalize` ist Nachbrenner und Split, kein Feld-Scrub; variable Anteile scrubbt der
-  Aufrufer.** Festgehalten im Docstring von `compose_plain`, in ADR-077 (Nachtrag b) und
-  mechanisch in `test_invarianten.py::test_hc38_compose_plain_hat_nur_die_gelisteten_aufrufer`.
+- **HT-14 (new): the detection regex and the test oracle shared the same bound.**
+  `tests/unit/test_hot_properties.py:_RE_LIVE_DOMAIN` had taken over the DNS length bound with
+  `[a-z0-9\-]{0,62}`/`{1,63}` and the underscore word boundary of the implementation with
+  `(?![\w\-.])` — it could not, in principle, find the gap it is supposed to check (HC-24).
+  That is the same class of error as HT-1/2/4/6, one level up. Fixed by: removing the caps in
+  the oracle **and** the implementation without replacement, adding an IPv4 prohibition pattern
+  (`_RE_LIVE_IPV4`) that was missing there entirely, extending the oracle's structure lines by
+  the English labels (it only checked the German ones, even though the output is English), and
+  adding the comment "the oracle must be strictly more generous than the implementation". As a
+  rule for future rounds: **an oracle that repeats a constant of the implementation checks
+  nothing.** A second find from HC-23 belongs to the same class:
+  `tests/integration/test_sanitize_corpus.py` rebuilt the `RawMail` by hand instead of calling
+  `build_raw_mail`, and thereby bypassed exactly the stage the bug sat in; the helper is gone.
+  Likewise HC-5: the CT-6 regression test built its `SanitizedMail` with `make_mail()` and
+  skipped the sanitizer.
+- **HT-7 correction: "200,000-character fields covered" did not hold.** The fault injection's
+  test value is `"S" * 200_000` and contains **not a single** match of `_URL_TOKEN_RE`;
+  `_redact_tokens` exits immediately after `finditer` and measures nothing. The class at issue —
+  a whitespace-free field **with** many matches — was untested until HC-29 and ran quadratically
+  there (32,000 characters: 9.26 s; 0.006 s after the fix). It is now covered by
+  `test_summarizer.py::test_hc29_redact_tokens_bleibt_im_zeitbudget`. HT-7's null finding
+  otherwise stands.
+- **HT-12 correction: `compose_plain` does not have one caller but three.** The old rationale
+  ("the only caller is the CLI test message, whose text lives in the code") has not held since
+  ADR-054: the callers are `cli.py:_send_test_message`, `cli.py:_announce_selftest` and
+  `runner.py:handle_command` — and the third interpolates `[imap] folder`, i.e. a variable part
+  (HC-28). The layer boundary from now on reads: **`_finalize` is the final pass and the split,
+  not a field scrub; variable parts are scrubbed by the caller.** Recorded in the docstring of
+  `compose_plain`, in ADR-077 (addendum b) and mechanically in
+  `test_invarianten.py::test_hc38_compose_plain_hat_nur_die_gelisteten_aufrufer`.
 
-### Schichtgrenzen, die diese Runde bestätigt hat
+### Layer boundaries this round confirmed
 
-- **HC-37 (b): Kein Rate-Limit für `/status`.** Sechs Befehle in einem Stapel ergeben sechs
-  Antworten; nur `/digest`-Fluten werden zu genau **einem** zusätzlichen Zyklus zusammengefasst
-  (ADR-077, seit HC-13 unverändert). Eine Befehlsflut treibt also die Modellkosten nicht linear
-  hoch — sie kann aber den Messenger mit Statusantworten fluten. Wer in den Chat schreiben
-  kann, ist laut SECURITY §1 der Betreiber selbst; für Gruppen-Chats ist `accept_commands =
-  false` vorgesehen (README).
-- **`run --once` läuft nicht unter den Signal-Handlern.** Der im Bericht unter „Geprüft und
-  verworfen" Nr. 6 widerlegte Befund („Absturz zwischen `claim` und `checked` verliert die Mail")
-  hinterlässt eine Klarstellung: Die Signal-Handler installiert nur `run_forever`. Ein Ctrl+C
-  oder ein Cron-Timeout während `run --once` erzeugt den Zustand `sanitized` real — die Mail
-  bleibt als Zeile abfragbar, wird beim Wiederanlauf aber als Duplikat erkannt und nicht erneut
-  verarbeitet (ADR-019 hält das als akzeptiert fest). Steht auch in BETRIEB §3.
-- **Über-Neutralisierung ist bei HC-5 der fail-safe Ausgang** (ADR-036): `<… MAILDIGEST …
-  UNTRUSTED …>` innerhalb einer Zeile wird auch dann ersetzt, wenn ein harmloser Absender beide
-  Wörter zufällig in spitzen Klammern schreibt. Über den gesamten Korpus tritt der Fall nicht auf.
-- **Die Fehlalarmrate ist durch HC-5 und HC-21 nicht gestiegen.** Über die 49 sanitisierbaren
-  Mails aus `tests/corpus/` und `tests/cold/mails/` setzten vorher vier den Injection-Verdacht,
-  nachher ebenfalls vier — alle vier sind Angriffsmails. Neu ist nur, dass
-  `10_injection_direkt.eml` zusätzlich das Indiz `forged_block_marker` trägt. Auch das neue
-  `encrypted`-Flag (HC-33) setzt über den gesamten Korpus keine einzige Mail.
+- **HC-37 (b): no rate limit for `/status`.** Six commands in one batch produce six answers;
+  only `/digest` floods are collapsed into exactly **one** additional cycle (ADR-077, unchanged
+  since HC-13). A command flood therefore does not drive model cost up linearly — but it can
+  flood the messenger with status answers. Whoever can write into the chat is, per SECURITY §1,
+  the operator themselves; for group chats `accept_commands = false` is provided (README).
+- **`run --once` does not run under the signal handlers.** The finding refuted under "checked
+  and rejected" no. 6 in the report ("a crash between `claim` and `checked` loses the mail")
+  leaves a clarification behind: only `run_forever` installs the signal handlers. A Ctrl+C or a
+  cron timeout during `run --once` really does produce the state `sanitized` — the mail stays
+  queryable as a row, but is recognised as a duplicate on restart and not processed again
+  (ADR-019 records this as accepted). Also in OPERATIONS §3.
+- **Over-neutralisation is the fail-safe exit for HC-5** (ADR-036): `<… MAILDIGEST …
+  UNTRUSTED …>` within a line is replaced even when a harmless sender happens to write both
+  words in angle brackets. Across the whole corpus the case does not occur.
+- **The false alarm rate did not rise through HC-5 and HC-21.** Across the 49 sanitisable mails
+  from `tests/corpus/` and `tests/cold/mails/`, four set the injection suspicion before and four
+  after — all four are attack mails. The only new thing is that `10_injection_direkt.eml`
+  additionally carries the evidence `forged_block_marker`. The new `encrypted` flag (HC-33) is
+  likewise set by not a single mail across the whole corpus.
 
-### Neue Testdateien und Korpusmails aus dieser Runde
+### New test files and corpus mails from this round
 
-| Datei | Inhalt |
+| File | Content |
 |-------|--------|
-| `tests/unit/test_hot_cli_robustness.py` | Terminal-Allowlist und Key-Maskierung (HC-4), atomares Schreiben der Konfiguration (HC-20) |
-| `tests/unit/test_hc14_spec_literals.py` | Vertragstest: liest die Literale aus SPEC-CLI §2/§4/§6 und vergleicht sie mit einer echt komponierten Nachricht bzw. mit `inspect.getsource(cli)` (19 Fälle) |
-| `tests/cold/mails/30_marker_nachbau.eml` | Exakt nachgebauter Datenblock-Marker (HC-5) |
-| `tests/cold/mails/31_injection_variante.eml` | Naheliegende Variante der Übernahmeformel (HC-21) |
+| `tests/unit/test_hot_cli_robustness.py` | The terminal allowlist and key masking (HC-4), atomic writing of the configuration (HC-20) |
+| `tests/unit/test_hc14_spec_literals.py` | A contract test: reads the literals from SPEC-CLI §2/§4/§6 and compares them with a genuinely composed message or with `inspect.getsource(cli)` (19 cases) |
+| `tests/cold/mails/30_marker_nachbau.eml` | An exactly forged data-block marker (HC-5) |
+| `tests/cold/mails/31_injection_variante.eml` | An obvious variant of the takeover formula (HC-21) |
 
-`tests/unit/test_invarianten.py` ist von 24 auf 27 Tests gewachsen: Die Menge der
-`.send(`-Aufrufstellen (sieben), die Herkunft jedes Sende-Arguments und die Aufrufer von
-`compose_plain` (drei) sind jetzt per AST gesperrt (HC-38). Beide Zusagen waren bis dahin nur
-Prosa in SECURITY §7.1 — und beide hätten HC-28 beim Einbauen der `/status`-Antwort sofort
-sichtbar gemacht.
+`tests/unit/test_invarianten.py` has grown from 24 to 27 tests: the set of `.send(` call sites
+(seven), the origin of every send argument and the callers of `compose_plain` (three) are now
+AST-locked (HC-38). Both promises had until then been prose in SECURITY §7.1 only — and both
+would have made HC-28 visible immediately when the `/status` answer was added.
 
-### Abdeckung nach dieser Runde
+### Coverage after this round
 
-| Modul | Stand |
+| Module | State |
 |-------|-------|
 | `agents/offline.py` | 100 % |
-| `output/sanitizer.py` | 99 % (2 Zeilen: Fixpunkt-Rückgabe in `_unescape`, Schnellpfad von `_strip_control`) |
-| `sanitize/links.py` | 99 % (1 Zeile: `build_footnote` ohne Einträge) |
+| `output/sanitizer.py` | 99 % (2 lines: the fixed-point return in `_unescape`, the fast path of `_strip_control`) |
+| `sanitize/links.py` | 99 % (1 line: `build_footnote` without entries) |
 | `sanitize/attachments.py` | 100 % |
-| `runner.py` | 99 % (4 Zeilen: `AssertionError`-Wächter in `_with_llm_retry`, `_stop.wait`-Zweig von `_wait`, `total.low_digests += 1`, Platzhalter `_unwired`) |
-| `cli.py` | 96 %, `providers.py` 89 % (Rückfallzweige von `find_preset`) |
+| `runner.py` | 99 % (4 lines: the `AssertionError` guard in `_with_llm_retry`, the `_stop.wait` branch of `_wait`, `total.low_digests += 1`, the placeholder `_unwired`) |
+| `cli.py` | 96 %, `providers.py` 89 % (fallback branches of `find_preset`) |
 
-In `runner.build_runner` sind die Offline-Zweige jetzt gedeckt; ungedeckt bleiben dort nur die
-Zweige mit echtem LLM-Provider. Die Gesamtziele aus NF-6 sind unverändert erfüllt.
+In `runner.build_runner` the offline branches are now covered; what remains uncovered there are
+only the branches with a real LLM provider. The overall targets from NF-6 are met unchanged.
 
-### §4 nach dieser Runde
+### §4 after this round
 
-Der Haken **„Zweite Cold-Runde mit frischem Agenten"** bleibt offen — er läuft als §6 der
-Fixrunde ([docs/PLAN-FIXRUNDE.md](PLAN-FIXRUNDE.md)). Seine Voraussetzung ist seit HC-14
-erfüllt: Die Spec beschreibt wieder wörtlich, was das Programm ausgibt, und ein Vertragstest
-hält das fest. Bis die Runde stattgefunden hat, bleibt NF-8 `in-progress`.
+The checkbox **"second cold round with a fresh agent"** stays open — it runs as §6 of the fix
+round ([docs/PLAN-FIXRUNDE.md](PLAN-FIXRUNDE.md)). Its precondition has been met since HC-14:
+the spec again describes literally what the program outputs, and a contract test pins that.
+Until the round has taken place, NF-8 stays `in-progress`.
 
-### Nachfixrunde NF-1 (HC2-1, HC2-2)
+### Follow-up fix round NF-1 (HC2-1, HC2-2)
 
-Die zweite Testrunde (**`docs/TESTRUNDE-2.md`**, 45 Befunde) und die Abschlussprüfung
-(**`docs/ABNAHME-FIXRUNDE.md`**) sind Protokoll und werden nicht geändert. §8 der
-Abschlussprüfung macht zwei Befunde zur **Auflage vor dem Release**; sie sind hier
-nachgezogen. Die übrigen Pakete NF-2 … NF-7 aus jener Restliste sind offen.
+The second test round (**`docs/TESTRUNDE-2.md`**, 45 findings) and the acceptance review
+(**`docs/ABNAHME-FIXRUNDE.md`**) are records and are not changed. §8 of the acceptance review
+makes two findings a **condition before the release**; they are followed up here. The remaining
+packages NF-2 … NF-7 from that residual list are open.
 
-| Befund | Severity | Status | Tests | ADR |
+| Finding | Severity | Status | Tests | ADR |
 |--------|----------|--------|-------|-----|
-| HC2-1 `html_to_text` skaliert quadratisch mit der Schachtelungstiefe; keine Schranke | high | **gefixt** | `test_sanitize_html.py::TestHc21Schranken` (5), `test_sanitize_mail.py::TestHc21SchrankenDerHtmlKonvertierung` (6), `test_output_composer.py::test_hc2_1_*` (2), `test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos` | **ADR-084**, ADR-067/029/019 (N-frei: nur zitiert) |
-| HC2-2 RFC-2047-Dekodierung vor dem Adress-Parsen (Regression aus HC-23) | medium (blockierend) | **gefixt** | `test_ingest_rawmail.py::test_hc2_2_*` (7) | ADR-020 (N) |
-| R-4 (dritte Iteration) Maske für kodierte Wörter war enger als der Dekoder (leerer Charset `=??Q?…?=`) | hoch | **gefixt** | `test_ingest_rawmail.py::test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder` (8 Formen), `::test_hc2_2_leerer_charset_bestimmt_die_domain_nicht` (3), `::test_hc2_2_leerer_charset_im_reply_to` | ADR-020 (N, dritte Iteration) |
-| R-5 (dritte Iteration) `LinkCollector.scrub` quadratisch in der Zahl der Funde; kein Link-Budget | hoch (DoS) | **gefixt** | `test_sanitize_links.py::TestR5LinkBudget` (5), `test_output_composer.py::test_r5_*` (2) | ADR-028 (N), ADR-084 (N) |
-| R-6 (dritte Iteration) Klartext-Pfad ohne Budget (bis 25 MB durch alle Pässe) | mittel | **gefixt** | `test_sanitize_mail.py::test_r6_*` (3) | ADR-084 (N) |
-| R-7 (dritte Iteration) Messkorrektur der teuersten Mail; Zusage „rund 2 s" zu knapp | mittel | **gefixt** (Zusage korrigiert) | `test_sanitize_mail.py::test_hc2_1_teuerste_mail_unter_den_neuen_grenzen` (neu vermessen), `::test_r7_gesamt_worst_case_bleibt_weit_unter_der_zusage` | ADR-084 (N) |
-| R-8 (vierte Iteration) Regression aus R-4: `_ENCODED_WORD_RE` mit `.*?` quadratisch; keine Kopfzeilen-Obergrenze | hoch (DoS im Ingest) | **gefixt** | `test_ingest_rawmail.py::test_r8_maskierung_ist_linear`, `::test_r8_riesiger_from_header_kostet_keine_zeit`, `::test_r8_riesiger_betreff_kostet_keine_zeit`, `::test_r8_gewoehnlicher_header_bleibt_unveraendert` | ADR-020 (N, vierte Iteration) |
-| R-9 (vierte Iteration) Kodiertes Wort hinter der Adresse löscht Absenderadresse und Domain; beide Rückweg-Warnungen verstummen | mittel | **gefixt** | `test_ingest_rawmail.py::test_r9_angehaengtes_kodiertes_wort_loescht_die_domain_nicht` (4 Formen), `::test_r9_zweiter_griff_nimmt_die_erste_klammer` | ADR-020 (N, vierte Iteration) |
-| R-10 (vierte Iteration) Klartext-Vorschnitt je Textstück statt je Mail; Teilezahl ohne Schranke | hoch (9,2–10,2 s CPU je Mail) | **gefixt** | `test_sanitize_mail.py::TestR10SchrankenDesAnhangsPfads` (6) | ADR-084 (N, dritter Nachtrag) |
-| R-11 (vierte Iteration) `pdf_timeout_seconds` gilt je Anhang; 20 PDFs ≈ 400 s Wandzeit | hoch (DoS über die Poll-Periode) | **gefixt** | `test_sanitize_mail.py::TestR11PdfZeitbudget` (2), `test_spec_cli.py::test_alle_config_felder_stehen_in_der_referenz` (Feldsatz) | ADR-029 (N, vierte Iteration) |
-| S-1 (fünfte Iteration) Kopfzeilen-Deckel nur für From/Reply-To/Subject; `To` ungedeckelt (20 MB = 18,5 s), Rück-Serialisierung faltet jede Kopfzeile jedes Teils (bis 14 s) | hoch (DoS im Ingest) | **gefixt** | `test_ingest_rawmail.py::test_s1_riesiger_to_header_kostet_keine_zeit`, `::test_s1_messreihe_to_header`, `::test_s1_jeder_gelesene_header_ist_gedeckelt` (10 Header), `::test_s1_empfaengerzahl_ist_gedeckelt`, `::test_s1_viele_kopfzeilen_kosten_keine_zeit`, `::test_s1_kopfzeilen_gesamtbudget_schneidet_den_baum`, `::test_s1_kopfzeilen_ersetzen_ist_sichtbar`, `::test_s1_gewoehnliche_mail_bleibt_byteidentisch` | ADR-020 (N, fünfte Iteration) |
-| S-2 (fünfte Iteration) Regression aus R-9: Klammer-Rückfall liest Kommentar-/Quoted-String-Inhalt; 4096-Schnitt öffnet Kommentare; unlesbarer `Reply-To` schaltet Warnung ab | hoch | **gefixt** | `test_ingest_rawmail.py::test_s2_klammer_in_kommentar_oder_quote_bestimmt_die_domain_nicht` (9 Formen), `::test_s2_dasselbe_im_reply_to` (9), `::test_s2_balancierte_kommentare_und_quotes_bleiben_lesbar` (8), `::test_s2_scanner_kennt_verschachtelung_escapes_und_offene_enden`, `::test_s2_token_hinter_der_klammer_loescht_die_antwortadresse_nicht`, `::test_s2_reply_to_gleich_absender_mit_kommentar_ist_kein_mismatch`, `test_sanitize_mail.py::TestReport::test_s2_*` (2) | ADR-020 (N, fünfte Iteration) |
-| S-3 (fünfte Iteration) Gesamt-Worst-Case zu günstig gemessen (2,70 s); real 3,6–5,1 s, davon ~2 s Standardbibliotheks-Parser | mittel | **gefixt** (Zahl korrigiert, Rohbyte-Budget begründet verworfen) | Messung `sk4_final.py`, Profil (`_payload_bytes`/`_decode_text_part` zusammen 0,01 s) | ADR-084 (N, vierter Nachtrag) |
-| S-4 (Sanitizer, 2026-09-12) `_RE_IPV4` mit genau vier Oktetten bricht in Punktketten > 4 Gruppen nur das letzte Fenster: `1.1.1.1.1.1.1.` → `1.1.1.1[.]1[.]1[.]1.`, die ersten vier Oktette leben (I3/F-SEC-3); gefunden vom Property-Test CT-7 (hypothesis-Gegenbeispiel, im Ausgangsstand nur wegen des lokalen Beispiel-Caches grün) | mittel | **gefixt** (`{3,}`: ganze Kette, jeder Punkt gebrochen) | `test_hot_properties.py::test_s4_punktkette_wird_ganz_gebrochen` (4 Formen, neben dem Property-Test), `test_output_sanitizer.py::test_s4_punktkette_ueber_vier_oktette_wird_ganz_gebrochen` (3), `::test_s4_ziffernlauf_hinter_der_kette_bleibt_wie_bisher` (3, Gegenprobe) | ADR-036 (N, S-4) |
+| HC2-1 `html_to_text` scales quadratically with the nesting depth; no bound | high | **fixed** | `test_sanitize_html.py::TestHc21Schranken` (5), `test_sanitize_mail.py::TestHc21SchrankenDerHtmlKonvertierung` (6), `test_output_composer.py::test_hc2_1_*` (2), `test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos` | **ADR-084**, ADR-067/029/019 (no addendum: only cited) |
+| HC2-2 RFC 2047 decoding before the address parse (a regression from HC-23) | medium (blocking) | **fixed** | `test_ingest_rawmail.py::test_hc2_2_*` (7) | ADR-020 (A) |
+| R-4 (third iteration) the mask for encoded words was narrower than the decoder (an empty charset `=??Q?…?=`) | high | **fixed** | `test_ingest_rawmail.py::test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder` (8 forms), `::test_hc2_2_leerer_charset_bestimmt_die_domain_nicht` (3), `::test_hc2_2_leerer_charset_im_reply_to` | ADR-020 (A, third iteration) |
+| R-5 (third iteration) `LinkCollector.scrub` quadratic in the number of matches; no link budget | high (DoS) | **fixed** | `test_sanitize_links.py::TestR5LinkBudget` (5), `test_output_composer.py::test_r5_*` (2) | ADR-028 (A), ADR-084 (A) |
+| R-6 (third iteration) the plain-text path without a budget (up to 25 MB through all passes) | medium | **fixed** | `test_sanitize_mail.py::test_r6_*` (3) | ADR-084 (A) |
+| R-7 (third iteration) measurement correction for the most expensive mail; the promise "around 2 s" was too tight | medium | **fixed** (promise corrected) | `test_sanitize_mail.py::test_hc2_1_teuerste_mail_unter_den_neuen_grenzen` (re-measured), `::test_r7_gesamt_worst_case_bleibt_weit_unter_der_zusage` | ADR-084 (A) |
+| R-8 (fourth iteration) a regression from R-4: `_ENCODED_WORD_RE` with `.*?` is quadratic; no header upper bound | high (DoS in ingest) | **fixed** | `test_ingest_rawmail.py::test_r8_maskierung_ist_linear`, `::test_r8_riesiger_from_header_kostet_keine_zeit`, `::test_r8_riesiger_betreff_kostet_keine_zeit`, `::test_r8_gewoehnlicher_header_bleibt_unveraendert` | ADR-020 (A, fourth iteration) |
+| R-9 (fourth iteration) an encoded word after the address deletes the sender address and domain; both return-path warnings go silent | medium | **fixed** | `test_ingest_rawmail.py::test_r9_angehaengtes_kodiertes_wort_loescht_die_domain_nicht` (4 forms), `::test_r9_zweiter_griff_nimmt_die_erste_klammer` | ADR-020 (A, fourth iteration) |
+| R-10 (fourth iteration) the plain-text pre-cut applied per text chunk instead of per mail; the number of parts unbounded | high (9.2–10.2 s CPU per mail) | **fixed** | `test_sanitize_mail.py::TestR10SchrankenDesAnhangsPfads` (6) | ADR-084 (A, third addendum) |
+| R-11 (fourth iteration) `pdf_timeout_seconds` applies per attachment; 20 PDFs ≈ 400 s wall time | high (DoS across the poll period) | **fixed** | `test_sanitize_mail.py::TestR11PdfZeitbudget` (2), `test_spec_cli.py::test_alle_config_felder_stehen_in_der_referenz` (field set) | ADR-029 (A, fourth iteration) |
+| S-1 (fifth iteration) the header cap applied only to From/Reply-To/Subject; `To` uncapped (20 MB = 18.5 s), and re-serialisation folds every header of every part (up to 14 s) | high (DoS in ingest) | **fixed** | `test_ingest_rawmail.py::test_s1_riesiger_to_header_kostet_keine_zeit`, `::test_s1_messreihe_to_header`, `::test_s1_jeder_gelesene_header_ist_gedeckelt` (10 headers), `::test_s1_empfaengerzahl_ist_gedeckelt`, `::test_s1_viele_kopfzeilen_kosten_keine_zeit`, `::test_s1_kopfzeilen_gesamtbudget_schneidet_den_baum`, `::test_s1_kopfzeilen_ersetzen_ist_sichtbar`, `::test_s1_gewoehnliche_mail_bleibt_byteidentisch` | ADR-020 (A, fifth iteration) |
+| S-2 (fifth iteration) a regression from R-9: the bracket fallback reads comment/quoted-string content; the 4096 cut opens comments; an unreadable `Reply-To` switches the warning off | high | **fixed** | `test_ingest_rawmail.py::test_s2_klammer_in_kommentar_oder_quote_bestimmt_die_domain_nicht` (9 forms), `::test_s2_dasselbe_im_reply_to` (9), `::test_s2_balancierte_kommentare_und_quotes_bleiben_lesbar` (8), `::test_s2_scanner_kennt_verschachtelung_escapes_und_offene_enden`, `::test_s2_token_hinter_der_klammer_loescht_die_antwortadresse_nicht`, `::test_s2_reply_to_gleich_absender_mit_kommentar_ist_kein_mismatch`, `test_sanitize_mail.py::TestReport::test_s2_*` (2) | ADR-020 (A, fifth iteration) |
+| S-3 (fifth iteration) the overall worst case measured too favourably (2.70 s); really 3.6–5.1 s, about 2 s of it the standard library parser | medium | **fixed** (figure corrected, a raw-byte budget deliberately rejected) | measurement `sk4_final.py`, profile (`_payload_bytes`/`_decode_text_part` together 0.01 s) | ADR-084 (A, fourth addendum) |
+| S-4 (sanitizer, 2026-09-12) `_RE_IPV4` with exactly four octets breaks only the last window in dot chains > 4 groups: `1.1.1.1.1.1.1.` → `1.1.1.1[.]1[.]1[.]1.`, the first four octets stay live (I3/F-SEC-3); found by the property test CT-7 (a hypothesis counter-example, green in the starting state only because of the local example cache) | medium | **fixed** (`{3,}`: the whole chain, every dot broken) | `test_hot_properties.py::test_s4_punktkette_wird_ganz_gebrochen` (4 forms, besides the property test), `test_output_sanitizer.py::test_s4_punktkette_ueber_vier_oktette_wird_ganz_gebrochen` (3), `::test_s4_ziffernlauf_hinter_der_kette_bleibt_wie_bisher` (3, counter-check) | ADR-036 (A, S-4) |
 
-„(N)" = Nachtrag zu einem bestehenden ADR, datiert **2026-09-11**. Fett gesetzte ADRs sind neu.
+"(A)" = an addendum to an existing ADR, dated **2026-09-11**. ADRs in bold are new.
 
-**Was die beiden Tests beweisen sollen.** Für HC2-1 ist die Aussage des Befunds eine
-Zeitaussage, also misst der Regressionstest die Wanduhr: 16 000 Ebenen vor dem Fix 28,6 s,
-danach < 1 s (`test_hc2_1_deep_nesting_is_linear`; vor dem Fix gesehen und gemessen). Weil
-ein Zeittest allein auch durch einen früheren Abbruch grün werden kann, prüft
-`test_hc2_1_konversion_bleibt_linear` die Kennlinie **ohne** Schranke (vierfache Tiefe,
-höchstens achtfache Zeit — quadratisch wäre sechzehnfach). Für HC2-2 ist das Orakel die
-Adresse im **Rohheader**, unabhängig vom Produktionscode ermittelt (kodierte Wörter
-entfernen, dann die Adresse lesen) — nicht `build_raw_mail` selbst. Fünf der sieben
-HC2-2-Tests schlagen auf dem Stand vor dem Fix fehl, die beiden Kontrollfälle
-(unkodierte Mail, HC-23-Fall) bleiben grün.
+**What the two tests are meant to prove.** For HC2-1 the finding's claim is a claim about time,
+so the regression test measures the wall clock: 16,000 levels before the fix 28.6 s, afterwards
+< 1 s (`test_hc2_1_deep_nesting_is_linear`; seen and measured before the fix). Because a timing
+test alone can also go green through an earlier abort, `test_hc2_1_konversion_bleibt_linear`
+checks the curve **without** the bound (four times the depth, at most eight times the time —
+quadratic would be sixteen times). For HC2-2 the oracle is the address in the **raw header**,
+determined independently of the production code (remove encoded words, then read the address) —
+not `build_raw_mail` itself. Five of the seven HC2-2 tests fail on the state before the fix, the
+two control cases (an unencoded mail, the HC-23 case) stay green.
 
-**Zweite Iteration (2026-09-12).** Der Skeptiker bestätigte die Original-Repros als behoben,
-belegte aber drei Restlücken; sie sind oben als eigene Zeilen geführt. Für die beiden
-HC2-1-Reste ist die Aussage wieder eine Zeitaussage, also messen die Tests die Wanduhr an
-genau den Repro-Mails: 24-MB-Teil 47,4 s → < 0,5 s, 34 HTML-Teile 29,6 s → < 2 s. Damit ein
-Zeittest nicht bloss die neuen Grenzen bestätigt, konstruiert
-`test_hc2_1_teuerste_mail_unter_den_neuen_grenzen` zusätzlich die **ungünstigste** Mail, die
-unter den neuen Grenzen überhaupt möglich ist (`MAX_HTML_PARTS` × `max_html_bytes` der
-dichtesten Elementform): gemessen rund 2 s. Für den HC2-2-Rest bleibt das Orakel die Adresse
-im Rohheader; die neuen Fälle tragen `@`, `,`, `<` und `>` **literal** in der Q-Kodierung —
-das reine Base64-Orakel der ersten Iteration konnte sie nicht erzeugen. Alle acht neuen
-HC2-2-Tests schlagen auf dem Stand vor dieser Iteration fehl, die Gegenprobe (gewöhnlicher
-kodierter Name) bleibt grün.
+**Second iteration (2026-09-12).** The skeptic confirmed the original repros as fixed but
+demonstrated three remaining gaps; they are carried above as rows of their own. For the two
+HC2-1 remainders the claim is again about time, so the tests measure the wall clock on exactly
+the repro mails: a 24 MB part 47.4 s → < 0.5 s, 34 HTML parts 29.6 s → < 2 s. So that a timing
+test does not merely confirm the new bounds, `test_hc2_1_teuerste_mail_unter_den_neuen_grenzen`
+additionally constructs the **most unfavourable** mail possible under the new bounds
+(`MAX_HTML_PARTS` × `max_html_bytes` of the densest element form): measured at around 2 s. For
+the HC2-2 remainder the oracle is still the address in the raw header; the new cases carry `@`,
+`,`, `<` and `>` **literally** in the Q encoding — the pure base64 oracle of the first iteration
+could not produce them. All eight new HC2-2 tests fail on the state before this iteration, and
+the counter-check (an ordinary encoded name) stays green.
 
-**Dritte Iteration (2026-09-12).** Der Skeptiker der zweiten Iteration bestätigte alle
-bisherigen Repros als tot und belegte vier neue Punkte (oben als R-4 bis R-7 geführt).
-Zwei davon sind Zeitaussagen und werden wieder an der Wanduhr gemessen, jeweils vor dem Fix
-auf denselben Skripten gesehen: `LinkCollector.scrub` mit 32 000 Funden 17,0 s → 0,3 s, die
-1-MB-HTML-Mail mit 41 000 Links (innerhalb **aller** ADR-084-Schranken, `html_rejected` war
-False) 28,9 s → 1,1 s, 21 MB Klartext 4,5 s → 0,4 s. Damit die Zeittests nicht bloss die
-neuen Budgets bestätigen, prüfen zwei Tests die Wirkung inhaltlich: `test_r5_*` zeigt, dass
-jenseits des Link-Budgets **keine** URL überlebt (der Fund wird `[Link removed]`, gezählt
-bleibt er), und `test_r6_gewoehnliche_mail_wird_byteidentisch_verarbeitet` vergleicht eine
-100-KB-Mail gegen denselben Sanitizer mit praktisch abgeschaltetem Vorschnitt — byteidentisch.
-Für R-4 bleibt das Orakel die Adresse im Rohheader; zusätzlich ist jetzt der **Dekoder
-selbst** das Orakel der Maskierung: Für acht kodierte Formen (leerer Charset, Sprach-Tag,
-B/Q gross und klein, gefalteter Header, kaputte Form ohne `?=`) darf kein Segment, das
-`email.header.decode_header` als kodiert liefert, im maskierten Rohwert noch `@`, `,`, `<`,
-`>`, `;` oder `:` zeigen. Fünf der neuen R-4-Tests schlagen auf dem Stand vor dieser
-Iteration fehl. R-7 ist eine Messkorrektur: Der bisherige Test gab jedem der vier HTML-Teile
-den ganzen Byte-Deckel, worauf die Teile 2 bis 4 ungeparst verworfen wurden (1,84 s). Neu
-trägt jeder Teil ein Viertel des Deckels, alle vier werden geparst — gemessen 1,9 bis 2,6 s;
-die Zusage lautet jetzt „etwa 2–3 s je nach Maschinenlast" statt „rund 2 s". Die
-Gesamt-Worst-Case-Mail (HTML-Budget, Klartext-Vorschnitt und Link-Budget gleichzeitig voll)
-kostet 1,0 s.
+**Third iteration (2026-09-12).** The second iteration's skeptic confirmed all previous repros
+as dead and demonstrated four new points (carried above as R-4 to R-7). Two of them are claims
+about time and are again measured on the wall clock, each seen before the fix on the same
+scripts: `LinkCollector.scrub` with 32,000 matches 17.0 s → 0.3 s, the 1 MB HTML mail with
+41,000 links (within **all** ADR-084 bounds, `html_rejected` was False) 28.9 s → 1.1 s, 21 MB of
+plain text 4.5 s → 0.4 s. So that the timing tests do not merely confirm the new budgets, two
+tests check the effect substantively: `test_r5_*` shows that beyond the link budget **no** URL
+survives (the match becomes `[Link removed]`, and it is still counted), and
+`test_r6_gewoehnliche_mail_wird_byteidentisch_verarbeitet` compares a 100 KB mail against the
+same sanitizer with the pre-cut practically switched off — byte-identical. For R-4 the oracle
+remains the address in the raw header; in addition the **decoder itself** is now the oracle of
+the masking: for eight encoded forms (an empty charset, a language tag, B/Q in upper and lower
+case, a folded header, a broken form without `?=`) no segment that `email.header.decode_header`
+returns as encoded may still show `@`, `,`, `<`, `>`, `;` or `:` in the masked raw value. Five
+of the new R-4 tests fail on the state before this iteration. R-7 is a measurement correction:
+the previous test gave each of the four HTML parts the whole byte cap, whereupon parts 2 to 4
+were discarded unparsed (1.84 s). Now each part carries a quarter of the cap and all four are
+parsed — measured 1.9 to 2.6 s; the promise now reads "about 2–3 s depending on machine load"
+instead of "around 2 s". The overall worst-case mail (HTML budget, plain-text pre-cut and link
+budget all full at once) costs 1.0 s.
 
-**Vierte Iteration (2026-09-12).** Der Skeptiker der dritten Iteration bestätigte wieder
-alle bisherigen Repros als tot und belegte vier neue Punkte (oben als R-8 bis R-11). Neue
-Regel dieser Iteration: **Jede neue oder geänderte Regex und jede Schleife im Hot Path
-bekommt eine Messreihe (n, 2n, 4n)** — R-8 war genau der Fall, den die dritte Iteration ohne
-Messreihe eingebaut hatte. R-8 ist eine Regression aus dem R-4-Fix: Das zu
-`email.header.ecre` formgleiche `.*?` darf über `?` hinweglaufen, und ohne schliessendes
-`?=` scannt jede Startstelle den ganzen Resttext. Messreihe `_mask_encoded_words` auf
-kaputten Wörtern, n = 25 000 / 50 000 / 100 000 / 200 000: vorher 21,4 s / 80,7 s / Abbruch,
-nachher 0,000 / 0,000 / 0,001 / 0,001 s; mit gültigen Wörtern 0,012 / 0,028 / 0,057 /
-0,119 s (linear). Ende-zu-Ende: 156-KiB-`From` im Ingest 18,2 s → 0,00 s, 160-KiB-`Subject`
-8,6 s → 0,00 s. Damit der Zeittest nicht bloss die neue Kopfzeilen-Obergrenze bestätigt,
-prüft `test_r8_maskierung_ist_linear` die Kennlinie **ohne** Obergrenze (achtfacher Umfang,
-höchstens sechzehnfache Zeit — quadratisch wäre vierundsechzigfach), und der Leitsatz „nie
-enger als der Dekoder" bleibt mit dem unveränderten Orakeltest
-`test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder` abgesichert. Für R-9 ist das Orakel
-weiterhin die Adresse im Rohheader beziehungsweise `email.policy.default`; alle vier Formen
-liefern vor dem Fix `from_domain=''`, `(unknown sender)` und beide Warnungen auf `False`.
-R-10 und R-11 sind Zeitaussagen und wurden vorher wie nachher an denselben Skripten gemessen
-(`sk3_max.py`, `sk3_parts.py`, `sk3_pdf.py`): Gesamt-Worst-Case-Mail 21,45 MB 9,22 s →
-2,70 s, 200 000 MIME-Teile 3,69 s → 1,81 s, drei PDF-Anhänge 60,1 s → 30,1 s Wandzeit,
-zwanzig PDF-Anhänge rechnerisch ~400 s → 30,3 s. Messreihen dazu: 20 Textanhänge à 480 000
-Zeichen (n/2n/4n = 5/10/20) vorher 1,64 / 2,53 / 5,44 s, nachher 0,28 / 0,46 / 0,49 s;
-MIME-Teile 2000/4000/8000 vorher 0,03 / 0,06 / 0,12 s, nachher 0,02 / 0,04 / 0,10 s (dort
-dominiert das Parsen, das keine Schranke abwenden kann). Für R-11 misst der Unit-Test nicht
-die Wanduhr, sondern die **vergebenen Zeitlimits** (`[20,0; 10,0]` statt dreimal 20,0) und
-die Zahl der Aufrufe — deterministisch und in Millisekunden, mit einer Uhr-Attrappe statt
-echter Kindprozesse.
+**Fourth iteration (2026-09-12).** The third iteration's skeptic again confirmed all previous
+repros as dead and demonstrated four new points (carried above as R-8 to R-11). The new rule of
+this iteration: **every new or changed regex and every loop in the hot path gets a measurement
+series (n, 2n, 4n)** — R-8 was exactly the case the third iteration had built in without one.
+R-8 is a regression from the R-4 fix: the `.*?` shaped like `email.header.ecre` may run past
+`?`, and without a closing `?=` every start position scans the whole remaining text. Measurement
+series for `_mask_encoded_words` on broken words, n = 25,000 / 50,000 / 100,000 / 200,000:
+before 21.4 s / 80.7 s / abort, after 0.000 / 0.000 / 0.001 / 0.001 s; with valid words 0.012 /
+0.028 / 0.057 / 0.119 s (linear). End to end: a 156 KiB `From` in ingest 18.2 s → 0.00 s, a
+160 KiB `Subject` 8.6 s → 0.00 s. So that the timing test does not merely confirm the new header
+upper bound, `test_r8_maskierung_ist_linear` checks the curve **without** the bound (eight times
+the size, at most sixteen times the time — quadratic would be sixty-four times), and the
+guiding principle "never narrower than the decoder" stays secured by the unchanged oracle test
+`test_hc2_2_maskierung_ist_nicht_enger_als_der_dekoder`. For R-9 the oracle is still the address
+in the raw header, or `email.policy.default`; all four forms yield `from_domain=''`,
+`(unknown sender)` and both warnings at `False` before the fix. R-10 and R-11 are claims about
+time and were measured before and after on the same scripts (`sk3_max.py`, `sk3_parts.py`,
+`sk3_pdf.py`): the overall worst-case mail of 21.45 MB 9.22 s → 2.70 s, 200,000 MIME parts
+3.69 s → 1.81 s, three PDF attachments 60.1 s → 30.1 s wall time, twenty PDF attachments
+computed at ~400 s → 30.3 s. Measurement series for these: 20 text attachments of 480,000
+characters (n/2n/4n = 5/10/20) before 1.64 / 2.53 / 5.44 s, after 0.28 / 0.46 / 0.49 s; MIME
+parts 2000/4000/8000 before 0.03 / 0.06 / 0.12 s, after 0.02 / 0.04 / 0.10 s (parsing dominates
+there, which no bound can avert). For R-11 the unit test does not measure the wall clock but the
+**time limits granted** (`[20.0; 10.0]` instead of three times 20.0) and the number of calls —
+deterministic and in milliseconds, with a clock double instead of real child processes.
 
-**Fünfte Iteration (2026-09-12).** Der Skeptiker der vierten Iteration bestätigte alle
-bisherigen Repros als tot und belegte drei neue Punkte (oben als S-1 bis S-3). S-1: Der
-Deckel aus R-8 galt für die gemeldete Instanz, nicht für die Klasse — `To` lief ungedeckelt
-durch `getaddresses`, und beim Nachmessen aller Lesestellen zeigte sich die eigentlich
-teure: `as_bytes()` in `_raw_bytes` faltet jede Kopfzeile jedes Teils neu (250 000
-Kopfzeilen 13,8 s, 20-MB-Teil-Header 13,9 s, 5000 Teile à 4 KB 13,0 s, 20-MB-`Return-Path`
-11,5 s). Messreihe `To` 1/2/4/8 MB, `build_raw_mail` allein, alt (Stand `649a9b8`) → neu:
-0,57 / 1,36 / 2,00 / 4,11 s → 0,01 s durchweg (Form `a@b.example, `); 0,80 / 1,60 / 3,22 /
-6,51 s → 0,01 s (Form `<a@b`). Die übrigen Formen: 20-MB-`To`-Repro des Skeptikers
-(`sk4_to2.py`) 2,41 / 5,38 / 9,58 / 18,57 s → 0,05 / 0,09 / 0,15 / 0,12 s (der Rest ist
-Serialisierung und Hash des 20-MB-Bodys); Cc / Authentication-Results / Message-ID / Date /
-Return-Path je 20 MB: 1,99 / 2,41 / 0,29 / 4,12 / 11,51 s → 0,00 s; viele Kopfzeilen bzw.
-Teile 13,8 / 12,5 / 13,9 / 13,0 s → 0,22 / 0,35 / 0,01 / 0,16 s. S-2: Orakel ist
-`email.policy.default` auf demselben Rohheader; neun unbalancierte Formen liefern vor dem
-Fix in drei Fällen `bank.example` ohne jede Warnung, nach dem Fix in keinem Fall eine fremde
-Domain (unbekannt + Warnung oder die echte Adresse), acht balancierte Gegenproben
-(verschachtelt, escaped, Kommentar nach der Adresse) bleiben `evil.example`; der neue
-Scanner ist linear (4096 … 262 144 Zeichen: 0,0005 … 0,030 s, `test_s2_scanner_ist_linear`).
-S-3 ist eine Messkorrektur, per Profil begründet: Der Parser der Standardbibliothek trägt 1,9 bis 2,3 s
-der 3,6 bis 5,1 s, die eigenen Pässe 1,7 bis 2,2 s, die Dekodierung der Anhänge 0,01 s.
+**Fifth iteration (2026-09-12).** The fourth iteration's skeptic confirmed all previous repros
+as dead and demonstrated three new points (carried above as S-1 to S-3). S-1: the cap from R-8
+applied to the reported instance, not to the class — `To` ran uncapped through `getaddresses`,
+and on measuring all read sites the genuinely expensive one showed up: `as_bytes()` in
+`_raw_bytes` refolds every header of every part (250,000 headers 13.8 s, a 20 MB part header
+13.9 s, 5000 parts of 4 KB 13.0 s, a 20 MB `Return-Path` 11.5 s). Measurement series for `To`
+at 1/2/4/8 MB, `build_raw_mail` alone, old (state `649a9b8`) → new: 0.57 / 1.36 / 2.00 / 4.11 s
+→ 0.01 s throughout (form `a@b.example, `); 0.80 / 1.60 / 3.22 / 6.51 s → 0.01 s (form `<a@b`).
+The other forms: the skeptic's 20 MB `To` repro (`sk4_to2.py`) 2.41 / 5.38 / 9.58 / 18.57 s →
+0.05 / 0.09 / 0.15 / 0.12 s (the rest is serialisation and the hash of the 20 MB body); Cc /
+Authentication-Results / Message-ID / Date / Return-Path at 20 MB each: 1.99 / 2.41 / 0.29 /
+4.12 / 11.51 s → 0.00 s; many headers or parts 13.8 / 12.5 / 13.9 / 13.0 s → 0.22 / 0.35 / 0.01
+/ 0.16 s. S-2: the oracle is `email.policy.default` on the same raw header; nine unbalanced
+forms yield `bank.example` without any warning in three cases before the fix, and after the fix
+never a foreign domain (unknown + warning, or the real address), while eight balanced
+counter-checks (nested, escaped, a comment after the address) stay `evil.example`; the new
+scanner is linear (4096 … 262,144 characters: 0.0005 … 0.030 s, `test_s2_scanner_ist_linear`).
+S-3 is a measurement correction justified by a profile: the standard library's parser
+contributes 1.9 to 2.3 s of the 3.6 to 5.1 s, the program's own passes 1.7 to 2.2 s, the
+decoding of the attachments 0.01 s.
 
-**Das Muster der Nachfixrunde und die Regel daraus.** Jede der vier vorigen Iterationen hat
-an der Naht, die sie neu gezogen hat, ein Loch geöffnet, das erst der Skeptiker fand: Die
-Maske formgleich zum Dekoder (R-4) brachte das quadratische `.*?` (R-8); der Deckel gegen
-R-8 sass nur bei der gemeldeten Kopfzeile (S-1) und zerschnitt Kommentare, die der neue
-Rückfall aus R-9 dann las (S-2); das Roh-Budget je Textstück (R-6) wurde von der Anhangszahl
-multipliziert (R-10), und die Worst-Case-Zahl wurde dreimal nach oben korrigiert (R-7,
-R-10, S-3). Die Regel ab jetzt, zusätzlich zur Messreihen-Pflicht der vierten Iteration:
-**(1) Jede Schranke wird für die Klasse gebaut, nicht für die Instanz** — wer einen Header
-deckelt, deckelt an der einen Lesestelle alle Header und misst danach jede andere Stelle,
-die dasselbe liest (hier: die Rück-Serialisierung). **(2) Ein Rückfall, der mehr Text liest
-als der Hauptweg, ist verdächtig** — Rückfälle lesen nie Kommentar- oder
-Quoted-String-Inhalt, und im Zweifel ist das Ergebnis „unbekannt + Warnung", nie eine
-Domain. **(3) Der Worst Case wird mit der für den Parser dichtesten Form gemessen**, nicht
-mit der Form, die das eigene Budget am frühesten abschneidet, und der Anteil der
-Standardbibliothek wird getrennt ausgewiesen. **(4) Vor der Abgabe laufen alle
-Repro-Skripte aller Iterationen gegen den alten und den neuen Stand.**
+**The pattern of the follow-up fix round, and the rule from it.** Each of the four previous
+iterations opened a hole at the seam it had newly drawn, which only the skeptic found: the mask
+shaped like the decoder (R-4) brought the quadratic `.*?` (R-8); the cap against R-8 sat only at
+the reported header (S-1) and cut comments apart, which the new fallback from R-9 then read
+(S-2); the raw budget per text chunk (R-6) was multiplied by the number of attachments (R-10),
+and the worst-case figure was corrected upwards three times (R-7, R-10, S-3). The rule from now
+on, in addition to the fourth iteration's measurement-series duty: **(1) every bound is built
+for the class, not for the instance** — whoever caps a header caps all headers at the one read
+site and then measures every other site that reads the same thing (here: the re-serialisation).
+**(2) A fallback that reads more text than the main path is suspect** — fallbacks never read
+comment or quoted-string content, and in case of doubt the result is "unknown + warning", never
+a domain. **(3) The worst case is measured with the form densest for the parser**, not with the
+form that its own budget truncates earliest, and the standard library's share is reported
+separately. **(4) Before handover, all repro scripts of all iterations run against the old and
+the new state.**
 
-**Offene Frage aus HC2-1 beantwortet.** „Greift der Runner eine solche Mail nach einem
-Neustart erneut auf (Dauer-DoS)?" — Nein. `poll_once` reserviert den Dedupe-Key mit
-`StateDB.claim` **vor** der Verarbeitung (ADR-019), und `claim` committet sofort
-(`with self._conn` um das `INSERT OR IGNORE`). Ein harter Abbruch mitten in der
-Sanitize-Stufe hinterlässt die Zeile mit Status `pending`; der nächste Prozess bekommt für
-dieselbe Mail `ClaimResult.DUPLICATE` und überspringt sie. Eine Angriffsmail kostet also
-höchstens **einen** Zyklus. Belegt durch
-`test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos`. Ein
-`failed`-Status vor der Sanitize-Stufe ist damit nicht nötig.
+**An open question from HC2-1 answered.** "Does the runner pick such a mail up again after a
+restart (permanent DoS)?" — No. `poll_once` reserves the dedupe key with `StateDB.claim`
+**before** processing (ADR-019), and `claim` commits immediately (`with self._conn` around the
+`INSERT OR IGNORE`). A hard abort in the middle of the sanitize stage leaves the row with status
+`pending`; the next process gets `ClaimResult.DUPLICATE` for the same mail and skips it. An
+attack mail therefore costs at most **one** cycle. Demonstrated by
+`test_ingest_poll.py::test_hc2_1_kill_waehrend_der_verarbeitung_ist_kein_dauer_dos`. A `failed`
+status before the sanitize stage is therefore unnecessary.
 
-**Testzahl nach NF-1:** 1693 (von 1565; 1586 nach der ersten, 1604 nach der zweiten,
-1627 nach der dritten, 1644 nach der vierten Iteration), Laufzeit rund 145 bis 180 s je
-nach Maschinenlast — der Zuwachs kommt aus den Zeitmessungen der zweiten bis fünften
-Iteration.
+**Test count after NF-1:** 1693 (up from 1565; 1586 after the first, 1604 after the second,
+1627 after the third, 1644 after the fourth iteration), runtime around 145 to 180 s depending on
+machine load — the growth comes from the timing measurements of the second to fifth iteration.
 
-### Offen nach Ende der Nachfixrunde (Skeptiker der fünften Iteration, Fable 5.1, 2026-09-12)
+### Open at the end of the follow-up fix round (skeptic of the fifth iteration, Fable 5.1, 2026-09-12)
 
-Die Nachfixrunde wurde nach fünf Iterationen auf Nutzerentscheid beendet. Die beiden
-Release-Blocker HC2-1 und HC2-2 sind in ihrer gemeldeten Form seit der ersten Iteration
-behoben und über alle fünf Skeptiker-Läufe stabil geblieben (alle Repro-Skripte der
-Iterationen 1–5 laufen auf `a2feda2` ohne Rückfall in die gefährliche Richtung). Der letzte
-Skeptiker hat fünf Punkte belegt, die zunächst **nicht** bearbeitet wurden; sie stehen hier,
-damit sie nicht nur im Workflow-Journal liegen. Vor Release 0.2.0 wurden O-1 (zwei
-Iterationen mit Skeptiker) und O-3 (direkt, mit dem Skeptiker-Fuzz als Regressionstest)
-geschlossen; O-6 bis O-8 sind Nebenbefunde des O-1-Skeptikers. Die Repro-Skripte
-(`sk5_*.py` … `sk7_*.py`) liegen im Scratchpad der Sitzung, nicht im Repo.
+The follow-up fix round was ended after five iterations by the user's decision. The two release
+blockers HC2-1 and HC2-2 have been fixed in their reported form since the first iteration and
+have stayed stable across all five skeptic runs (all repro scripts of iterations 1–5 run on
+`a2feda2` without relapsing in the dangerous direction). The last skeptic demonstrated five
+points that were initially **not** worked on; they stand here so that they do not live only in
+the workflow journal. Before release 0.2.0, O-1 (two iterations with a skeptic) and O-3
+(directly, with the skeptic's fuzz as a regression test) were closed; O-6 to O-8 are side
+findings of the O-1 skeptic. The repro scripts (`sk5_*.py` … `sk7_*.py`) live in the session's
+scratchpad, not in the repo.
 
-| Nr. | Severity | Befund | Herkunft | Fix-Richtung |
+| No. | Severity | Finding | Origin | Fix direction |
 |-----|----------|--------|----------|--------------|
-| O-1 | hoch | **gefixt (2026-09-12).** Gift-Mail mit ≥ 250 verschachtelten multipart-Ebenen (16 KB): `as_bytes()` scheiterte mit `RecursionError`, der Rückfall `str(msg.obj)` in `_raw_bytes` rekursierte erneut und wurde nicht gefangen; `build_raw_mail` warf entgegen ADR-020 (e), `poll_once` hatte kein try darum — der Dauerbetrieb starb, `run --once` scheiterte bei jedem Lauf, spätere Mails blieben liegen | vorbestehend (auch auf `649a9b8`) | **Erledigt:** Tiefendeckel `MAX_MIME_DEPTH` = 32 iterativ vor jeder Serialisierung (`_cap_message_depth`, Log `mail_mime_depth_capped`), dreistufiger und vollständig gefangener Rückfall in `_raw_bytes` (zuletzt nur Kopfzeilen + Hinweistext), Schutz um `build_raw_mail` in `poll_once` mit Ersatz-`RawMail` (`ingest_failed`) ⇒ Metadaten-Notiz, Status `failed`/`ingest_error`, Mail als gelesen markiert, Zyklus läuft weiter; Sanitizer-Baumlauf zusätzlich hart auf 64 Ebenen begrenzt. ADR-020-Nachtrag (O-1). Tests: `test_o1_tiefe_verschachtelung_wirft_nicht` (250/1000/5000), `test_o1_geparste_giftmail_wird_gedeckelt_und_bleibt_klein`, `test_o1_normale_mail_bleibt_byteidentisch`, `test_o1_raw_bytes_rueckfall_wirft_nie`, `test_o1_sanitizer_parse_der_giftmail_ist_gedeckelt` (unit/test_ingest_rawmail.py), `test_o1_unlesbare_mail_wird_zur_notiz` (unit/test_pipeline.py), `test_o1_poll_once_ueberlebt_die_giftmail`, `test_o1_beliebiger_fehler_vor_process_wird_zur_notiz`, `test_o1_ersatzkey_ohne_lesbare_header_ist_stabil` (integration/test_ingest_poll.py), `test_o1_run_forever_stirbt_nicht` (integration/test_runner_e2e.py). **Restfall (Skeptiker, zweite Iteration): geschlossen.** Ab 984 `message/rfc822`-Ebenen (31 569 B) scheiterte schon `MailMessage.__init__` in imap-tools innerhalb des `fetch`-Generators; die Umdeutung in `ImapConnectionError` machte daraus eine endlose Backoff-Schleife (Mail nie beansprucht, nie Seen; `run --once` „Mailbox unreachable"). Jetzt Abruf **je UID** (`uids()` + `fetch(uid_list=…)`, gleiche Kommandozahl 1 + 2n je Zyklus, gemessen n = 10/20/40), Parse je Mail isoliert, Kopfzeilen-Ersatz über gedeckeltes `UID FETCH (BODY.PEEK[HEADER]<0.262144> …)` ⇒ `UnparsableMailMessage` ⇒ Notiz, `failed`/`ingest_error`, Seen; Log `mail_unparsable`; echte Verbindungsfehler (inkl. `imaplib.IMAP4.error`) bleiben `ImapConnectionError`. ADR-020-Nachtrag (zweite Iteration), ADR-064-Nachtrag. Tests: `test_o1b_fetch_unseen_isoliert_unparsbare_mail`, `test_o1b_echter_verbindungsfehler_bleibt_verbindungsfehler` (3 Klassen), `test_o1b_search_fehler_ist_ein_verbindungsfehler`, `test_o1b_kopfzeilen_abruf_scheitert_auch`, `test_o1b_unparsbare_mail_ohne_kopfzeilen_antwort`, `test_o1b_verschwundene_uid_wird_uebersprungen` (unit/test_ingest_client.py), `test_o1b_unparsbare_mail_blockiert_den_poll_nicht`, `test_o1b_echte_giftmail_rfc822_tiefe_990`, `test_o1b_header_abruf_scheitert_auch`, `test_o1b_nur_uid_kommandos_kein_expunge`, `test_o1b_kommandozahl_je_zyklus` (10/20/40) (integration/test_ingest_poll.py), `test_o1b_run_forever_drei_zyklen`, `test_o1b_run_once_bilanz_und_exitcode` (integration/test_runner_e2e.py) |
-| O-2 | hoch | Teile-Flut ohne Kopfzeilen: 2 Mio. leere MIME-Teile in 20 MB kosten 34 s CPU (Parser 12,6 s vor jedem Budget, `build_raw_mail` 8,4 s, Sanitizer-Parse 13,2 s), linear und ungedeckelt — der Kopfzeilen-Deckel greift nicht, weil Teile ohne Kopfzeile kein Budget verbrauchen | vorbestehend | Nur vor dem Parsen abwendbar: Boundary-Zählung auf den Rohbytes des Abrufs (Eingriff in den Fetch-Pfad, ADR nötig) oder kleinerer Default für `max_mail_bytes`; bis dahin als Grenze dokumentiert |
-| O-3 | hoch | **gefixt (2026-09-12 bis 2026-09-14, vor Release 0.2.0, sechs Griffe).** Erster Griff (Maske spiegelt die Wortform des Parsers) vom Skeptiker widerlegt: Token-Grenzen enger als der Parser (nach `.`, `:`, `<`, `\\`), Q-Wort mit literalem `@` ersetzte die Domain wieder. Zweiter Griff: der RFC-5322-Parser der Standardbibliothek (`email.headerregistry`) liest Anzeigename und Adresse selbst — Maske, Klammer-Rückfall und Kommentar-Scanner sind entfernt; dritter Griff nach dem zweiten Skeptiker: quotierte `addr_spec` und Domain direkt vom Parser, abgesicherte Legacy-Parser, Outlook-Form ohne Fehlalarm; vierter Griff nach dem dritten Skeptiker: `RawMail.from_address`/`reply_to_address` aus dem Parser, der Sanitizer vergleicht diese statt erneut zu parsen (`"a["@…`); fünfter Griff nach dem vierten Skeptiker: alle Reply-To-Adressen zählen, Adress-Rückfall der Anzeige gescrubbt, Outlook-Anzeige nur aus schlichten Wörtern; sechster Griff nach dem fünften Skeptiker (Regression des fünften): unbrauchbare Reply-To-Angaben bleiben als Unbekannte in der Liste, Entities im Anzeigenamen vor dem Scrub aufgelöst; nur die erste Angabe zählt, Domains müssen hostname-förmig sein, ein unlesbarer Header bleibt als `(unreadable)` sichtbar (Warnung feuert). Regressionstest: die 45 Header-Formen des Skeptikers in `test_ingest_rawmail.py::test_o3_*` mit `email.policy.default` als Orakel — nie eine Domain, die das Mailprogramm nicht zeigt, nie „unbekannt“ ohne Warnung. ADR-020 (N, O-3). Ursprünglich: ein regelwidrig kodiertes Wort mit `?` oder `(` im encoded-text (`=?utf-8?Q?Support?(?=`) wird maskiert und versteckt so die Klammer vor Kommentar-Scanner und `getaddresses`; das Werkzeug zeigt `bank.example` ohne Warnung, das Orakel `real@evil.example` | seit `b7d093d` | Maske strikt nach RFC 2047 (encoded-text ohne `?` und ohne Leerzeichen, Wort durch Whitespace oder Anfang abgetrennt) — oder den Kommentar-Scanner vor der Maskierung auf dem Rohtext laufen lassen |
-| O-4 | mittel | Gesamt-Worst-Case 3,6–4,1 s CPU im Sanitizer ist dokumentiert, aber die Ende-zu-Ende-Zusage „rund 8 s" (ADR-084, vierter Nachtrag) wird von O-2 um das Siebenfache überschritten | Doku | Nach O-2 neu messen und die Zusage in ADR-084 auf die teuerste zulässige Mail setzen |
-| O-5 | niedrig | Demaskierung: `MDENCWORD1` ersetzt auch den Präfix von `MDENCWORD10…19`; Anzeigenamen mit mehr als zehn kodierten Wörtern werden verstümmelt (kein Sicherheitsbezug, die Adresse steht vorher fest) | seit `649a9b8` | Längste Tokens zuerst ersetzen oder ein Trennzeichen hinter der Nummer |
-| O-6 | mittel | Nebenbefund der zweiten O-1-Iteration (Skeptiker Fable 5.1): Der Platzhalter einer unparsbaren Mail beansprucht die nackte Message-ID mit unbekanntem Inhalts-Hash — eine spätere echte Mail mit derselben Message-ID wird still als Duplikat unterdrückt (`mail_duplicate`, keine Zustellung); der Kollisionsschutz aus ADR-079 greift nicht, weil `content_hash` leer ist | seit `eef74d4` | Platzhalter nie mit der nackten Message-ID beanspruchen: immer der UID/INTERNALDATE-gebundene Ersatz-Key oder ein Sentinel-Inhaltshash über die abgerufenen Kopfzeilenbytes, damit die echte Mail als Kollision unter abgeleitetem Key verarbeitet wird; Test: Gift-Mail mit Message-ID X, danach echte Mail X ⇒ verarbeitet |
-| O-7 | mittel | Antwortet der Server auf das `UID FETCH` einer einzelnen Mail dauerhaft mit `NO` (Server-seitig defekte Mail), blockiert diese Mail den Abruf weiterhin endlos: `MailboxFetchError` → `ImapConnectionError` → Backoff, `run --once` meldet „Mailbox unreachable", die Mails dahinter laufen nie | vorbestehend, durch O-1 sichtbar | Ein `NO` auf das FETCH einer UID bei funktionierendem SEARCH ist eine Eigenschaft der Mail, nicht der Verbindung: wie eine unparsbare Mail als Platzhalter buchen (Kopfzeilen-Abruf, sonst UID-Key), Notiz, Seen — mindestens überspringen und mit eigenem Logereignis (UID-Hash, Status) melden |
-| O-8 | niedrig | Der Ersatz-Dedupe-Key einer unparsbaren Mail ohne Message-ID enthält die IMAP-Sequenznummer aus der rohen FETCH-Antwort; nach Verbindungsabbruch zwischen Claim und STORE und einem Expunge durch einen fremden Client rutscht sie, dieselbe Gift-Mail wird zweimal gebucht und zugestellt | seit `eef74d4` | Key nur aus mail-gebundenen Werten bilden: UID + aus der Antwort geparste INTERNALDATE und RFC822.SIZE + Kopfzeilenbytes, nicht die rohe Antwortzeile |
-| O-9 | niedrig | Ein nachgebauter Marker ohne Doppelpunkt (`[Link #9]`, `[Mail #3]`) im Anzeigenamen wird weder neutralisiert noch als `forged_markers` gezählt; im Prompt-Datenblock steht er wie ein echter Verweis, in der Zustellung als `Link #9` (fünfter O-3-Skeptiker, 2026-09-14) | vorbestehend | `neutralize_forged_markers` oder der Link-Scrub auch auf `[Link #n]`/`[Mail #n]` ohne Doppelpunkt anwenden und zählen |
-| O-10 | niedrig | HTML-Entity-Ketten ab neun Ebenen (`&amp;amp;…#60;`) im Anzeigenamen: der Sanitizer löst acht Runden, der Composer drei — der Rest steht einfach kodiert im Prompt-Datenblock (`&#60;…MAILDIGEST-END…`), die Zustellung ist sauber und ein Marker-Nachbau bräuchte das Lauf-Token (sechster O-3-Skeptiker, 2026-09-14) | vorbestehend | Nach der letzten Runde verbliebene Entity-Sequenzen (`&#?\w+;`) entfernen statt stehen lassen, oder beide Schichten gleich tief decodieren |
-| O-11 | niedrig | RFC-widrige, unquotierte Phrasen mit `;` oder `[` im Reply-To (`Bank &amp; Co <x@…>`, `Support [Ticket #123] <x@…>`) liest weder der Parser noch das Orakel als Adresse — Warnung, obwohl das Mailprogramm womöglich die eine Adresse zeigt; 6 von 100 gutartigen Formen, in allen Ständen gleich (sechster O-3-Skeptiker) | vorbestehend | Hinnehmen (Warnung ist die sichere Richtung) oder die Phrase vor dem Parsen quotieren, wenn genau ein `<…>` mit brauchbarer Adresse folgt |
+| O-1 | high | **fixed (2026-09-12).** A poison mail with ≥ 250 nested multipart levels (16 KB): `as_bytes()` failed with `RecursionError`, the fallback `str(msg.obj)` in `_raw_bytes` recursed again and was not caught; `build_raw_mail` threw contrary to ADR-020 (e), and `poll_once` had no try around it — continuous operation died, `run --once` failed on every run, and later mail stayed put | pre-existing (also on `649a9b8`) | **Done:** a depth cap `MAX_MIME_DEPTH` = 32 applied iteratively before any serialisation (`_cap_message_depth`, log `mail_mime_depth_capped`), a three-stage and fully caught fallback in `_raw_bytes` (last resort: headers + a note text), a guard around `build_raw_mail` in `poll_once` with a substitute `RawMail` (`ingest_failed`) ⇒ metadata note, status `failed`/`ingest_error`, the mail marked as read, the cycle continues; the sanitizer's tree walk additionally capped hard at 64 levels. ADR-020 addendum (O-1). Tests: `test_o1_tiefe_verschachtelung_wirft_nicht` (250/1000/5000), `test_o1_geparste_giftmail_wird_gedeckelt_und_bleibt_klein`, `test_o1_normale_mail_bleibt_byteidentisch`, `test_o1_raw_bytes_rueckfall_wirft_nie`, `test_o1_sanitizer_parse_der_giftmail_ist_gedeckelt` (unit/test_ingest_rawmail.py), `test_o1_unlesbare_mail_wird_zur_notiz` (unit/test_pipeline.py), `test_o1_poll_once_ueberlebt_die_giftmail`, `test_o1_beliebiger_fehler_vor_process_wird_zur_notiz`, `test_o1_ersatzkey_ohne_lesbare_header_ist_stabil` (integration/test_ingest_poll.py), `test_o1_run_forever_stirbt_nicht` (integration/test_runner_e2e.py). **Remaining case (skeptic, second iteration): closed.** From 984 `message/rfc822` levels (31,569 B) onwards, `MailMessage.__init__` in imap-tools already failed inside the `fetch` generator; reinterpreting that as `ImapConnectionError` turned it into an endless backoff loop (the mail never claimed, never seen; `run --once` "Mailbox unreachable"). Now fetching happens **per UID** (`uids()` + `fetch(uid_list=…)`, the same command count 1 + 2n per cycle, measured at n = 10/20/40), the parse is isolated per mail, and headers are substituted through a capped `UID FETCH (BODY.PEEK[HEADER]<0.262144> …)` ⇒ `UnparsableMailMessage` ⇒ note, `failed`/`ingest_error`, seen; log `mail_unparsable`; real connection errors (including `imaplib.IMAP4.error`) stay `ImapConnectionError`. ADR-020 addendum (second iteration), ADR-064 addendum. Tests: `test_o1b_fetch_unseen_isoliert_unparsbare_mail`, `test_o1b_echter_verbindungsfehler_bleibt_verbindungsfehler` (3 classes), `test_o1b_search_fehler_ist_ein_verbindungsfehler`, `test_o1b_kopfzeilen_abruf_scheitert_auch`, `test_o1b_unparsbare_mail_ohne_kopfzeilen_antwort`, `test_o1b_verschwundene_uid_wird_uebersprungen` (unit/test_ingest_client.py), `test_o1b_unparsbare_mail_blockiert_den_poll_nicht`, `test_o1b_echte_giftmail_rfc822_tiefe_990`, `test_o1b_header_abruf_scheitert_auch`, `test_o1b_nur_uid_kommandos_kein_expunge`, `test_o1b_kommandozahl_je_zyklus` (10/20/40) (integration/test_ingest_poll.py), `test_o1b_run_forever_drei_zyklen`, `test_o1b_run_once_bilanz_und_exitcode` (integration/test_runner_e2e.py) |
+| O-2 | high | A flood of parts without headers: 2 million empty MIME parts in 20 MB cost 34 s of CPU (the parser 12.6 s before any budget, `build_raw_mail` 8.4 s, the sanitizer parse 13.2 s), linear and uncapped — the header cap does not bite, because parts without a header consume no budget | pre-existing | Only avertable before parsing: counting boundaries on the raw bytes of the fetch (an intervention in the fetch path, an ADR needed) or a smaller default for `max_mail_bytes`; documented as a limitation until then |
+| O-3 | high | **fixed (2026-09-12 to 2026-09-14, before release 0.2.0, six attempts).** The first attempt (a mask mirroring the parser's word form) was refuted by the skeptic: token boundaries narrower than the parser's (after `.`, `:`, `<`, `\\`), and a Q-word with a literal `@` replaced the domain again. Second attempt: the standard library's RFC 5322 parser (`email.headerregistry`) reads display name and address itself — the mask, bracket fallback and comment scanner are removed; third attempt after the second skeptic: the quoted `addr_spec` and the domain straight from the parser, guarded legacy parsers, the Outlook form without a false alarm; fourth attempt after the third skeptic: `RawMail.from_address`/`reply_to_address` from the parser, and the sanitizer compares those instead of parsing again (`"a["@…`); fifth attempt after the fourth skeptic: all Reply-To addresses count, the display's address fallback is scrubbed, and the Outlook display is built only from plain words; sixth attempt after the fifth skeptic (a regression of the fifth): unusable Reply-To entries stay in the list as unknowns, and entities in the display name are resolved before the scrub; only the first entry counts, domains must be hostname-shaped, and an unreadable header stays visible as `(unreadable)` (the warning fires). Regression test: the skeptic's 45 header forms in `test_ingest_rawmail.py::test_o3_*` with `email.policy.default` as the oracle — never a domain the mail program does not show, never "unknown" without a warning. ADR-020 (A, O-3). Originally: an irregularly encoded word with `?` or `(` in the encoded-text (`=?utf-8?Q?Support?(?=`) gets masked and thereby hides the bracket from the comment scanner and `getaddresses`; the tool shows `bank.example` without a warning, the oracle `real@evil.example` | since `b7d093d` | A mask strictly per RFC 2047 (encoded-text without `?` and without spaces, the word separated by whitespace or the start) — or run the comment scanner on the raw text before masking |
+| O-4 | medium | The overall worst case of 3.6–4.1 s CPU in the sanitizer is documented, but the end-to-end promise "around 8 s" (ADR-084, fourth addendum) is exceeded sevenfold by O-2 | docs | Re-measure after O-2 and set the promise in ADR-084 to the most expensive permitted mail |
+| O-5 | low | Unmasking: `MDENCWORD1` also replaces the prefix of `MDENCWORD10…19`; display names with more than ten encoded words get mangled (no security relevance, the address is fixed beforehand) | since `649a9b8` | Replace the longest tokens first, or add a separator after the number |
+| O-6 | medium | A side finding of the second O-1 iteration (skeptic Fable 5.1): the placeholder of an unparsable mail claims the bare Message-ID with an unknown content hash — a later genuine mail with the same Message-ID is silently suppressed as a duplicate (`mail_duplicate`, no delivery); the collision protection from ADR-079 does not bite because `content_hash` is empty | since `eef74d4` | Never claim the placeholder with the bare Message-ID: always the UID/INTERNALDATE-bound substitute key, or a sentinel content hash over the fetched header bytes, so that the genuine mail is processed as a collision under a derived key; test: a poison mail with Message-ID X, then a genuine mail X ⇒ processed |
+| O-7 | medium | If the server answers the `UID FETCH` of a single mail with `NO` permanently (a server-side broken mail), that mail still blocks the fetch endlessly: `MailboxFetchError` → `ImapConnectionError` → backoff, `run --once` reports "Mailbox unreachable", and the mail behind it never runs | pre-existing, made visible by O-1 | A `NO` on the FETCH of one UID with a working SEARCH is a property of the mail, not of the connection: book it as a placeholder like an unparsable mail (header fetch, otherwise the UID key), note, seen — at minimum skip it and report it with a log event of its own (UID hash, status) |
+| O-8 | low | The substitute dedupe key of an unparsable mail without a Message-ID contains the IMAP sequence number from the raw FETCH response; after a connection abort between the claim and the STORE, and an expunge by a foreign client, it shifts, and the same poison mail is booked and delivered twice | since `eef74d4` | Build the key only from mail-bound values: UID + the INTERNALDATE and RFC822.SIZE parsed from the response + the header bytes, not the raw response line |
+| O-9 | low | A forged marker without a colon (`[Link #9]`, `[Mail #3]`) in the display name is neither neutralised nor counted as `forged_markers`; in the prompt data block it stands like a genuine reference, and in the delivery as `Link #9` (fifth O-3 skeptic, 2026-09-14) | pre-existing | Apply `neutralize_forged_markers` or the link scrub to `[Link #n]`/`[Mail #n]` without a colon as well, and count them |
+| O-10 | low | HTML entity chains from nine levels onwards (`&amp;amp;…#60;`) in the display name: the sanitizer resolves eight rounds, the composer three — the remainder stands simply encoded in the prompt data block (`&#60;…MAILDIGEST-END…`), the delivery is clean and a forged marker would need the run token (sixth O-3 skeptic, 2026-09-14) | pre-existing | Remove entity sequences (`&#?\w+;`) left after the last round instead of leaving them, or decode equally deeply in both layers |
+| O-11 | low | RFC-violating, unquoted phrases with `;` or `[` in the Reply-To (`Bank &amp; Co <x@…>`, `Support [Ticket #123] <x@…>`) are read as an address by neither the parser nor the oracle — a warning, even though the mail program may well show the one address; 6 of 100 benign forms, the same in every state (sixth O-3 skeptic) | pre-existing | Accept it (the warning is the safe direction), or quote the phrase before parsing when exactly one `<…>` with a usable address follows |
 
-Bewertung: Mit dem Maßstab der Skeptiker („fixed nur, wenn kein Weg mehr existiert, der
-das Schutzziel verletzt") fand jede Iteration an der neu gezogenen Naht oder in einer bisher
-ungemessenen Klasse ein weiteres Loch. Die Runde wurde deshalb beendet, statt weiter zu
-iterieren. **O-1 ist inzwischen behoben** (2026-09-12, ADR-020-Nachtrag; siehe die Zeile
-oben — der vom Skeptiker nachgemessene Rest ab 984 `message/rfc822`-Ebenen ist in der
-zweiten Iteration durch den Abruf je UID geschlossen); O-2 ist eine Designentscheidung am Abruf, O-3 und O-5 sind kleine
-Korrekturen an der Maske.
+Assessment: with the skeptics' yardstick ("fixed only when no path exists any more that violates
+the protection goal"), every iteration found a further hole at the newly drawn seam or in a
+previously unmeasured class. The round was therefore ended rather than iterated further. **O-1
+has since been fixed** (2026-09-12, ADR-020 addendum; see the row above — the remainder the
+skeptic measured from 984 `message/rfc822` levels onwards was closed in the second iteration by
+fetching per UID); O-2 is a design decision at the fetch, and O-3 and O-5 are small corrections
+to the mask.

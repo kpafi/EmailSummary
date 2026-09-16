@@ -93,7 +93,7 @@ def _full_message() -> str:
 
 def _spec_line_prefixes() -> list[str]:
     """Die festen Zeilenanfänge des §6-Blocks — Fortsetzungszeilen (eingerückt) zählen nicht."""
-    lines = [line for line in _block_after("**Normale Zustellung**") if not line[0].isspace()]
+    lines = [line for line in _block_after("**Normal delivery**") if not line[0].isspace()]
     assert len(lines) == 8, f"§6 beschreibt {len(lines)} Zeilen — Block verändert?"
     prefixes = [_prefix(line).rstrip() for line in lines]
     # Zusammenfassung, Anhangszeile und Fußnote haben keinen festen Anteil.
@@ -132,7 +132,7 @@ def test_hc14_hinweistexte_stehen_woertlich_in_der_spec() -> None:
 
 def test_hc14_metadaten_notiz_hat_genau_die_fuenf_zeilen_der_spec() -> None:
     """Die fünf Zeilen aus §6 passen Zeile für Zeile auf `compose_failure`."""
-    spec_lines = _block_after("**Metadaten-Notiz (fail-closed)**")
+    spec_lines = _block_after("**Metadata note (fail-closed)**")
     assert len(spec_lines) == 5, "Die Notiz ist als fünfzeilig zugesagt"
     notice = FailureNotice(
         dedupe_key="<mail-9@example.org>",
@@ -178,7 +178,7 @@ def test_hc14_schrittzeilen_stehen_in_spec_und_code(literal: str) -> None:
 def test_hc14_fehlerpraefix_und_abbruch() -> None:
     """§2: Fehlerzeilen beginnen mit `Error: `, Strg-C meldet `Error: Aborted.`."""
     spec = _spec()
-    assert "beginnt mit `Error: `" in spec
+    assert "starts with `Error: `" in spec
     assert "`Error: Aborted.`" in spec
     assert '"Error: Aborted.\\n"' in inspect.getsource(cli)
 
@@ -223,4 +223,4 @@ def test_hc14_keine_deutschen_vertragszeilen_mehr() -> None:
         assert gone not in haystack, f"{gone!r} ist ein Rest der deutschen Fassung (HC-14)"
     # `Von:`/`Betreff:` bleiben **als Erkennungsmuster** erlaubt (CT-8, ADR-062) — sie
     # stehen in `output/sanitizer._RE_STRUCTURE_LABEL` und in §6 als solche beschrieben.
-    assert "in beiden Sprachen" in spec
+    assert "in both languages" in spec
