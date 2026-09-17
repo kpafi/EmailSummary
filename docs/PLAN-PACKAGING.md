@@ -1,6 +1,7 @@
 # Plan: delivery through apt and dnf
 
-As of 2026-09-16. Goal: besides the source on GitHub, MailDigest should be installable from
+As of 2026-09-18 — **both routes are live**; what follows is the plan they were built
+from, with the findings from the first runs folded in. Goal: besides the source on GitHub, MailDigest should be installable from
 a package repository of our own — `apt install maildigest` on Debian derivatives,
 `dnf install maildigest` on Fedora — and **every new release should carry both repositories
 along automatically**, triggered by the same git tag that already marks the release today.
@@ -286,6 +287,12 @@ more than a release that did not happen.
   section 6.
 
 ## 11. Switch the README over only afterwards
+
+*Done with 0.2.1.* The installation section leads with apt, names dnf for Fedora, and keeps
+`pipx` for everything else. One thing is still outstanding on the Fedora side: the COPR
+project has only `fedora-rawhide-x86_64` enabled, so a stable Fedora finds no repository
+until those chroots are added and both packages rebuilt. Until then the README points at
+the project page rather than naming releases it cannot promise.
 
 Until the first **green** release run, the installation section of the README keeps `pipx`
 as the only way. Instructions pointing at a still-empty repository produce a `404` for the

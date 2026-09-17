@@ -169,6 +169,18 @@ dependencies, so apt there refuses the installation instead of creating one that
 start. On those, and on anything not Debian-based, use `pipx` below; it works the same and
 updates with one command.
 
+**Recommended on Fedora — with `dnf`.** The Fedora packages live in a
+[COPR project](https://copr.fedorainfracloud.org/coprs/kpafi/maildigest/), enabled once:
+
+```bash
+sudo dnf copr enable kpafi/maildigest
+sudo dnf install maildigest
+```
+
+`dnf upgrade` carries new versions along from then on. `imap-tools` is missing from Fedora
+itself and is built as a second package in the same COPR project, which dnf resolves on its
+own. Which Fedora releases are served is listed on that project page.
+
 **Everywhere else — with `pipx`.** This puts the `maildigest` command on your path so it can
 be called from any directory:
 

@@ -20,9 +20,11 @@ All notable changes to MailDigest. The format follows
   there, and only then signs and publishes. A failing step stops the run before anything is
   published, and the version is checked against `pyproject.toml`, `__version__` and the
   manual page first. The plan behind it is [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md).
-- **Not yet, deliberately:** dnf. The Fedora side is prepared in the repository
-  (`packaging/rpm/maildigest.spec`, `.copr/Makefile`) but no COPR project is connected, so
-  the release skips it. Ubuntu 25.04 and older are not covered either — 24.04 LTS carries
+- **Fedora through `dnf`**, from a COPR project (`kpafi/maildigest`) that the release
+  triggers by webhook. `imap-tools` is missing from Fedora and is built as a second package
+  in the same project. Unlike `dh_python3` on the Debian side, the Fedora macros carry the
+  lower bounds over from `pyproject.toml` by themselves.
+- Ubuntu 25.04 and older are not covered — 24.04 LTS carries
   pydantic 1.10 where the code needs pydantic 2, and 25.04 dropped `python3-imap-tools`;
   the dependencies in the package say so, so apt refuses the installation there instead of
   creating one that cannot start.

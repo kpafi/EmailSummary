@@ -3156,3 +3156,28 @@ lokaler Cache ist (ADR-058).
   Getragen wird nur, was die Einbauprobe bestätigt (Debian 13+ verbindlich, Kali und
   Ubuntu 24.04 als nicht-blockierende Probe); ältere Systeme bleiben bei `pipx`. Der
   Handbuchseiten-Umweg über `~/.local/share/man` entfällt für Paketnutzer.
+
+**Nachtrag (2026-09-18, in Betrieb genommen):** Beide Wege laufen. Über apt getragen und je
+Release durch Einbauprobe belegt sind Debian 13+, Kali Rolling und Ubuntu 26.04+ — nicht
+24.04 (pydantic 1.10) und nicht 25.04 (kein `python3-imap-tools`); die ausgeschriebenen
+Versionsschranken sorgen dort für eine saubere Verweigerung. Für dnf steht das COPR-Projekt
+`kpafi/maildigest` mit zwei Paketen: `imap-tools` über COPRs PyPI-Quellart, weil es in
+Fedora fehlt, und `maildigest` als SCM-Paket über `.copr/Makefile`. Der Release-Workflow
+stößt es per Custom-Webhook an; nachgewiesen an einem Bau ohne Einreicher.
+
+Vier Dinge hat der Betrieb gelehrt, die in der Entscheidung so nicht absehbar waren:
+
+- **`dh_python3` lässt still fallen, was es nicht abbilden kann.** `pdfminer.six` fehlte in
+  der Depends-Zeile, und die Versionsuntergrenzen aus `pyproject.toml` kamen gar nicht erst
+  an. Beides steht jetzt ausgeschrieben in `debian/control`. Fedoras `%pyproject`-Makros
+  übernehmen beides von selbst — dieselbe Aufgabe, zwei sehr verschiedene Werkzeuge.
+- **Ein Fehlschlag links in einer Pipe beendet die Shell nicht.** `git archive` fehlte im
+  SRPM-Buildroot, `gzip` war mit leerer Eingabe zufrieden, und ein gültiges 20-Byte-Archiv
+  ohne Inhalt wanderte durch bis ins `%prep`. `.copr/Makefile` baut das Archiv jetzt mit
+  `tar`, mit `pipefail` und einer Prüfung des Inhalts.
+- **Prüfungen müssen die Eigenschaft prüfen, nicht die Umgebung.** `test -f
+  /usr/share/man/man1/maildigest.1.gz` scheiterte auf Ubuntu, weil dessen Container-Image
+  Handbuchseiten beim Entpacken verwirft — das Paket war in Ordnung. Gefragt wird jetzt das
+  `.deb` selbst.
+- **Veröffentlichung braucht eine Warteschlange.** Zwei gleichzeitige Läufe hätten sich beim
+  Schreiben nach `gh-pages` gegenseitig abgewiesen; der Job hat eine `concurrency`-Gruppe.
