@@ -213,6 +213,23 @@ jobs:
             echo "secret COPR_WEBHOOK_URL missing — dnf delivery skipped."
             exit 0
           fi
+          # GitHub's secret field is a textarea, so a pasted URL almost always
+          # carries a trailing newline. curl then rejects the whole thing with
+          # "Malformed input to a URL function" and the release fails on a
+          # stray byte nobody can see. Strip every whitespace character and
+          # check what is left actually looks like the webhook URL.
+          HOOK="$(printf '%s' "$HOOK" | tr -d '[:space:]')"
+          case "$HOOK" in
+            *"<"*|*">"*)
+              echo "COPR_WEBHOOK_URL still contains a placeholder such as <PACKAGE_NAME>." >&2
+              exit 1
+              ;;
+            https://copr.fedorainfracloud.org/webhooks/custom/*) ;;
+            *)
+              echo "COPR_WEBHOOK_URL is not a COPR *custom* webhook URL (the GitHub one expects a GitHub payload)." >&2
+              exit 1
+              ;;
+          esac
           curl -fsSL -X POST "$HOOK" -o /dev/null
           echo "COPR build triggered."
 
