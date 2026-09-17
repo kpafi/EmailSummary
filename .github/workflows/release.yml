@@ -246,6 +246,45 @@ jobs:
       # Deliberately the preinstalled gh rather than a third-party action: a
       # release run that signs and publishes should depend on as little foreign
       # code as possible.
+      - name: Write the release notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The notes are the CHANGELOG section for this version, not
+          # --generate-notes: that lists commit subjects, which say what changed
+          # in the repository, while the CHANGELOG says what changed for the
+          # person installing it. Installation comes first -- a release page is
+          # where people arrive who do not have the program yet.
+          {
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "# Debian 13+, Kali, Ubuntu 26.04+"
+            echo "curl -fsSL https://kpafi.github.io/maildigest/apt/maildigest-archive-keyring.gpg | sudo tee /usr/share/keyrings/maildigest-archive-keyring.gpg > /dev/null"
+            echo "echo \"deb [signed-by=/usr/share/keyrings/maildigest-archive-keyring.gpg] https://kpafi.github.io/maildigest/apt stable main\" | sudo tee /etc/apt/sources.list.d/maildigest.list"
+            echo "sudo apt update && sudo apt install maildigest"
+            echo
+            echo "# Fedora 43+"
+            echo "sudo dnf copr enable kpafi/maildigest && sudo dnf install maildigest"
+            echo
+            echo "# anything else"
+            echo "pipx install git+https://github.com/kpafi/maildigest"
+            echo '```'
+            echo
+            echo "The attached .deb is the same package the repository serves; the wheel and"
+            echo "sdist are for pip and pipx."
+            echo
+            # The section for this version, up to the next "## [" heading.
+            awk -v v="$VERSION" '
+              $0 ~ "^## \\[" v "\\]" {inside=1; print "## Changes in " v; next}
+              inside && /^## \[/ {exit}
+              inside {print}
+            ' CHANGELOG.md
+          } > /tmp/release-notes.md
+          test -s /tmp/release-notes.md
+          grep -q "Changes in $VERSION" /tmp/release-notes.md
+
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -253,5 +292,5 @@ jobs:
           set -eux
           gh release create "$GITHUB_REF_NAME" \
             --title "MailDigest ${{ needs.version.outputs.version }}" \
-            --generate-notes \
+            --notes-file /tmp/release-notes.md \
             assets/python-dist/* assets/deb/*.deb
