@@ -8,7 +8,8 @@ All notable changes to MailDigest. The format follows
 
 ### Distribution
 - **Our own signed apt repository** (ADR-088): MailDigest installs and, more to the point,
-  *updates* through `apt` on **Debian 13 and newer** and **Kali Rolling**. The repository
+  *updates* through `apt` on **Debian 13 and newer**, **Kali Rolling** and **Ubuntu 26.04
+  LTS and newer**. The repository
   lives on GitHub Pages, the packages are signed with a key used for nothing else, and
   `signed-by` binds that key to this one repository. The installation section of the README
   has the two commands. `pipx` stays the way on every other system.
@@ -21,10 +22,10 @@ All notable changes to MailDigest. The format follows
   manual page first. The plan behind it is [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md).
 - **Not yet, deliberately:** dnf. The Fedora side is prepared in the repository
   (`packaging/rpm/maildigest.spec`, `.copr/Makefile`) but no COPR project is connected, so
-  the release skips it. Ubuntu is not covered by the apt repository either — 24.04 LTS
-  carries pydantic 1.10 where the code needs pydantic 2, and 25.04 dropped
-  `python3-imap-tools`; the dependencies in the package say so, so apt refuses the
-  installation there instead of creating one that cannot start.
+  the release skips it. Ubuntu 25.04 and older are not covered either — 24.04 LTS carries
+  pydantic 1.10 where the code needs pydantic 2, and 25.04 dropped `python3-imap-tools`;
+  the dependencies in the package say so, so apt refuses the installation there instead of
+  creating one that cannot start.
 
 ### Fixed
 - The `.deb` declares every runtime dependency, with the lower bounds from

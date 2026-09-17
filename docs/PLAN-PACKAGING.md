@@ -111,7 +111,10 @@ afterwards:
 - **Debian 13 (trixie) and newer** — carries all six dependencies, blocking in the
   install test.
 - **Kali Rolling** — same base, green in every run so far.
-- **No Ubuntu release** — not through apt. Measured on the first runs and then checked
+- **Ubuntu 26.04 LTS and newer** — every dependency in a usable version. It looked
+  unsupported for a while: the probe was red, and only reading the log showed the failure
+  was the test's own, not the package's (see below).
+- **Ubuntu 25.04 and older** — not supported. Measured on the first runs and then checked
   against the Ubuntu archive:
 
   | Ubuntu | `imap-tools` | `pydantic` | usable |
@@ -127,12 +130,14 @@ afterwards:
   lower bounds in `debian/control` are for — apt now refuses the installation instead of
   creating one that cannot run.
 
-  26.04 LTS carries every dependency in a usable version and should work, but the probe was
-  red and the reason was **not investigated** — a deliberate decision, not a finding. Until
-  someone reads that log, Ubuntu is not claimed as supported and goes through `pipx`, where
-  pip enforces the same bounds from `pyproject.toml`. The probe was taken out of the matrix
-  rather than left permanently red, because a check that is always red teaches people to
-  ignore red.
+  26.04 failed for an entirely different reason, and the guesses about it were all wrong.
+  The install succeeded, all six dependencies resolved, the program ran — and the step
+  `test -f /usr/share/man/man1/maildigest.1.gz` failed, because Ubuntu's container image
+  strips `/usr/share/man` on unpack through a `path-exclude` in `/etc/dpkg/dpkg.cfg.d/`
+  while Debian's does not. The manual page was in the package all along. The test now asks
+  the `.deb` whether it ships the page, and only looks on disk where the image does not
+  strip it — a property of the package, tested on the package. The lesson is cheaper than
+  the three rounds of speculation it cost: read the log first.
 
 A single suite directory `stable` is enough as long as one package serves every supported
 system. Should that fall apart later (because Ubuntu needs an older dependency, say), it

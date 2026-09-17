@@ -161,10 +161,13 @@ From then on `apt upgrade` carries new versions along, and `man maildigest` work
 the copy step below. The packages are signed with the repository key; `signed-by` binds
 that key to this one repository and to nothing else on your system.
 
-**Which systems this covers.** Verified on every release: **Debian 13 (trixie) and newer**
-and **Kali Rolling**. Ubuntu is *not* covered — 24.04 LTS ships pydantic 1.10 where the
-code needs pydantic 2, and 25.04 dropped `python3-imap-tools` altogether. On Ubuntu, and on
-anything else, use `pipx` below; it works the same and updates with one command.
+**Which systems this covers.** Verified on every release by installing the package and
+running it: **Debian 13 (trixie) and newer**, **Kali Rolling**, and **Ubuntu 26.04 LTS and
+newer**. Older Ubuntu is not covered — 24.04 LTS ships pydantic 1.10 where the code needs
+pydantic 2, and 25.04 dropped `python3-imap-tools` altogether; the package says so in its
+dependencies, so apt there refuses the installation instead of creating one that cannot
+start. On those, and on anything not Debian-based, use `pipx` below; it works the same and
+updates with one command.
 
 **Everywhere else — with `pipx`.** This puts the `maildigest` command on your path so it can
 be called from any directory:

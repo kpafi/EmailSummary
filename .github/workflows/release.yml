@@ -95,14 +95,12 @@ jobs:
             optional: false
           - image: "kalilinux/kali-rolling"
             optional: true
-          # No Ubuntu in this matrix, on purpose. 22.04 and 24.04 LTS carry
-          # pydantic 1.x and imap-tools 0.5x, 25.04 dropped python3-imap-tools
-          # entirely; the versioned Depends make apt refuse the installation
-          # there rather than create one that cannot start. 26.04 LTS has every
-          # dependency in a usable version and should work, but the probe was
-          # red and the reason was not chased -- so Ubuntu goes through pipx and
-          # the README says so. A permanently red probe only teaches people to
-          # ignore red.
+          # 26.04 LTS is the first usable Ubuntu: 22.04 and 24.04 carry pydantic
+          # 1.x and imap-tools 0.5x, and 25.04 dropped python3-imap-tools
+          # entirely. The versioned Depends make apt refuse the installation
+          # there rather than create one that cannot start.
+          - image: "ubuntu:26.04"
+            optional: true
     container: ${{ matrix.image }}
     steps:
       - uses: actions/download-artifact@v4
@@ -117,7 +115,16 @@ jobs:
           apt-get install -y ./maildigest_*.deb
           maildigest --help > /dev/null
           maildigest --man | head -5
-          test -f /usr/share/man/man1/maildigest.1.gz
+          # The package has to ship the manual page -- that is a property of the
+          # package, so it is read out of the .deb. On disk it is a different
+          # question: container images routinely strip /usr/share/man on unpack
+          # (Ubuntu's does, Debian's does not), and that says nothing about the
+          # package. Testing the file directly failed on Ubuntu for that reason
+          # alone, while everything about the installation was sound.
+          dpkg-deb -c ./maildigest_*.deb | grep -q 'usr/share/man/man1/maildigest\.1\.gz'
+          if ! grep -rqs 'path-exclude.*/usr/share/man' /etc/dpkg/dpkg.cfg.d/; then
+            test -f /usr/share/man/man1/maildigest.1.gz
+          fi
           python3 -m maildigest --help > /dev/null
           # Every runtime dependency, not just the ones that are imported at
           # start-up: pdfminer is loaded lazily inside a subprocess, so a
