@@ -177,9 +177,9 @@ sudo dnf copr enable kpafi/maildigest
 sudo dnf install maildigest
 ```
 
-`dnf upgrade` carries new versions along from then on. `imap-tools` is missing from Fedora
-itself and is built as a second package in the same COPR project, which dnf resolves on its
-own. Which Fedora releases are served is listed on that project page.
+`dnf upgrade` carries new versions along from then on. Built for **Fedora 43, 44 and 45**
+(x86_64) and for Rawhide. `imap-tools` is missing from Fedora itself and is built as a
+second package in the same COPR project, which dnf resolves on its own.
 
 **Everywhere else — with `pipx`.** This puts the `maildigest` command on your path so it can
 be called from any directory:

@@ -289,10 +289,12 @@ more than a release that did not happen.
 ## 11. Switch the README over only afterwards
 
 *Done with 0.2.1.* The installation section leads with apt, names dnf for Fedora, and keeps
-`pipx` for everything else. One thing is still outstanding on the Fedora side: the COPR
-project has only `fedora-rawhide-x86_64` enabled, so a stable Fedora finds no repository
-until those chroots are added and both packages rebuilt. Until then the README points at
-the project page rather than naming releases it cannot promise.
+`pipx` for everything else. Both are named only where a package was verified to exist: for
+apt through the install test on every release, for dnf by fetching the built RPM out of
+each enabled chroot (Fedora 43, 44, 45 and Rawhide). The Fedora side first shipped with
+only `fedora-rawhide-x86_64` enabled, where no stable Fedora finds a repository at all —
+the README named no releases until the stable chroots were added and both packages
+rebuilt, `imap-tools` first.
 
 Until the first **green** release run, the installation section of the README keeps `pipx`
 as the only way. Instructions pointing at a still-empty repository produce a `404` for the
