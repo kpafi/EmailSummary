@@ -4,29 +4,34 @@ All notable changes to MailDigest. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the version numbers follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] — 2026-09-17
 
 ### Distribution
-- **Our own package repositories for apt and dnf** (ADR-088): MailDigest will become
-  installable from a signed apt repository on GitHub Pages (`apt install maildigest`) and
-  from a COPR project (`dnf install maildigest`). Both hang off the release tag:
-  `.github/workflows/release.yml` builds the `.deb`, test-installs it on Debian, Kali and
-  Ubuntu, signs it and triggers the COPR build. The plan with all steps is in
-  [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md); the instructions in the README will
-  only be switched over once the repository really carries packages.
-- Package users get the manual page under `/usr/share/man/man1` — `man maildigest` works
-  without the copy step from the README.
-- Supported through apt: **Debian 13 and newer** and **Kali Rolling**, both verified on
-  every release by installing the built package and running it. Ubuntu is not covered —
-  see the installation section of the README; `pipx` remains the way there.
+- **Our own signed apt repository** (ADR-088): MailDigest installs and, more to the point,
+  *updates* through `apt` on **Debian 13 and newer** and **Kali Rolling**. The repository
+  lives on GitHub Pages, the packages are signed with a key used for nothing else, and
+  `signed-by` binds that key to this one repository. The installation section of the README
+  has the two commands. `pipx` stays the way on every other system.
+- **Package users get the manual page under `/usr/share/man/man1`** — `man maildigest` works
+  without the copy step the README describes for the pipx route.
+- **The release runs itself off the git tag** (`.github/workflows/release.yml`): it builds
+  sdist, wheel and `.deb`, installs the package in Debian and Kali containers and runs it
+  there, and only then signs and publishes. A failing step stops the run before anything is
+  published, and the version is checked against `pyproject.toml`, `__version__` and the
+  manual page first. The plan behind it is [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md).
+- **Not yet, deliberately:** dnf. The Fedora side is prepared in the repository
+  (`packaging/rpm/maildigest.spec`, `.copr/Makefile`) but no COPR project is connected, so
+  the release skips it. Ubuntu is not covered by the apt repository either — 24.04 LTS
+  carries pydantic 1.10 where the code needs pydantic 2, and 25.04 dropped
+  `python3-imap-tools`; the dependencies in the package say so, so apt refuses the
+  installation there instead of creating one that cannot start.
 
-### Changed
-- **Lower bounds on two dependencies**: `pydantic>=2` (the code uses `ConfigDict` and
-  `model_validator`, which do not exist in pydantic 1) and `imap-tools>=1.0` (only the 1.x
-  line is tested). Without them the distribution package inherits unversioned dependencies
-  and installs on systems where it cannot start — Ubuntu 24.04 LTS ships pydantic 1.10 and
-  is therefore not supported; apt now refuses the installation there instead of producing a
-  broken one.
+### Fixed
+- The `.deb` declares every runtime dependency, with the lower bounds from
+  `pyproject.toml`. `dh_python3` had silently dropped `python3-pdfminer` (the dist name
+  `pdfminer.six` cannot be mapped) and emitted the rest unversioned; both are now written
+  out in `debian/control`, and the install test imports every dependency instead of only
+  starting the program.
 
 ## [0.2.0] — 2026-09-14
 

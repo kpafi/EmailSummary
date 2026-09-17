@@ -491,8 +491,9 @@ decided; they are kept in their original language rather than retranslated after
 
 ## Licence and status
 
-Version 0.2.0 (see [CHANGELOG.md](CHANGELOG.md)) — the first public release, with little
-field experience and an honest list of open points (above and in docs/TESTING.md §7). The
+Version 0.2.1 (see [CHANGELOG.md](CHANGELOG.md)) — a distribution release on top of 0.2.0,
+the first public one: same program, now installable and updatable through `apt`. Still
+little field experience and an honest list of open points (above and in docs/TESTING.md §7). The
 binding requirements are in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), the security model
 including the invariant review in [docs/SECURITY.md](docs/SECURITY.md). Please report bugs
 and findings as a GitHub issue with reproduction steps, ideally in the format from

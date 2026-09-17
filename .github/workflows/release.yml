@@ -26,6 +26,19 @@ jobs:
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # The version lives in two files and the manual page carries it too.
+          # pyproject.toml is what the packages are built from, __version__ is
+          # what the program reports about itself -- a release where the two
+          # disagree ships a package that lies about its own version.
+          code="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/maildigest/__init__.py | head -1)"
+          if [ "$code" != "$version" ]; then
+            echo "pyproject.toml ($version) and __version__ ($code) disagree" >&2
+            exit 1
+          fi
+          if ! grep -q "MailDigest $version" man/maildigest.1; then
+            echo "man/maildigest.1 is not for $version -- regenerate with: maildigest --man > man/maildigest.1" >&2
+            exit 1
+          fi
           if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "tag $GITHUB_REF_NAME does not match pyproject.toml ($version)" >&2
             exit 1
