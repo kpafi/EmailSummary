@@ -9,25 +9,25 @@ All notable changes to MailDigest. The format follows
 ### Distribution
 - **Our own signed apt repository** (ADR-088): MailDigest installs and, more to the point,
   *updates* through `apt` on **Debian 13 and newer**, **Kali Rolling** and **Ubuntu 26.04
-  LTS and newer**. The repository
-  lives on GitHub Pages, the packages are signed with a key used for nothing else, and
-  `signed-by` binds that key to this one repository. The installation section of the README
-  has the two commands. `pipx` stays the way on every other system.
+  LTS and newer**. The repository lives on GitHub Pages, the packages are signed with a key
+  used for nothing else, and `signed-by` binds that key to this one repository. The
+  installation section of the README has the two commands. `pipx` stays the way on every
+  other system.
 - **Package users get the manual page under `/usr/share/man/man1`** — `man maildigest` works
   without the copy step the README describes for the pipx route.
 - **The release runs itself off the git tag** (`.github/workflows/release.yml`): it builds
-  sdist, wheel and `.deb`, installs the package in Debian and Kali containers and runs it
-  there, and only then signs and publishes. A failing step stops the run before anything is
+  sdist, wheel and `.deb`, installs the package in Debian, Kali and Ubuntu containers and
+  runs it there, and only then signs and publishes. A failing step stops the run before anything is
   published, and the version is checked against `pyproject.toml`, `__version__` and the
   manual page first. The plan behind it is [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md).
 - **Fedora through `dnf`** — built for Fedora 43, 44 and 45 (x86_64) and Rawhide, from a
-  COPR project (`kpafi/maildigest`) that the release triggers by webhook. `imap-tools` is missing from Fedora and is built as a second package
-  in the same project. Unlike `dh_python3` on the Debian side, the Fedora macros carry the
-  lower bounds over from `pyproject.toml` by themselves.
-- Ubuntu 25.04 and older are not covered — 24.04 LTS carries
-  pydantic 1.10 where the code needs pydantic 2, and 25.04 dropped `python3-imap-tools`;
-  the dependencies in the package say so, so apt refuses the installation there instead of
-  creating one that cannot start.
+  COPR project (`kpafi/maildigest`) that the release triggers by webhook. `imap-tools` is
+  missing from Fedora and is built as a second package in the same project. Unlike
+  `dh_python3` on the Debian side, the Fedora macros carry the lower bounds over from
+  `pyproject.toml` by themselves.
+- Ubuntu 25.04 and older are not covered — 24.04 LTS carries pydantic 1.10 where the code
+  needs pydantic 2, and 25.04 dropped `python3-imap-tools`; the dependencies in the package
+  say so, so apt refuses the installation there instead of creating one that cannot start.
 
 ### Fixed
 - The `.deb` declares every runtime dependency, with the lower bounds from
