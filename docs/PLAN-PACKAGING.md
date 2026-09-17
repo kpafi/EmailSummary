@@ -171,6 +171,10 @@ in and picks the newer one as the installation candidate. What is still outstand
 build of the real `.deb` — that needs `dh-python`, which is (still) missing on this machine,
 and otherwise runs in the workflow's container.
 
+Publishing is serialised with a `concurrency` group on that job: two runs at once would
+both check out `gh-pages`, both add their package to the pool and both push, and the second
+push loses. Building and install testing stay parallel — only the write queues.
+
 Old versions are not deleted. Whoever pins an older version should be able to keep it, and
 the disk footprint of a pure Python package is negligible.
 

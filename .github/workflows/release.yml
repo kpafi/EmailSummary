@@ -135,6 +135,15 @@ jobs:
     name: Publish the apt repository
     needs: [version, deb, install-test]
     runs-on: ubuntu-latest
+    # Only one run may write to gh-pages at a time. Two runs at once (a tag and
+    # a manual dispatch, say) both check the branch out, both add their package
+    # to the pool and both push -- the second push is rejected, and the run that
+    # built a perfectly good package fails at the last step. Builds and install
+    # tests still run in parallel; only publishing queues. cancel-in-progress
+    # stays off: a queued publish must wait, never be dropped.
+    concurrency:
+      group: apt-repo
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
