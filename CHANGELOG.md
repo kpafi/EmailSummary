@@ -60,6 +60,19 @@ All notable changes to MailDigest. The format follows
   `message_size_limit` follows `[limits] max_mail_bytes` instead of a hard-coded 25 MiB,
   so a mail that is too large bounces to the forwarder rather than vanishing later.
 
+### Changed
+- **README shortened by a quarter and reordered.** Installation and quickstart now come
+  right after the security model; the provider table, the app-password note and the
+  alternative install routes are collapsed sections; the `max_tokens` and "why no key"
+  explanations moved into the FAQ. Badges for CI, release and licence at the top. Nothing
+  was dropped that the program does not also explain itself.
+
+### Fixed
+- The package page on GitHub Pages claimed Ubuntu 24.04 and newer; it is 26.04 and newer,
+  as the README, the changelog and the package dependencies say. Template and live page
+  corrected.
+- `pyproject.toml` spelt "summarizes" where every other description says "summarises".
+
 ## [0.2.1] — 2026-09-17
 
 ### Distribution

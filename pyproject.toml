@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "maildigest"
 version = "0.2.1"
-description = "Lightweight tool that summarizes, importance-filters and phishing-checks e-mails from a mirror mailbox and delivers text-only digests to a messenger."
+description = "Lightweight tool that summarises, importance-filters and phishing-checks e-mails from a mirror mailbox and delivers text-only digests to a messenger."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
