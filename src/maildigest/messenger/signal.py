@@ -1,6 +1,6 @@
 """Signal-Adapter über ein lokal laufendes `signal-cli` im JSON-RPC-Modus (Feature-Flag).
 
-Bewusst klein gehalten (PLAN.md WP7: „Aufwand begrenzen"): Der Adapter spricht über einen
+Bewusst klein gehalten (docs/PLAN.md WP7: „Aufwand begrenzen"): Der Adapter spricht über einen
 Unix-Domain-Socket mit `signal-cli --daemon --socket <pfad>` und schickt pro
 Nachrichtenteil ein `send`-Kommando. Es gibt keine Registrierungs-, Gruppen- oder
 Anhang-Funktionen — MailDigest stellt nur Text zu.

@@ -67,6 +67,11 @@ All notable changes to MailDigest. The format follows
   explanations moved into the FAQ. Badges for CI, release and licence at the top. Nothing
   was dropped that the program does not also explain itself.
 
+- `PLAN.md` moved to `docs/PLAN.md`, so the repository root holds only README,
+  changelog, licence and `pyproject.toml`; references in code, tests and README follow.
+  `docs/README-ENTWURF.md`, the superseded draft of the mirror-mailbox section that
+  `connect-mail` now prints itself, is deleted.
+
 ### Fixed
 - The package page on GitHub Pages claimed Ubuntu 24.04 and newer; it is 26.04 and newer,
   as the README, the changelog and the package dependencies say. Template and live page

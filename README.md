@@ -391,7 +391,7 @@ In short: the README explains the tool, `docs/` explains the program.
 | docs/TESTRUNDE-*.md, docs/ABNAHME-FIXRUNDE.md | Records of the test rounds and the acceptance review — *German* |
 | [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md) | How MailDigest reaches apt and dnf: repository layout, signature, release flow |
 | [docs/PLAN-SELFHOST-MAIL.md](docs/PLAN-SELFHOST-MAIL.md) | The self-hosted mirror mailbox: why the command generates and checks instead of installing |
-| [PLAN.md](PLAN.md), [docs/PLAN-FIXRUNDE.md](docs/PLAN-FIXRUNDE.md) | How the project came about: work packages and the fix round, worked through by AI agents and decided by humans — *German* |
+| [docs/PLAN.md](docs/PLAN.md), [docs/PLAN-FIXRUNDE.md](docs/PLAN-FIXRUNDE.md) | How the project came about: work packages and the fix round, worked through by AI agents and decided by humans — *German* |
 
 The documents marked *German* are historical records of how the project was built and
 decided; they are kept in their original language.

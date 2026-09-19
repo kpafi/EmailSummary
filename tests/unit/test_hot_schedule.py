@@ -1,6 +1,6 @@
 """Zeit-Grenzfälle: Digest-Uhrzeit und Wiederanlauf-Ränder der Outbox — Hot-Testing WP10.
 
-Zwei Zeitachsen mit je eigenen Rändern (PLAN.md WP10):
+Zwei Zeitachsen mit je eigenen Rändern (docs/PLAN.md WP10):
 
 * **Sammel-Digest** (`Runner.maybe_send_low_digest`, F-SUM-5): läuft auf **lokaler** Zeit
   (`datetime.now`, wie `[general] low_digest_time`). Interessant sind Mitternacht,

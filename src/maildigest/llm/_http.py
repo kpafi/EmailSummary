@@ -4,7 +4,7 @@ Interne Hilfsschicht (nicht Teil der öffentlichen API des Pakets). Existiert, d
 `anthropic.py` und `openai.py` exakt dieselbe Retry- und Fehlersemantik haben — ohne
 sie zweimal (und irgendwann unterschiedlich) zu implementieren.
 
-Politik (PLAN.md WP4, docs/ARCHITECTURE.md §6):
+Politik (docs/PLAN.md WP4, docs/ARCHITECTURE.md §6):
 * Wiederholt wird nur bei HTTP 429 und 5xx, insgesamt max. :data:`base.MAX_ATTEMPTS`
   Versuche.
 * Wartezeit: exponentielles Backoff (1 s, 2 s, 4 s …, gedeckelt), außer der Server nennt
@@ -42,7 +42,7 @@ _BACKOFF_MAX_SECONDS = 30.0
 
 
 def _is_retryable(status: int) -> bool:
-    """429 (Rate-Limit) und jeder 5xx sind wiederholbar — sonst nichts (PLAN.md WP4).
+    """429 (Rate-Limit) und jeder 5xx sind wiederholbar — sonst nichts (docs/PLAN.md WP4).
 
     Bewusst eng: Ein 400/401/404 wird durch Wiederholung nicht besser, sondern verzögert
     nur die Fehlermeldung an den Nutzer.

@@ -38,7 +38,7 @@ __all__ = [
     "LLMTransportError",
 ]
 
-#: Zeitlimit eines einzelnen LLM-Aufrufs in Sekunden (PLAN.md WP4).
+#: Zeitlimit eines einzelnen LLM-Aufrufs in Sekunden (docs/PLAN.md WP4).
 DEFAULT_TIMEOUT_SECONDS: float = 60.0
 
 #: Maximale Anzahl Versuche je Aufruf (1 regulärer + 2 Retries) bei 429/5xx.

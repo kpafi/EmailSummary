@@ -1,6 +1,6 @@
 """Discord-Adapter über einen Webhook — ausschließlich `content` als reiner Text.
 
-**Keine Embeds** (PLAN.md WP7, T7): Embeds können Titel-/Beschreibungs-Links und
+**Keine Embeds** (docs/PLAN.md WP7, T7): Embeds können Titel-/Beschreibungs-Links und
 Bild-URLs rendern, also genau das, was I3 verbietet. Der Adapter sendet nur das
 `content`-Feld. Zusätzlich unterdrückt `allowed_mentions` jede Erwähnung — ein
 `@everyone` aus einer Angreifer-Mail soll keinen Server aufwecken.

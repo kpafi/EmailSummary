@@ -35,7 +35,7 @@ nur Text. Wer etwas anklicken will, muss bewusst ins echte Postfach gehen.
 ## 2. Sicherheitsinvarianten (nicht verhandelbar)
 
 Diese Invarianten MÜSSEN in jedem Arbeitspaket eingehalten und in Code-Reviews geprüft werden.
-Details und Begründungen: [docs/SECURITY.md](docs/SECURITY.md).
+Details und Begründungen: [docs/SECURITY.md](SECURITY.md).
 
 | ID | Invariante |
 |----|-----------|
@@ -61,9 +61,9 @@ Echtes Postfach ──► Mirror-Postfach ──► [1] Ingest ──► [2] San
                     └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Detaillierte Komponenten- und Datenmodell-Beschreibung: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Detaillierte Komponenten- und Datenmodell-Beschreibung: [docs/ARCHITECTURE.md](ARCHITECTURE.md).
 
-**Tech-Stack (Begründungen in [docs/DECISIONS.md](docs/DECISIONS.md)):**
+**Tech-Stack (Begründungen in [docs/DECISIONS.md](DECISIONS.md)):**
 Python ≥ 3.11, `imap-tools` (IMAP), `httpx` (API-Calls), `pydantic` (Config + LLM-Schema-Validierung),
 `beautifulsoup4` + `lxml` (HTML→Text), `pdfminer.six` (PDF-Text, im Subprozess), SQLite (stdlib),
 `pytest` (Tests). Keine weiteren Laufzeit-Abhängigkeiten ohne ADR.
@@ -72,7 +72,7 @@ Python ≥ 3.11, `imap-tools` (IMAP), `httpx` (API-Calls), `pydantic` (Config + 
 
 ```
 emailzusammenfassung/
-├── PLAN.md                    # dieses Dokument
+├── docs/PLAN.md               # dieses Dokument (seit 2026-09-19 unter docs/)
 ├── README.md                  # Nutzer-Doku (WP9; Feinschliff in WP12)
 ├── CHANGELOG.md               # Release-Notizen (WP12, ab 0.1.0)
 ├── pyproject.toml

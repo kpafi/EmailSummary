@@ -1,4 +1,4 @@
-"""Nebenläufigkeit und Locking der State-Datenbank — Hot-Testing WP10 (PLAN.md WP10).
+"""Nebenläufigkeit und Locking der State-Datenbank — Hot-Testing WP10 (docs/PLAN.md WP10).
 
 Der Betrieb ist als Single-Instance ausgelegt (`state/db.py`, ADR-005), aber genau das ist
 in der Praxis nicht garantiert: Ein Cron-Eintrag mit `run --once` kann sich mit einem noch

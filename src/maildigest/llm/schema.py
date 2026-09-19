@@ -1,6 +1,6 @@
 """`complete_json`: erzwingt ein pydantic-Schema auf der LLM-Antwort (I4/I6).
 
-Ablauf (PLAN.md WP4, docs/ARCHITECTURE.md §6):
+Ablauf (docs/PLAN.md WP4, docs/ARCHITECTURE.md §6):
 
 1. :meth:`LLMProvider.complete` aufrufen,
 2. JSON aus dem Text extrahieren (robust gegen Markdown-Codefences und Begleittext),

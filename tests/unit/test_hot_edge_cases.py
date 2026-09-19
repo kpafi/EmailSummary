@@ -1,6 +1,6 @@
-"""Grenzfall-Tests aus Code-Kenntnis — Hot-Testing WP10 (PLAN.md WP10, docs/TESTING.md §2).
+"""Grenzfall-Tests aus Code-Kenntnis — Hot-Testing WP10 (docs/PLAN.md WP10, docs/TESTING.md §2).
 
-Die Liste aus PLAN.md WP10 wird hier abgearbeitet und erweitert. Getestet wird gezielt an
+Die Liste aus docs/PLAN.md WP10 wird hier abgearbeitet und erweitert. Getestet wird gezielt an
 den Stellen, von denen der Whitebox-Blick weiß, dass sie fragil sind: die Ränder der Limits
 aus docs/SECURITY.md §4 (genau darauf, eins darunter, eins darüber), degenerierte
 MIME-Bäume, kaputte Kodierungen und die Zusammenbau-Stufe.

@@ -1,4 +1,4 @@
-"""Hot-Tester-Regressionen für `maildigest selfhost-mail` (PLAN.md §2, docs/TESTING.md §2).
+"""Hot-Tester-Regressionen für `maildigest selfhost-mail` (docs/PLAN.md §2, docs/TESTING.md §2).
 
 Weißkasten-Runde gegen `selfhost.py`, `selfhost_check.py`, die Vorlagen unter
 `data/selfhost/` und `cmd_selfhost_mail`. Jeder Test hier belegt **einen** Befund und

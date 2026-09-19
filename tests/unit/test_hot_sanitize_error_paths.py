@@ -1,6 +1,6 @@
 """Fehler- und Notpfade der Sanitize-Schicht — Hot-Testing WP10 (NF-6).
 
-Der Sanitizer ist die sicherheitskritischste Komponente (PLAN.md WP3), und gerade seine
+Der Sanitizer ist die sicherheitskritischste Komponente (docs/PLAN.md WP3), und gerade seine
 defensiven Zweige („wirft nie", „best effort", „fail-safe") liefen bisher nicht unter Test:
 Sie werden nur von kaputten Mails erreicht, die kein Korpus-Fall erzeugt. Genau dort wäre
 ein Fehler aber teuer — ein Absturz in `_payload_bytes` würde eine Mail unverarbeitbar
