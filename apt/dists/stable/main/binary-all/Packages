@@ -30,15 +30,15 @@ Version: 0.2.1
 Priority: optional
 Section: mail
 Maintainer: Samuel Krapf <samukrapf@gmail.com>
-Installed-Size: 822
+Installed-Size: 814
 Depends: python3-bs4, python3-httpx, python3-imap-tools (>= 1.0), python3-lxml, python3-pydantic (>= 2), python3:any, python3-pdfminer
 Suggests: postfix, dovecot-imapd, dovecot-lmtpd, certbot, python3-dnspython
 Filename: pool/main/m/maildigest/maildigest_0.2.1_all.deb
-Size: 228344
-MD5sum: 80cad745ed04513300f00a22ca2c948e
-SHA1: ed9f849b191c06d8bf6cc1283a88887528e227a3
-SHA256: cb2e8f8c41f554bf0c00292fd5601bbcb5200cd8fa7526fcf7037b41113d0759
-SHA512: 4ab02d8292d6f33ebbc4765a532499d456f3ac583e18f347b369f6bac5300634431e313dde7f2f8f0640104d4876e23b43086edb2e96f16a9548f5bbf4b236d7
+Size: 224752
+MD5sum: ec18bdb5ac5b1b22d5f5800dfbc8e987
+SHA1: 9ab4440c66dab00745224c4cdf5e176583741ec8
+SHA256: 0d22b934874ede7229cbc9242d81c9909ce74c8c966f111fc00e19c3fd376bca
+SHA512: 0e479be8e8bbb6ec8e9cb4a725efdd07594efdd03e0ea214ed3cd93e4510ea223721b2505ef990641ab1f233a57fc5f31ecbbeed31b20f3f71f48be9b5e8e12e
 Homepage: https://github.com/kpafi/maildigest
 Description: summarises mail from a mirror mailbox into text-only digests
  MailDigest reads a mirror mailbox over IMAP, strips every message down to plain
