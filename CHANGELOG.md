@@ -83,6 +83,13 @@ All notable changes to MailDigest. The format follows
   `connect-mail` now prints itself, is deleted.
 
 ### Fixed
+- **The container probe of `selfhost-mail` failed on the CI runner** with "nothing listens
+  on 993": it started Postfix and Dovecot side by side, and Dovecot binds its LMTP socket
+  below `/var/spool/postfix/private`, a directory Postfix creates only on its first start.
+  The probe now waits for Postfix before starting Dovecot. Under systemd the race never
+  showed, which is why the VM runs were green; a systemd-free run in the VM reproduced the
+  failure and confirms the fix. The probe's "last log lines" on failure were also lost to
+  a redirection in the wrong order and now appear.
 - The package page on GitHub Pages claimed Ubuntu 24.04 and newer; it is 26.04 and newer,
   as the README, the changelog and the package dependencies say. Template and live page
   corrected.

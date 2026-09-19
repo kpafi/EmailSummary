@@ -76,8 +76,16 @@ start_services() {
     systemctl start postfix dovecot
   else
     # No init in a container: both in the foreground, their logs into the work directory.
+    # Postfix first, and only then Dovecot: the LMTP socket from the drop-in lives below
+    # /var/spool/postfix/private, and that directory does not exist until Postfix has
+    # started once (its first start runs post-install). Started side by side, Dovecot
+    # loses the race and dies with "bind(/var/spool/postfix/private/dovecot-lmtp) failed:
+    # No such file or directory / Fatal: Failed to start listeners" — seen on the CI
+    # runner with debian:trixie. Under systemd this never shows, because apply.sh has
+    # restarted Postfix before anything reloads Dovecot.
     postfix start-fg >"$WORK/postfix.log" 2>&1 &
     echo $! > "$WORK/postfix.pid"
+    wait_for_port 127.0.0.1 25 30 || die "nothing listens on 25"
     dovecot -F >"$WORK/dovecot.log" 2>&1 &
     echo $! > "$WORK/dovecot.pid"
   fi
@@ -108,9 +116,9 @@ cleanup() {
   status=$?
   [ "$status" -eq 0 ] || {
     printf '\n--- last log lines -------------------------------------------------\n' >&2
-    tail -n 30 "$WORK/postfix.log" "$WORK/dovecot.log" 2>/dev/null >&2 || true
+    tail -n 30 "$WORK/postfix.log" "$WORK/dovecot.log" >&2 2>/dev/null || true
     if [ "$MODE" = systemd ]; then
-      journalctl --no-pager -n 40 -t postfix/lmtp -t dovecot 2>/dev/null >&2 || true
+      journalctl --no-pager -n 40 -t postfix/lmtp -t dovecot >&2 2>/dev/null || true
     fi
   }
   stop_services
