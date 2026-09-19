@@ -4,7 +4,10 @@
 > NF = non-functional, SEC = security-functional). Agents reference these IDs in commits,
 > tests and ADRs. Changes to this document only with an ADR in DECISIONS.md.
 >
-> Status: `open` → `in-progress (WPx)` → `done (WPx)`.
+> Status: `open` → `in-progress (WPx)` → `done (WPx)`. A requirement whose contract is
+> already written down but whose code is still outstanding carries `planned (WPx)` — the
+> specification is binding from that moment on, the implementation follows in the named
+> work package.
 
 ## 1. Functional requirements
 
@@ -13,6 +16,7 @@
 | F-ING-1 | The tool reads mail from a dedicated mirror mailbox over IMAPS. It writes and deletes nothing there beyond the seen flag and an optional move into a `Processed` folder. | user | done (WP2, corrected in WP11 — ADR-064: raw UID commands, no EXPUNGE; verifiable for the first time) |
 | F-ING-2 | Every mail is processed exactly once (dedupe via Message-ID **and** a content hash, persistent state). "Exactly once" applies per mail, not per Message-ID: two mails with different content and the same header are a collision and both get processed (ADR-079). | derived | done (WP2, extended in the fix round, HC-10) |
 | F-ING-3 | The mirror mailbox is set up through a CLI command (`connect-mail`) with a connection test and instructions for setting up forwarding. | user | done (WP9) — prompts, IMAPS connection test, folder choice from the server list (`ImapClient.list_folders`), forwarding instructions for Gmail/posteo/mailbox.org/generic; nothing is saved until the test passes. Since 2026-09-09 additionally (ADR-075): an explanation of the term IMAP host with examples, translation of a typed mail address into the host, provider-specific instructions for obtaining a password, immediate abort for providers without password login (Outlook.com, Proton) and a provider-specific hint after a failed login |
+| F-ING-4 | A self-hosted mirror mailbox can be prepared and verified through a CLI command that generates the mail-server configuration and checks the result over the network; the command never needs privileges and never stores a secret. | user | done (S1–S5, 2026-09-19) — `maildigest selfhost-mail` generates the Postfix and Dovecot configuration, the DNS records, `apply.sh` and the checklist (`selfhost.py`, templates under `data/selfhost/`), and `--check` verifies DNS, SMTP banner, open-relay refusal, the accepted mirror address, the IMAPS certificate and login and the closed port 143 over the network, with `--wait-for-mail` additionally a real forwarded mail (`selfhost_check.py`). It needs no privileges, reads no system file and writes no secret — `apply.sh` prompts once and stores only the BLF-CRYPT hash. Contract: docs/SPEC-CLI.md §4, reasoning ADR-089, operation docs/OPERATIONS.md §6. Proved by hand in a Debian 13 VM and in CI (`tests/integration/test_selfhost_probe.sh`) |
 | F-SUM-1 | One LLM instance ("summarizer") produces a structured summary per mail (headline, text, category) in a configurable language and length. | user | done (WP5) |
 | F-SUM-2 | The summarizer classifies every mail as `high`/`normal`/`low` importance, with a reason. | user | done (WP5) — `importance` + `importance_reason` come from the summarizer; the delivery threshold is evaluated by `pipeline.process_mail` |
 | F-SUM-3 | The user can adapt the behaviour with custom instructions (what to summarise, how detailed, what counts as important). | user | done (WP5) — `[summarizer] instructions` as a labelled semi-trusted block (I8, ADR-031) |

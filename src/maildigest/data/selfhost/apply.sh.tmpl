@@ -1,0 +1,138 @@
+#!/bin/sh
+# Applies the generated MailDigest mirror-mailbox configuration (F-ING-4, ADR-089).
+#
+#   sudo sh apply.sh
+#
+# What it changes, and nothing else:
+#   * creates the system group and user `vmail` if they are missing
+#   * creates /var/mail/vmail/{{domain}}/ and hands it to vmail
+#   * copies dovecot.conf to /etc/dovecot/conf.d/99-maildigest.conf
+#   * runs postfix.sh (only `postconf -e` lines)
+#   * asks for the mailbox password once and writes /etc/dovecot/users with its
+#     BLF-CRYPT hash, readable only by root and Dovecot — the password itself is never
+#     written anywhere
+#   * installs /etc/letsencrypt/renewal-hooks/deploy/maildigest-reload.sh
+#   * restarts Postfix and reloads Dovecot
+#
+# Re-running it is safe: every step either checks first or overwrites its own result.
+# Undo: docs/OPERATIONS.md describes the reverse of each step.
+
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+domain='{{domain}}'
+address='{{address}}'
+cert_dir='{{cert_dir}}'
+local_part=${address%@*}
+mail_home="/var/mail/vmail/${domain}/${local_part}"
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "apply.sh has to run as root: sudo sh $0" >&2
+  exit 1
+fi
+
+for tool in postconf doveadm doveconf; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "$tool not found — install postfix, dovecot-imapd and dovecot-lmtpd first." >&2
+    exit 1
+  }
+done
+
+if [ ! -r "${cert_dir}/fullchain.pem" ] || [ ! -r "${cert_dir}/privkey.pem" ]; then
+  echo "No certificate in ${cert_dir} — run: certbot certonly --standalone -d ${domain}" >&2
+  exit 1
+fi
+
+echo "1/6  system user vmail"
+getent group vmail >/dev/null 2>&1 || groupadd --system vmail
+getent passwd vmail >/dev/null 2>&1 || useradd --system --gid vmail \
+  --home-dir /var/mail/vmail --shell /usr/sbin/nologin vmail
+mkdir -p "$mail_home"
+chown -R vmail:vmail /var/mail/vmail
+chmod 0700 /var/mail/vmail
+
+echo "2/6  Dovecot drop-in -> /etc/dovecot/conf.d/99-maildigest.conf"
+mkdir -p /etc/dovecot/conf.d
+cp "$here/dovecot.conf" /etc/dovecot/conf.d/99-maildigest.conf
+chmod 0644 /etc/dovecot/conf.d/99-maildigest.conf
+
+echo "3/6  Postfix settings"
+sh -e "$here/postfix.sh"
+
+echo "4/6  mailbox password"
+printf 'Password for %s (not stored, only its hash): ' "$address"
+stty -echo 2>/dev/null || true
+IFS= read -r mailbox_password || true
+stty echo 2>/dev/null || true
+printf '\n'
+if [ -z "${mailbox_password:-}" ]; then
+  echo "No password entered — nothing was written to /etc/dovecot/users." >&2
+  exit 1
+fi
+# `doveadm pw` reads its own prompt from /dev/tty, which cannot be automated; -p is the
+# only way to hash a password that this script already holds. The value is visible in the
+# process list for the duration of this one call — on a machine where you are root anyway.
+hash=$(doveadm pw -s BLF-CRYPT -p "$mailbox_password")
+mailbox_password=''
+umask 077
+printf '%s:%s:vmail:vmail::%s::\n' "$address" "$hash" "$mail_home" > /etc/dovecot/users
+# Dovecot 2.4 runs its auth process unprivileged (user `dovecot`), so a root-only file is
+# unreadable to it and every login fails with `passwd-file: open(...) Permission denied`.
+# Group-readable for the dovecot group and nothing else; the file stays unwritable for
+# that group, and where no such group exists the stricter 0600 root:root remains.
+# Found in the probe of PLAN-SELFHOST-MAIL §7 on Debian 13.
+if getent group dovecot >/dev/null 2>&1; then
+  chown root:dovecot /etc/dovecot/users
+  chmod 0640 /etc/dovecot/users
+else
+  chown root:root /etc/dovecot/users
+  chmod 0600 /etc/dovecot/users
+fi
+
+echo "5/6  certbot deploy hook"
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/maildigest-reload.sh <<'HOOK'
+#!/bin/sh
+# Installed by `maildigest selfhost-mail`: a renewed certificate is only in effect once
+# both services have read it again.
+set -eu
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl reload postfix 2>/dev/null || true
+  systemctl reload dovecot 2>/dev/null || true
+else
+  postfix reload 2>/dev/null || true
+  doveadm reload 2>/dev/null || true
+fi
+HOOK
+chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/maildigest-reload.sh
+
+echo "6/6  restart Postfix, reload Dovecot"
+# A drop-in Dovecot cannot read leaves the running configuration untouched while every
+# `systemctl reload` still reports success — the probe of PLAN-SELFHOST-MAIL §7 walked
+# into exactly that and spent the failure on the check instead of here. `doveconf -n`
+# says it out loud. It reads the certificate files too, so a certificate directory the
+# dovecot service itself cannot see (below /tmp, which systemd hides with PrivateTmp)
+# passes here and still fails at run time; /etc/letsencrypt/live has no such problem.
+doveconf -n >/dev/null || {
+  echo "Dovecot refuses the configuration above — nothing was reloaded." >&2
+  exit 1
+}
+# Postfix has to be **restarted**, not reloaded: postfix.sh sets inet_interfaces, and that
+# key is only read at start-up. A host installed as "Local only" (inet_interfaces =
+# loopback-only, the second choice of Debian's postfix installer) would otherwise keep
+# listening on loopback alone — while `--check` probes 127.0.0.1:25 and reports `ok`.
+# Dovecot has no such key here and a reload is enough for it.
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+  systemctl restart postfix 2>/dev/null || true
+  systemctl reload dovecot 2>/dev/null || systemctl restart dovecot 2>/dev/null || true
+else
+  if postfix status >/dev/null 2>&1; then
+    postfix stop 2>/dev/null || true
+    postfix start 2>/dev/null || true
+  fi
+  doveadm reload 2>/dev/null || true
+fi
+
+echo
+echo "Done. The mailbox is ${address} on ${domain}:993 (IMAPS)."
+echo "Check it with: maildigest selfhost-mail --check"

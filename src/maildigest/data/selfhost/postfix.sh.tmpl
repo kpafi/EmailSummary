@@ -1,0 +1,26 @@
+#!/bin/sh
+# Postfix settings for the MailDigest mirror mailbox on {{domain}} (F-ING-4, ADR-089).
+#
+# Every line below is one `postconf -e` call, so the script is idempotent: running it
+# again writes the same keys with the same values into main.cf and touches nothing else.
+# Run it as root, or let apply.sh run it.
+#
+# `permit_mynetworks` is deliberately absent from the relay restrictions: nothing on this
+# machine relays through this Postfix, and its absence is what lets
+# `maildigest selfhost-mail --check` test for an open relay from localhost.
+
+postconf -e 'myhostname = {{domain}}'
+postconf -e 'mydestination ='
+postconf -e 'mynetworks_style = host'
+postconf -e 'virtual_mailbox_domains = {{domain}}'
+postconf -e 'virtual_mailbox_maps = inline:{ {{address}}=1 }'
+postconf -e 'virtual_transport = lmtp:unix:private/dovecot-lmtp'
+postconf -e 'smtpd_relay_restrictions = reject_unauth_destination'
+postconf -e 'smtpd_recipient_restrictions = reject_unauth_destination, reject_unlisted_recipient'
+postconf -e 'smtpd_helo_required = yes'
+postconf -e 'disable_vrfy_command = yes'
+postconf -e 'smtpd_tls_cert_file = {{cert_dir}}/fullchain.pem'
+postconf -e 'smtpd_tls_key_file = {{cert_dir}}/privkey.pem'
+postconf -e 'smtpd_tls_security_level = may'
+postconf -e 'message_size_limit = {{max_mail_bytes}}'
+postconf -e 'inet_interfaces = all'

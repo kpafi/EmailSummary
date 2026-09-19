@@ -4,6 +4,62 @@ All notable changes to MailDigest. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the version numbers follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **A self-hosted mirror mailbox**: `maildigest selfhost-mail --domain mirror.example.org`
+  (F-ING-4, ADR-089). For people who run MailDigest on a server of their own and would
+  rather host the mirror mailbox there than rent one. The command **generates and checks,
+  it never installs**: it writes the Postfix settings, the Dovecot drop-in, the DNS
+  records, an apply script and a checklist into `selfhost-mail/`, and the person runs the
+  few privileged steps themselves with their own `sudo`. MailDigest keeps needing no
+  privileges, and it writes no secret — `apply.sh` asks for the mailbox password once and
+  stores only its BLF-CRYPT hash.
+- `maildigest selfhost-mail --check` verifies the finished setup **over the network** and
+  reads no system file: DNS A/AAAA and MX, the SMTP banner, a refused open-relay attempt,
+  the mirror address being accepted, the IMAPS certificate (with a warning below 14 days
+  left), the IMAPS login through MailDigest's own client, and that cleartext IMAP on 143
+  is closed. With `--wait-for-mail` it additionally waits for a real forwarded mail and
+  prints its sender and subject — that, and nothing before it, is the proof that the
+  internet can deliver. Every failing line carries the one sentence that says what to do.
+- The MX check needs `dnspython`, which stays **optional**: without it the line reads
+  `skipped` and the run continues. The distribution packages list Postfix, Dovecot,
+  certbot and dnspython under `Suggests`/weak dependencies only — MailDigest itself needs
+  none of them.
+- Two hard requirements, said plainly in the checklist and in the documentation: a domain
+  of your own (a subdomain is demanded unless `--allow-apex` is given) and port 25
+  reachable from the internet, which rules out nearly every home connection. Supported are
+  Debian 13 and newer and Fedora 43 and newer, the same reach as the packages, because the
+  generated Dovecot configuration uses the 2.4 syntax.
+- The step by step, what `apply.sh` changes and how to undo each change, certificate
+  renewal, rotating the address and every limit in plain words:
+  [docs/OPERATIONS.md](docs/OPERATIONS.md) §6. The contract is
+  [docs/SPEC-CLI.md](docs/SPEC-CLI.md) §4, the reasoning
+  [docs/PLAN-SELFHOST-MAIL.md](docs/PLAN-SELFHOST-MAIL.md).
+- The generated files are not guesses: the seven steps of the plan were run by hand in a
+  Debian 13 VM and are run in CI on `debian:trixie`, applying the configuration for real,
+  delivering a mail and letting `--check` pass — plus a negative case that reopens port 143
+  and must fail. That round corrected three defects that would have broken the feature on
+  every Debian 13 machine (an unreadable `/etc/dovecot/users`, Debian's own
+  `auth_username_format` in `protocol lmtp` throwing the domain away, and a reload that
+  reports success over a configuration Dovecot never read).
+- A white-box and a black-box review round followed, and the feature came back changed
+  where they were right. What is different from the first build: `state.json` is treated
+  as foreign text — the mirror address is validated in full instead of only at both ends,
+  and every line derived from it passes the character allowlist, so a hand-edited state
+  file can no longer smuggle an SMTP command, an IMAP command or an escape sequence
+  anywhere. No check can raise any more; whatever a counterpart does, the line is printed
+  and the command ends with an exit code instead of a traceback, and so does `Ctrl-D` at
+  the mailbox-password prompt. The generated files are written with `O_NOFOLLOW`, and an
+  existing non-empty `--out` directory is refused instead of adopted and re-permissioned.
+  The printed steps and the checklist name the files that were really written, repeat
+  `--out DIR` where it was given, quote paths that a shell would read differently, and
+  offer the `dnf` line next to the `apt` one. `apply.sh` now **restarts** Postfix, because
+  `postfix.sh` sets `inet_interfaces` and a reload would have left a "Local only"
+  installation listening on loopback with every check still green. And
+  `message_size_limit` follows `[limits] max_mail_bytes` instead of a hard-coded 25 MiB,
+  so a mail that is too large bounces to the forwarder rather than vanishing later.
+
 ## [0.2.1] — 2026-09-17
 
 ### Distribution

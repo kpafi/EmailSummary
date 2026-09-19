@@ -1,0 +1,55 @@
+name: Selfhost probe
+
+# The container proof of docs/PLAN-SELFHOST-MAIL.md §7: the files that
+# `maildigest selfhost-mail` generates are applied to a real Postfix and a real Dovecot,
+# one mail is delivered and `--check` has to pass — plus the negative case, which proves
+# the check tests something. Templates that were never applied are guesses (ADR-089).
+#
+# It runs on pull requests that touch the generator, the templates or the probe itself:
+# everything else in the repository cannot break a mail server, and a container that
+# installs Postfix and Dovecot takes minutes that the ordinary CI run should not.
+
+on:
+  pull_request:
+    paths:
+      - "src/maildigest/selfhost*"
+      - "src/maildigest/data/selfhost/**"
+      - "tests/integration/test_selfhost_probe.sh"
+      - ".github/workflows/selfhost-probe.yml"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: Apply the generated configuration for real
+    runs-on: ubuntu-latest
+    # Debian 13 is the reach of the generated Dovecot 2.4 syntax (§4, ADR-088).
+    container: debian:trixie
+    timeout-minutes: 20
+    steps:
+      - name: Base tools
+        run: |
+          set -eux
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            ca-certificates git openssl python3 python3-venv procps
+
+      - uses: actions/checkout@v4
+
+      - name: Install MailDigest from this tree
+        run: |
+          set -eux
+          python3 -m venv /opt/maildigest
+          /opt/maildigest/bin/pip install --quiet .
+          ln -sf /opt/maildigest/bin/maildigest /usr/local/bin/maildigest
+          maildigest --help > /dev/null
+
+      - name: Probe
+        # No init in the container, so the script starts Postfix and Dovecot in the
+        # foreground itself; --mode makes that explicit instead of relying on detection.
+        run: sh tests/integration/test_selfhost_probe.sh --mode container
+
+      - name: Logs of the failed run
+        if: failure()
+        run: |
+          tail -n 200 /tmp/maildigest-selfhost-probe/postfix.log || true
+          tail -n 200 /tmp/maildigest-selfhost-probe/dovecot.log || true

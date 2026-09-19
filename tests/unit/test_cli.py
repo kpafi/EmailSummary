@@ -334,6 +334,7 @@ def test_alle_kommandos_haben_eine_funktion() -> None:
     assert set(subparsers.choices) == {
         "init",
         "connect-mail",
+        "selfhost-mail",
         "connect-llm",
         "connect-messenger",
         "test",

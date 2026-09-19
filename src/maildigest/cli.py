@@ -32,11 +32,13 @@ import argparse
 import contextlib
 import copy
 import getpass
+import ipaddress
 import json
 import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -52,7 +54,7 @@ import httpx
 from imap_tools import MailMessage
 from pydantic import BaseModel, SecretStr
 
-from maildigest import __version__, providers
+from maildigest import __version__, providers, selfhost, selfhost_check
 from maildigest.agents.critic import CriticAgent
 from maildigest.agents.offline import OfflineCritic, OfflineSummarizer
 from maildigest.agents.summarizer import SummarizerAgent
@@ -64,6 +66,7 @@ from maildigest.config import (
     ConfigError,
     GeneralConfig,
     ImapConfig,
+    LimitsConfig,
     LlmConfig,
     MessengerConfig,
     TelegramConfig,
@@ -313,7 +316,16 @@ class Console:
         if not self.interactive:
             return ""
         if _isatty(self.stdin):
-            return getpass.getpass(f"{prompt}: ").strip()
+            try:
+                return getpass.getpass(f"{prompt}: ").strip()
+            except EOFError as exc:
+                # Strg-D am Terminal ist derselbe Abbruch wie ein erschöpfter stdin ohne
+                # Terminal; `_readline` behandelt den bereits so (SPEC-CLI.md §2).
+                raise CliError(
+                    "Input aborted (end of input reached). For runs without a terminal, "
+                    "use --non-interactive and pass the values as options.",
+                    EXIT_USAGE,
+                ) from exc
         return self._readline(f"{prompt}: ")
 
     def confirm(self, prompt: str, *, default: bool = False) -> bool:
@@ -1092,6 +1104,355 @@ def _test_imap_and_choose_folder(ctx: Context, section: ImapConfig) -> str:
     console.out("Which folder should MailDigest read?")
     index = console.choose("Folder", names, default_index=default_index)
     return folders[index]
+
+
+# --- Kommando: selfhost-mail ---------------------------------------------------------------
+
+#: Schlusssatz der Erzeugung (SPEC-CLI.md §4, wörtlich).
+_SELFHOST_REACH_NOTE = (
+    "Port 25 must be reachable from the internet and the domain must be yours — home\n"
+    "connections almost never qualify. Nothing written here is a secret: apply.sh asks for the\n"
+    "mailbox password and stores only its hash."
+)
+
+#: Zieladressen der Routenabfrage für die eigene IPv4-/IPv6-Adresse. Bewusst
+#: Dokumentationsadressen (RFC 5737, RFC 3849): Ein verbundener UDP-Socket verschickt
+#: nichts, er lässt den Kernel nur die Quelladresse der Route wählen — und wenn doch
+#: jemals ein Paket entstünde, ginge es an niemanden.
+_ROUTE_PROBE_IPV4 = "192.0.2.1"
+_ROUTE_PROBE_IPV6 = "2001:db8::1"
+
+
+def cmd_selfhost_mail(ctx: Context) -> int:
+    """Erzeugt die Dateien eines selbst gehosteten Spiegelpostfachs oder prüft sie.
+
+    Vertrag: docs/SPEC-CLI.md §4 `selfhost-mail`; Entwurf: docs/PLAN-SELFHOST-MAIL.md.
+    Zwei Modi, die einander ausschließen; die Optionen des jeweils anderen sind ein
+    Bedienfehler (Exit-Code 2).
+    """
+    args = ctx.args
+    check = bool(getattr(args, "check", False))
+    _reject_mixed_selfhost_modes(args, check=check)
+    if check:
+        return _check_selfhost_mail(ctx)
+    return _generate_selfhost_mail(ctx)
+
+
+def _reject_mixed_selfhost_modes(args: argparse.Namespace, *, check: bool) -> None:
+    """Prüft die Modus-Ausschlüsse aus SPEC-CLI.md §4 (alle Exit-Code 2)."""
+    generate_only = [
+        name
+        for name, value in (
+            ("--domain", getattr(args, "domain", None)),
+            ("--allow-apex", getattr(args, "allow_apex", False)),
+            ("--cert-dir", getattr(args, "cert_dir", None)),
+        )
+        if value
+    ]
+    if check and generate_only:
+        raise CliError(
+            f"{', '.join(generate_only)} belongs to the generate mode; --check takes the "
+            "domain and the certificate directory from state.json.",
+            EXIT_USAGE,
+        )
+    if not check and getattr(args, "wait_for_mail", False):
+        raise CliError("--wait-for-mail only works together with --check.", EXIT_USAGE)
+    if getattr(args, "timeout", None) is not None and not getattr(args, "wait_for_mail", False):
+        raise CliError("--timeout only applies to --wait-for-mail.", EXIT_USAGE)
+
+
+def _selfhost_dir(ctx: Context) -> Path:
+    """Das Ausgabeverzeichnis: `--out` oder `selfhost-mail/` neben der Konfiguration (D5).
+
+    Eine Konfigurationsdatei braucht das Kommando **nur** dafür — mit `--out DIR` läuft es
+    ohne eine, was der Container-Probe aus PLAN-SELFHOST-MAIL §7 den Aufruf erlaubt.
+    """
+    chosen = getattr(ctx.args, "out", None)
+    if chosen:
+        return Path(str(chosen)).expanduser()
+    if not ctx.config_path.exists():
+        raise CliError(
+            f"No configuration file ({ctx.config_path}) and no --out DIR — create one with "
+            "`maildigest init`, or choose the output directory with --out.",
+            EXIT_ERROR,
+        )
+    return selfhost.default_output_dir(ctx.config_path)
+
+
+def _local_address(family: int, probe: str) -> str | None:
+    """Die eigene globale Adresse dieser Familie, ohne Paket und ohne Namensauflösung.
+
+    Ein UDP-Socket, der `connect` auf eine Dokumentationsadresse macht, verschickt nichts;
+    er zwingt den Kernel nur, die Route und damit die Quelladresse zu wählen. Private,
+    Loopback- und Link-Local-Adressen gelten als „keine": Sie stünden in `dns.txt` als
+    Empfehlung, an die die Welt nicht zustellen kann.
+
+    Site-local (`fec0::/10`) wird ausdrücklich mitgeprüft: `ipaddress` hält diesen von
+    RFC 3879 abgeschafften Bereich für global, und die Probe-VM aus PLAN-SELFHOST-MAIL §7
+    bekommt genau so eine Adresse — eine AAAA-Empfehlung darauf wäre falsch (S4).
+    """
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(1.0)
+            sock.connect((probe, 9))
+            raw = str(sock.getsockname()[0])
+    except OSError:
+        return None
+    try:
+        parsed = ipaddress.ip_address(raw.split("%", 1)[0])
+    except ValueError:  # pragma: no cover - getsockname liefert immer eine Adresse
+        return None
+    site_local = getattr(parsed, "is_site_local", False)
+    return str(parsed) if parsed.is_global and not site_local else None
+
+
+def _local_addresses() -> tuple[str | None, str | None]:
+    """Die eigenen globalen IPv4- und IPv6-Adressen (je `None`, wenn es keine gibt)."""
+    return (
+        _local_address(socket.AF_INET, _ROUTE_PROBE_IPV4),
+        _local_address(socket.AF_INET6, _ROUTE_PROBE_IPV6),
+    )
+
+
+def _selfhost_max_mail_bytes(ctx: Context) -> int:
+    """Die wirksame Grenze aus `[limits] max_mail_bytes` für Postfix' `message_size_limit`.
+
+    Ohne Konfigurationsdatei (mit `--out` erlaubt) gilt die Vorgabe. Gelesen wird nur diese
+    eine Sektion: Die Erzeugung braucht sonst nichts aus der Konfiguration und soll nicht
+    an einer halb ausgefüllten `[imap]`-Sektion scheitern.
+    """
+    if not ctx.config_path.exists():
+        return selfhost.DEFAULT_MAX_MAIL_BYTES
+    document = ConfigFile.load(ctx.config_path)
+    limits = _validate(LimitsConfig, document.section("limits"), str(ctx.config_path))
+    return limits.max_mail_bytes
+
+
+def _generate_selfhost_mail(ctx: Context) -> int:
+    """Erzeugt Verzeichnis, sechs Dateien und die Prüfliste (SPEC-CLI.md §4)."""
+    console, args = ctx.console, ctx.args
+    entered = getattr(args, "domain", None)
+    if not entered:
+        raise CliError(
+            "selfhost-mail needs --domain <your domain> to generate the files, or --check "
+            "to check an existing mirror mailbox.",
+            EXIT_USAGE,
+        )
+    try:
+        domain = selfhost.validate_domain(
+            str(entered), allow_apex=bool(getattr(args, "allow_apex", False))
+        )
+        chosen_cert_dir = getattr(args, "cert_dir", None)
+        cert_dir = (
+            selfhost.validate_cert_dir(str(chosen_cert_dir))
+            if chosen_cert_dir
+            else selfhost.default_cert_dir(domain)
+        )
+    except selfhost.SelfhostError as exc:
+        # Ein unerlaubter Optionswert ist ein Bedienfehler, kein Konfigurationsfehler
+        # (SPEC-CLI.md §2, ADR-069).
+        raise CliError(str(exc), EXIT_USAGE) from exc
+
+    directory = _selfhost_dir(ctx)
+    _refuse_existing_mailbox(directory)
+    max_mail_bytes = _selfhost_max_mail_bytes(ctx)
+
+    address = selfhost.generate_address(domain)
+    ipv4, ipv6 = _local_addresses()
+    out_option = str(getattr(args, "out", "") or "") or None
+    try:
+        files = selfhost.render_files(
+            domain=domain,
+            address=address,
+            cert_dir=cert_dir,
+            out_dir=directory,
+            ipv4=ipv4,
+            ipv6=ipv6,
+            out_option=out_option,
+            max_mail_bytes=max_mail_bytes,
+        )
+        selfhost.write_files(directory, files)
+        selfhost.write_state(
+            directory,
+            selfhost.MirrorState(
+                domain=domain,
+                address=address,
+                cert_dir=cert_dir,
+                generated_at=selfhost.now_stamp(),
+            ),
+        )
+    except selfhost.SelfhostError as exc:
+        raise CliError(str(exc), EXIT_ERROR) from exc
+
+    console.out(
+        "Preparing a self-hosted mirror mailbox (files only — nothing is installed, "
+        "nothing needs root here)"
+    )
+    console.out(f"  Domain:      {domain}")
+    console.out(f"  Address:     {address}")
+    console.out(f"  Certificate: {cert_dir}")
+    console.out(f"Written to {directory} ({len(files) + 1} files, directory mode 0700).")
+    console.out()
+    console.out("Next steps:")
+    console.out(
+        selfhost.next_steps(
+            domain=domain,
+            address=address,
+            out_dir=directory,
+            ipv4=ipv4,
+            ipv6=ipv6,
+            out_option=out_option,
+        )
+    )
+    console.out()
+    console.out(_SELFHOST_REACH_NOTE)
+    if ipv4 is None:
+        console.err(
+            "No global IPv4 address found on this host — replace the placeholder in "
+            f"{directory / 'dns.txt'} with the server's public address."
+        )
+    return EXIT_OK
+
+
+def _refuse_existing_mailbox(directory: Path) -> None:
+    """Ein zweites Erzeugen im selben Verzeichnis ist ein Fehler (SPEC-CLI.md §4).
+
+    Die Adresse ist das Geheimnis dieses Postfachs; sie stillschweigend zu ersetzen hieße,
+    eine funktionierende Weiterleitung ohne Vorwarnung tot zu legen. Es gibt deshalb kein
+    `--force`: Wer die Adresse wechseln will, löscht das Verzeichnis.
+    """
+    # `lstat` statt `exists()`: Ein (auch toter) Symlink namens `state.json` meldete sonst
+    # „hier liegt kein Postfach" und die Erzeugung schriebe durch ihn hindurch.
+    state_path = directory / selfhost.STATE_FILENAME
+    try:
+        state_path.lstat()
+    except OSError:
+        return
+    try:
+        address = selfhost.read_state(directory).address
+    except selfhost.SelfhostError:
+        address = "unreadable state.json"
+    raise CliError(
+        f"{directory} already holds a mirror mailbox ({address}) — remove the directory "
+        "to generate a new address.",
+        EXIT_ERROR,
+    )
+
+
+def _selfhost_probes(ctx: Context) -> selfhost_check.Probes:
+    """Die Außenwelt der Prüfungen — einzige Naht, an der ein Test sie ersetzen kann.
+
+    Nur `sleep` kommt aus den Hooks: Es ist das Einzige, was auch ein Test der CLI-Ebene
+    zwingend ersetzen muss, damit `--wait-for-mail` nicht wirklich wartet. Alles andere
+    bleibt bei den Vorgaben des Vertrags.
+    """
+    return selfhost_check.Probes(sleep=ctx.hooks.sleep)
+
+
+def _selfhost_check_line(result: selfhost_check.CheckResult) -> str:
+    """Eine Prüfzeile im festen Format aus SPEC-CLI.md §4 (Name 14, Status 7)."""
+    return f"  {result.name:<14} {result.status:<7} {result.text}"
+
+
+def _selfhost_password(console: Console) -> str:
+    """Das Postfach-Passwort für die Anmeldeprobe — dieselbe Regel wie bei `connect-mail`.
+
+    `MAILDIGEST_IMAP_PASSWORD`, sonst eine Abfrage ohne Echo. Es gibt bewusst keine Option
+    dafür (SPEC-CLI.md §4): Ein Passwort auf der Kommandozeile stünde in der Prozessliste
+    und in der Shell-History. Geschrieben wird es nirgends (I5).
+    """
+    from_env = os.environ.get(ENV_IMAP_PASSWORD, "")
+    if from_env:
+        return from_env
+    missing = CliError(
+        f"--check needs the mailbox password: set {ENV_IMAP_PASSWORD} or run without "
+        "--non-interactive.",
+        EXIT_USAGE,
+    )
+    if not console.interactive:
+        raise missing
+    password = console.ask_secret("Mailbox password (for the login test; not stored)")
+    if not password:
+        raise missing
+    return password
+
+
+def _check_selfhost_mail(ctx: Context) -> int:
+    """Prüft ein erzeugtes Postfach über das Netz (SPEC-CLI.md §4, Modus `--check`).
+
+    Die Prüfungen selbst stehen in :mod:`maildigest.selfhost_check`; hier steht, was zum
+    Kommando gehört: Zustand lesen, Passwort besorgen, Zeilen ausgeben, Exit-Code bilden.
+    Ausgegeben wird **während** des Laufs, nicht danach — sonst stünde `--wait-for-mail`
+    bis zu zehn Minuten stumm da.
+    """
+    console = ctx.console
+    directory = _selfhost_dir(ctx)
+    try:
+        state = selfhost.read_state(directory)
+    except selfhost.SelfhostError as exc:
+        raise CliError(str(exc), EXIT_ERROR) from exc
+    timeout = getattr(ctx.args, "timeout", None) or _TIMEOUT_DEFAULT
+    wait_for_mail = bool(getattr(ctx.args, "wait_for_mail", False))
+    password = _selfhost_password(console)
+
+    console.out(
+        f"Checking {_terminal_text(state.domain)} (state.json and the network only — no "
+        "system file is read)"
+    )
+    results: list[selfhost_check.CheckResult] = []
+    for result in selfhost_check.iter_checks(
+        state,
+        password=password,
+        wait_for_mail=wait_for_mail,
+        timeout=timeout,
+        probes=_selfhost_probes(ctx),
+    ):
+        results.append(result)
+        console.out(_selfhost_check_line(result))
+        for warning in result.warnings:
+            console.err(warning)
+
+    failed = [result for result in results if result.failed]
+    if failed:
+        # Der Fertig-Block bleibt aus: Er nennt Zugangsdaten als „bereit", und das wären
+        # sie nach einem FAIL nicht.
+        raise CliError(
+            f"{len(failed)} of {len(results)} checks failed — see the lines above.",
+            EXIT_ERROR,
+        )
+    console.out("All checks passed.")
+    console.out()
+    _print_mirror_ready(console, state, wait_for_mail=wait_for_mail)
+    return EXIT_OK
+
+
+def _print_mirror_ready(
+    console: Console, state: selfhost.MirrorState, *, wait_for_mail: bool
+) -> None:
+    """Der Block, mit dem `connect-mail` weitermacht (SPEC-CLI.md §4).
+
+    Das Passwort steht hier als Satz, nicht als Wert: MailDigest kennt es nur für die
+    Dauer dieses Laufs und legt es nirgends ab (I5, D6).
+    """
+    domain = _terminal_text(state.domain)
+    address = _terminal_text(state.address)
+    console.out("Mirror mailbox ready.")
+    console.out(f"  IMAP host:   {domain}")
+    console.out(f"  Port:        {selfhost_check.IMAPS_PORT}")
+    console.out(f"  Username:    {address}")
+    console.out(f"  Forward to:  {address}")
+    console.out(
+        "  Password:    the one you entered in apply.sh (not stored anywhere by MailDigest)"
+    )
+    console.out()
+    console.out(f"Next: maildigest connect-mail --host {domain} --username {address}")
+    if wait_for_mail:
+        return
+    console.out()
+    console.out(
+        "Not proved yet: that a forward from the internet really arrives. Forward one mail to"
+    )
+    console.out(f"{address} and run: maildigest selfhost-mail --check --wait-for-mail")
 
 
 # --- Kommando: connect-llm --------------------------------------------------------------------
@@ -2050,6 +2411,31 @@ def _token_limit_value(raw: str) -> int:
     return value
 
 
+#: Erlaubte Wartezeit von `--wait-for-mail` in Sekunden (SPEC-CLI.md §4 `selfhost-mail`).
+_TIMEOUT_MIN = 10
+_TIMEOUT_MAX = 3600
+_TIMEOUT_DEFAULT = 600
+
+
+def _timeout_value(raw: str) -> int:
+    """Prüft `--timeout` schon im Parser: ein Wert außerhalb 10…3600 ist Exit-Code 2.
+
+    Raises:
+        argparse.ArgumentTypeError: Keine Zahl oder außerhalb des erlaubten Bereichs.
+    """
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"'{raw}' is not a whole number (allowed: {_TIMEOUT_MIN} to {_TIMEOUT_MAX} seconds)"
+        ) from None
+    if not _TIMEOUT_MIN <= value <= _TIMEOUT_MAX:
+        raise argparse.ArgumentTypeError(
+            f"{value} is outside the allowed range {_TIMEOUT_MIN} to {_TIMEOUT_MAX} seconds"
+        )
+    return value
+
+
 def _port_value(raw: str) -> int:
     """Prüft `--port` schon im Parser, damit ein Bereichsfehler Exit-Code 2 ergibt.
 
@@ -2126,6 +2512,21 @@ examples:
   maildigest connect-mail
   MAILDIGEST_IMAP_PASSWORD=... maildigest connect-mail --non-interactive \\
       --host imap.example.org --username me@example.org --folder INBOX""",
+    ),
+    "selfhost-mail": (
+        """\
+Prepares a mirror mailbox on the machine this command runs on, for people who administer
+a server anyway: it generates the Postfix and Dovecot configuration, the DNS records, an
+apply script and a checklist, and with --check it verifies the result over the network
+(DNS, SMTP banner, open-relay refusal, IMAPS certificate and login, closed port 143;
+--wait-for-mail additionally waits for a real forwarded mail). It installs nothing, needs
+no privileges and writes no secret: apply.sh asks for the mailbox password once and stores
+only its hash. Requirements: a domain of your own and port 25 reachable from the internet.""",
+        """\
+examples:
+  maildigest selfhost-mail --domain mirror.example.org
+  sudo sh selfhost-mail/apply.sh
+  maildigest selfhost-mail --check --wait-for-mail""",
     ),
     "connect-llm": (
         """\
@@ -2272,6 +2673,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mail.add_argument("--no-test", action="store_true", help="save without a connection test")
     mail.set_defaults(func=cmd_connect_mail)
+
+    selfhost_mail = command("selfhost-mail", "generate and check a self-hosted mirror mailbox")
+    selfhost_mail.add_argument(
+        "--domain", metavar="DOMAIN", help="domain the mirror mailbox lives under"
+    )
+    selfhost_mail.add_argument(
+        "--out",
+        metavar="DIR",
+        help="output directory (default: selfhost-mail/ next to the configuration file)",
+    )
+    selfhost_mail.add_argument(
+        "--allow-apex",
+        action="store_true",
+        help="allow an apex domain (two labels) instead of demanding a subdomain",
+    )
+    selfhost_mail.add_argument(
+        "--cert-dir",
+        metavar="DIR",
+        help="directory holding fullchain.pem and privkey.pem "
+        "(default /etc/letsencrypt/live/<domain>)",
+    )
+    selfhost_mail.add_argument(
+        "--check", action="store_true", help="check an existing setup over the network"
+    )
+    selfhost_mail.add_argument(
+        "--wait-for-mail",
+        action="store_true",
+        help="with --check: wait for a real forwarded mail and print sender and subject",
+    )
+    selfhost_mail.add_argument(
+        "--timeout",
+        type=_timeout_value,
+        metavar="SECONDS",
+        help=f"wait time for --wait-for-mail, {_TIMEOUT_MIN} to {_TIMEOUT_MAX} "
+        f"(default {_TIMEOUT_DEFAULT})",
+    )
+    selfhost_mail.set_defaults(func=cmd_selfhost_mail)
 
     llm = command("connect-llm", "connect and test the language model")
     llm.add_argument("--provider", choices=list(_PROVIDERS), help="provider")

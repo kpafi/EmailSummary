@@ -1,0 +1,13 @@
+# DNS records for the MailDigest mirror mailbox on {{domain}}
+# Create them at your DNS provider, then check them with:
+#   maildigest selfhost-mail --check
+#
+# The A line carries the global IPv4 address this host found for itself. If none was
+# found it carries a placeholder instead — replace it with the server's public address.
+# The trailing dot is part of the zone-file form; it marks a fully qualified name.
+
+{{records}}
+
+# The MX record makes this host the mail exchanger for {{domain}} itself. Nothing
+# else is needed: the only recipient this server ever accepts is
+# {{address}}.

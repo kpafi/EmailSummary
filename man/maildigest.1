@@ -11,7 +11,7 @@ maildigest \- summarise mail from a mirror mailbox and deliver text\-only digest
 .SH DESCRIPTION
 MailDigest reads a mirror mailbox over IMAPS, turns every mail into plain text, lets a language model summarise it (optional), lets a second model check it for phishing and delivers text\-only messages to Telegram, Discord or Signal. The messenger never gets a link, an attachment or HTML: whoever wants to click opens the real mailbox.
 .PP
-Commands: \fBinit\fR, \fBconnect\-mail\fR, \fBconnect\-llm\fR, \fBconnect\-messenger\fR, \fBtest\fR, \fBinstructions\fR, \fBrun\fR. Global options may be given before or after the command name.
+Commands: \fBinit\fR, \fBconnect\-mail\fR, \fBselfhost\-mail\fR, \fBconnect\-llm\fR, \fBconnect\-messenger\fR, \fBtest\fR, \fBinstructions\fR, \fBrun\fR. Global options may be given before or after the command name.
 .SH COMMANDS
 .SS "maildigest init"
 Create the configuration file (0600).
@@ -65,6 +65,35 @@ move processed mail there
 save without a connection test
 .PP
 examples: maildigest connect\-mail MAILDIGEST_IMAP_PASSWORD=... maildigest connect\-mail \-\-non\-interactive \e \-\-host imap.example.org \-\-username me@example.org \-\-folder INBOX
+.SS "maildigest selfhost\-mail"
+Generate and check a self\-hosted mirror mailbox.
+.PP
+Prepares a mirror mailbox on the machine this command runs on, for people who administer a server anyway: it generates the Postfix and Dovecot configuration, the DNS records, an apply script and a checklist, and with \-\-check it verifies the result over the network (DNS, SMTP banner, open\-relay refusal, IMAPS certificate and login, closed port 143; \-\-wait\-for\-mail additionally waits for a real forwarded mail). It installs nothing, needs no privileges and writes no secret: apply.sh asks for the mailbox password once and stores only its hash. Requirements: a domain of your own and port 25 reachable from the internet.
+.PP
+Options:
+.TP
+\fB\-\-domain\fR \fIDOMAIN\fR
+domain the mirror mailbox lives under
+.TP
+\fB\-\-out\fR \fIDIR\fR
+output directory (default: selfhost\-mail/ next to the configuration file)
+.TP
+\fB\-\-allow\-apex\fR
+allow an apex domain (two labels) instead of demanding a subdomain
+.TP
+\fB\-\-cert\-dir\fR \fIDIR\fR
+directory holding fullchain.pem and privkey.pem (default /etc/letsencrypt/live/<domain>)
+.TP
+\fB\-\-check\fR
+check an existing setup over the network
+.TP
+\fB\-\-wait\-for\-mail\fR
+with \-\-check: wait for a real forwarded mail and print sender and subject
+.TP
+\fB\-\-timeout\fR \fISECONDS\fR
+wait time for \-\-wait\-for\-mail, 10 to 3600 (default 600)
+.PP
+examples: maildigest selfhost\-mail \-\-domain mirror.example.org sudo sh selfhost\-mail/apply.sh maildigest selfhost\-mail \-\-check \-\-wait\-for\-mail
 .SS "maildigest connect\-llm"
 Connect and test the language model.
 .PP

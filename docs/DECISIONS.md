@@ -3181,3 +3181,87 @@ Vier Dinge hat der Betrieb gelehrt, die in der Entscheidung so nicht absehbar wa
   `.deb` selbst.
 - **Veröffentlichung braucht eine Warteschlange.** Zwei gleichzeitige Läufe hätten sich beim
   Schreiben nach `gh-pages` gegenseitig abgewiesen; der Job hat eine `concurrency`-Gruppe.
+
+## ADR-089: Selbst gehostetes Spiegelpostfach — erzeugen und prüfen, nicht installieren
+- Status: accepted
+- WP / Datum: selfhost-mail (S1), 2026-09-19
+- Kontext: Wer MailDigest ohnehin auf einem eigenen Server betreibt, möchte das
+  Spiegelpostfach dort haben statt bei einem Anbieter. Ein Spiegelpostfach muss
+  Weiterleitungen per SMTP aus dem Internet annehmen (Domain, MX, Port 25, Zertifikat)
+  und sie per IMAPS mit prüfbarem Zertifikat bereitstellen. Ein Installer, der Postfix
+  und Dovecot konfiguriert, wäre der einzige Teil des Programms mit Root-Bedarf und
+  würde Systemdienste verändern, die dem Paket nicht gehören.
+- Entscheidung: Ein Kommando `maildigest selfhost-mail`, das (a) aus einer Domain die
+  Konfigurationsdateien für Postfix und Dovecot, eine DNS-Liste, ein Anwendeskript und
+  eine Prüfliste **erzeugt** und (b) mit `--check` das Ergebnis **über das Netz prüft**
+  (DNS, SMTP-Banner und Relay-Verweigerung, IMAPS mit Zertifikatskette, geschlossener
+  Port 143, mit `--wait-for-mail` der Eingang einer echten Weiterleitung). Es installiert
+  nichts, liest keine Systemdateien und schreibt kein Geheimnis; das Passwort fragt das
+  erzeugte Skript einmal ab und legt nur den Hash ab. Das Postfach ist ein virtueller
+  Dovecot-Nutzer `mirror-<hex>@Domain` mit zufälligem lokalen Teil; Postfix nimmt genau
+  diese eine Adresse an und liefert per LMTP. Für die MX-Abfrage wird `dnspython`
+  optional importiert; fehlt es, wird der Schritt als übersprungen gemeldet. Der
+  vollständige Vertrag — jede Option, jede gedruckte Zeile, jeder Exit-Code — steht in
+  docs/SPEC-CLI.md §4; die Anforderung ist F-ING-4.
+- Alternativen: vollständiger Installer (Root, Support-Senke, Paketpolitik);
+  Systembenutzer mit PAM (Nutzername ≠ Adresse, jeder Systembenutzer wäre Empfänger);
+  docker-mailserver empfehlen (kein geprüftes Ergebnis, falsche Größe); eigener
+  DNS-Parser (Angriffsfläche für einen optionalen Schritt).
+- Konsequenzen: MailDigest bleibt rechtelos; die Pakete bekommen nur `Suggests`. Die
+  Vorlagen sind nur so gut wie ihre Probe — deshalb eine Container-Probe in CI, die die
+  erzeugten Dateien wirklich anwendet, eine Mail zustellt und `--check` bestehen lässt,
+  plus ein Negativfall. Getragen: Debian 13+ und Fedora 43+ (Dovecot 2.4); erreichbarer
+  Port 25 und eigene Domain sind Voraussetzung und stehen so in der Prüfliste.
+
+**Zusätze aus der Spezifikation (S1, 2026-09-19):** Drei Punkte, die der Entwurf offen
+ließ und die der Vertrag entscheiden musste.
+
+- **Das Passwort für den Login-Test.** `--check` muss sich anmelden, besitzt aber kein
+  gespeichertes Geheimnis — das ist der Sinn von I5. Es nimmt deshalb
+  `MAILDIGEST_IMAP_PASSWORD`, sonst fragt es ohne Bildschirmecho; ohne beides endet es im
+  `--non-interactive`-Betrieb mit Exit-Code 2. Eine eigene Umgebungsvariable wurde
+  verworfen: es ist dasselbe Postfach und dasselbe Passwort wie bei `connect-mail`, und
+  eine zweite Variable wäre eine zweite Stelle, an der ein Geheimnis liegen kann.
+- **Die Spezifikation steht vor dem Code.** Der Abschnitt in SPEC-CLI.md §4 trägt bis zur
+  Implementierung den Zusatz „— planned"; `tests/unit/test_spec_cli.py` gleicht die
+  Kommandoüberschriften mechanisch gegen den Argumentparser ab, und ein dort
+  dokumentiertes Kommando ohne Code würde diesen Abgleich zu Recht zum Scheitern bringen.
+  Der Zusatz hält beides gleichzeitig wahr: der Vertrag ist geschrieben und verbindlich,
+  der Abgleich prüft weiterhin nur, was es gibt. Das Paket, das den Code liefert, streicht
+  den Zusatz und trägt das Kommando in §1 nach.
+- **Die A/AAAA-Prüfung verlangt keine öffentliche Adresse.** Sie scheitert nur, wenn die
+  Domain gar nicht auflöst; eine private oder Loopback-Adresse ergibt `ok` mit einer
+  Warnung auf stderr. Sonst könnte die Container-Probe, die `mirror.test` auf 127.0.0.1
+  legt, ihre eigene Prüfung nicht bestehen — und ob die Welt zustellen kann, beweist
+  ohnehin nur `--wait-for-mail`.
+
+**Nachtrag aus der Prüfrunde (Hot- und Cold-Tester, 2026-09-19):** Fünf Punkte, an denen
+das gebaute Verhalten vom Entwurf abwich oder ihn schärfen musste.
+
+- **`state.json` ist Fremdtext.** Die Adresse wurde nur vorn (`mirror-<hex>@`) und hinten
+  (`@domain`) geprüft; dazwischen war alles erlaubt und ging unverändert in den
+  SMTP-Dialog, in den IMAP-`LOGIN` und auf das Terminal. Sie wird jetzt **ganz** geprüft
+  (`mirror-<8 Hex>@<geprüfte Domain>`, nichts sonst), und jede Zeile, die einen Wert aus
+  `state.json` zeigt, läuft zusätzlich durch die Zeichen-Allowlist aus ADR-055 — dieselbe
+  zweite Schranke, die Banner und Betreff schon hatten.
+- **Keine Prüfung darf werfen.** `check_smtp` fing nur `OSError` und `SMTPException`,
+  `smtplib` wirft für ein Argument mit Zeilenumbruch aber `ValueError`; die Ausnahme
+  verließ den Prüflauf und die CLI endete im Traceback statt mit Exit-Code 1. Der
+  gefangene Satz ist jetzt weiter (`ValueError` beim SMTP-Dialog, `imaplib.IMAP4.error`
+  bei der Anmeldung).
+- **Das Ausgabeverzeichnis ist ein vierter Eingabewert.** Die Prüfliste und jeder Rat von
+  `--check` nennen die Datei, die wirklich geschrieben wurde, und die Schritte 4 und 5
+  tragen `--out DIR`, wenn der Lauf es tat — sonst prüfte der abgetippte Befehl ein
+  anderes Postfach. Die Zusicherung „byteweise gleich" in SPEC-CLI.md §4 nennt das
+  Verzeichnis deshalb als Eingabe mit.
+- **Ein bestehendes, nicht leeres `--out`-Verzeichnis wird abgelehnt.** Vorher wurde es
+  übernommen, seine Rechte auf 0700 gezogen und die sechs Dateien zwischen fremden Inhalt
+  gelegt (`--out ~` traf das Heimatverzeichnis). Geschrieben wird nur in ein neues oder
+  leeres Verzeichnis; geschrieben wird außerdem mit `O_NOFOLLOW`, damit ein
+  untergeschobener Symlink ein Fehler ist und keine Umleitung.
+- **`message_size_limit` folgt `[limits] max_mail_bytes`.** Der Wert war fest verdrahtet;
+  mit kleinerer Konfiguration nahm Postfix eine Mail an, die der Sanitizer danach verwarf
+  — sie verschwand still, statt beim Weiterleiter abzuprallen, also genau das, was diese
+  Einstellung verhindern soll. Und weil `postfix.sh` `inet_interfaces` setzt, **startet**
+  `apply.sh` Postfix neu, statt ihn neu zu laden: Der Schlüssel wird nur beim Start
+  gelesen.

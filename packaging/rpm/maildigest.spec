@@ -13,6 +13,16 @@ BuildArch:      noarch
 
 BuildRequires:  python3-devel
 
+# Weak dependencies, only for `maildigest selfhost-mail` (F-ING-4, ADR-089): that command
+# generates a Postfix/Dovecot configuration for a self-hosted mirror mailbox and checks
+# the result over the network. MailDigest itself needs none of them, so they are Suggests
+# and not Requires; python3-dns carries the optional MX check, without which that one
+# step reports "skipped".
+Suggests:       postfix
+Suggests:       dovecot
+Suggests:       certbot
+Suggests:       python3-dns
+
 %description
 MailDigest reads a mirror mailbox over IMAP, strips every message down to plain
 text, filters it by importance, checks it for phishing traits and delivers a

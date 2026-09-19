@@ -18,8 +18,8 @@ maildigest <COMMAND> [OPTIONS]
 python -m maildigest <COMMAND> [OPTIONS]
 ```
 
-Seven commands: `init`, `connect-mail`, `connect-llm`, `connect-messenger`, `test`, `run`,
-`instructions`.
+Eight commands: `init`, `connect-mail`, `selfhost-mail`, `connect-llm`, `connect-messenger`,
+`test`, `run`, `instructions`.
 
 An invocation without a command prints the help on **stdout** and exits with code 2.
 `maildigest --help` and `maildigest <COMMAND> --help` print help and exit with code 0. The
@@ -232,6 +232,345 @@ Saving only happens after the test. The file keeps mode 0600.
 For the password there is **deliberately no option**: it comes from the prompt or from
 `MAILDIGEST_IMAP_PASSWORD` and therefore does not end up in the process list or the shell
 history.
+
+### `maildigest selfhost-mail`
+
+Prepares a **self-hosted** mirror mailbox on the machine this command runs on: it *generates*
+the configuration for Postfix and Dovecot, a DNS list, an apply script and a checklist, and
+with `--check` it *verifies* the result over the network. It installs nothing, edits nothing
+under `/etc`, needs no privileges and writes no secret (ADR-089, I5). Everything privileged is
+done by the person, visibly, with their own `sudo`. The command ends where
+`maildigest connect-mail` begins: with an IMAPS host, a username and a forwarding address that
+are known to work.
+
+Two modes, mutually exclusive:
+
+* **generate** (default, needs `--domain`) — writes the output directory and prints the
+  checklist.
+* **check** (`--check`) — reads `state.json` and the network, prints one line per check.
+  `--check` reads **no system file**: never `/etc/postfix`, never `/etc/dovecot`, never the
+  certificate files (ADR-089, D7). What it reports is what the outside world sees.
+
+A configuration file is needed **only** to locate the default output directory. With `--out DIR`
+the command runs without one; without `--out` and without a configuration file it ends with exit
+code 1 and the pointer to `maildigest init`.
+
+#### Domain rules
+
+The value of `--domain` is normalised (a trailing dot is removed, ASCII letters are lowercased)
+and then has to satisfy all of — the ASCII rule is applied to the **entered** value as well as
+to the normalised one, because `str.lower()` folds some non-ASCII characters to ASCII (U+212A
+KELVIN SIGN becomes `k`):
+
+* only the ASCII characters `a`–`z`, `0`–`9`, `-` and the separating `.`; no IDN and no
+  punycode — a label starting with `xn--` is refused just like a non-ASCII character;
+* every label 1–63 characters, not starting or ending with `-`, the whole name at most 253
+  characters;
+* at least **three** labels (`mirror.example.org`), unless `--allow-apex` is given; with
+  `--allow-apex` at least two (`example.org`).
+
+A violation is a disallowed option value: exit code **2**, message on stderr, nothing written.
+The messages are
+
+```
+Error: --domain: only ASCII host names, no IDN (got "<value>").
+Error: --domain: "<value>" is an apex domain — use a subdomain such as mirror.<value>, or pass --allow-apex.
+Error: --domain: not a valid host name (got "<value>").
+```
+
+A dedicated subdomain is recommended because the MX of the apex domain and the mail already
+running there stay untouched (docs/PLAN-SELFHOST-MAIL.md §4).
+
+#### Certificate-directory rules
+
+`--cert-dir` ends up in generated shell scripts and in the Dovecot configuration and is
+therefore checked just as strictly: an absolute path built from `a`–`z`, `A`–`Z`, `0`–`9`, `.`,
+`_`, `-` and `/`, with no `..` segment; a trailing slash is removed. Anything else is a
+disallowed option value — exit code **2**, nothing written:
+
+```
+Error: --cert-dir: needs an absolute path without unusual characters (got "<value>").
+```
+
+The directory does **not** have to exist at generation time (the certificate is issued in step
+2 of the checklist); `apply.sh` refuses to run without it. An empty value (`--cert-dir ""`) is
+treated as not given and falls back to `/etc/letsencrypt/live/<domain>`.
+
+#### The generated directory
+
+The output directory is `selfhost-mail/` next to the configuration file, or `DIR` from `--out`.
+It is created with file mode **0700**. It must be new or empty: a directory that already holds
+a `state.json` is refused because the mirror address would be replaced, and any other non-empty
+directory is refused too (exit code 1, see below) — otherwise the six files would land between
+unrelated content and that directory's mode would be tightened to 0700 behind the user's back
+(`--out ~` was the case that made this a rule). An **empty** existing directory is used, and its
+mode is set to 0700. Each file is written with `O_NOFOLLOW`: an entry of one of the six names
+that is a symbolic link is an error, never a redirect. Six files, in this order in the output:
+
+| File | Content |
+|---|---|
+| `dns.txt` | The A/AAAA/MX records to create, one per line, in zone-file form |
+| `postfix.sh` | Only `postconf -e '<key> = <value>'` lines, idempotent, nothing else touched (mode 0700) |
+| `dovecot.conf` | The drop-in for `/etc/dovecot/conf.d/99-maildigest.conf` (Dovecot 2.4 syntax; the 2.3 equivalents as comments) |
+| `apply.sh` | Copies the two above into place, creates the `vmail` user, asks for the mailbox password **once**, writes `/etc/dovecot/users` with the `doveadm pw -s BLF-CRYPT` hash, readable only by root and Dovecot (`root:dovecot` mode 0640 where that group exists, `root:root` mode 0600 otherwise — Dovecot 2.4 authenticates unprivileged and cannot read a root-only file), installs the certbot deploy hook, checks the configuration with `doveconf -n`, then **restarts** Postfix (because `postfix.sh` sets `inet_interfaces`, which is only read at start-up) and reloads Dovecot (mode 0700) |
+| `checklist.txt` | The five steps below, with the domain and the address filled in |
+| `state.json` | See below (mode 0600) |
+
+**Guaranteed of every generated file** (testable without running a mail server): it contains no
+password and no other secret — the directory may be kept, committed or mailed; `postfix.sh`
+contains no line other than `postconf -e …`; `dovecot.conf` contains neither `ssl = no`/`ssl =
+yes` nor an open port 143 listener; every occurrence of the placeholders `{{domain}}`,
+`{{address}}` and `{{cert_dir}}` is substituted. Rendering is deterministic: the same domain,
+address, certificate directory **and output directory** produce byte-identical files — the
+output directory is an input too, because the checklist names the files by their real path.
+`postfix.sh` sets `message_size_limit` to the effective `[limits] max_mail_bytes` of the
+configuration file (25 MiB when there is none), so a mail that is too large bounces to the
+forwarder instead of being dropped later by the sanitizer.
+
+The mailbox is one virtual Dovecot *passwd-file* user `mirror-<8 lowercase hex>@<domain>`; the
+random local part is generated with `secrets` and is the spam defence. Postfix accepts exactly
+this one recipient; there is deliberately **no** `postmaster@` and no `abuse@` mailbox, which
+`checklist.txt` says in plain words.
+
+#### `state.json`
+
+Written on generation, read by `--check`. UTF-8, keys sorted, two-space indent, one trailing
+newline, file mode 0600:
+
+```json
+{
+  "address": "mirror-7f3a9c1d@mirror.example.org",
+  "cert_dir": "/etc/letsencrypt/live/mirror.example.org",
+  "domain": "mirror.example.org",
+  "generated_at": "2026-09-19T12:04:57Z",
+  "version": 1
+}
+```
+
+`generated_at` is UTC, ISO 8601, seconds precision, suffix `Z`. There is **no** password field
+and no other secret; a `state.json` that carries an unknown key, a `version` other than `1` or a
+value that fails the domain rules is a configuration error (exit code 1).
+
+#### Output of the generate mode
+
+```
+Preparing a self-hosted mirror mailbox (files only — nothing is installed, nothing needs root here)
+  Domain:      mirror.example.org
+  Address:     mirror-7f3a9c1d@mirror.example.org
+  Certificate: /etc/letsencrypt/live/mirror.example.org
+Written to /home/u/.config/maildigest/selfhost-mail (6 files, directory mode 0700).
+
+Next steps:
+  1) DNS — create these records at your DNS provider (/home/u/.config/maildigest/selfhost-mail/dns.txt):
+       mirror.example.org.   A     203.0.113.7
+       mirror.example.org.   AAAA  2001:db8::7
+       mirror.example.org.   MX 10 mirror.example.org.
+  2) Packages and certificate, once, as root:
+       Debian/Ubuntu: sudo apt install postfix dovecot-imapd dovecot-lmtpd certbot
+       Fedora:        sudo dnf install postfix dovecot certbot
+       sudo certbot certonly --standalone -d mirror.example.org
+  3) Apply the generated configuration, as root (it asks for the mailbox password):
+       sudo sh /home/u/.config/maildigest/selfhost-mail/apply.sh
+  4) Check from this machine:
+       maildigest selfhost-mail --check
+  5) Prove the whole chain: forward one mail from your real mailbox to
+       mirror-7f3a9c1d@mirror.example.org
+     and let the command wait for it:
+       maildigest selfhost-mail --check --wait-for-mail
+
+Port 25 must be reachable from the internet and the domain must be yours — home
+connections almost never qualify. Nothing written here is a secret: apply.sh asks for the
+mailbox password and stores only its hash.
+```
+
+The addresses in step 1 are the host's own: the command determines the local IPv4 and IPv6
+addresses without sending a packet and without a name lookup (a connected UDP socket towards a
+public address, read back with `getsockname`). If no global IPv4 address is found, the A line
+reads `mirror.example.org.   A     <the server's public IPv4 address>` instead, and stderr
+additionally carries the warning `No global IPv4 address found on this host — replace the
+placeholder in <dir>/dns.txt with the server's public address.` The AAAA line is
+printed only when a global IPv6 address was found; otherwise it is omitted here and `dns.txt`
+carries the comment line `# no global IPv6 address on this host — leave the AAAA record out`.
+An address out of a range that is abolished but still counted as global by `ipaddress`
+(site-local IPv6, `fec0::/10`) counts as not found. The `.` after the host names is part of
+the zone-file form and is printed.
+
+**One name per file per run.** Every path in the output — step 1, step 3, the stderr warning —
+names the directory that was really written: the `--out` value where one was given, the
+absolute default directory otherwise. A path that a shell would read differently (a space, a
+semicolon) is quoted, because step 3 is a line to be typed after `sudo`. Steps 4 and 5 repeat
+`--out DIR` whenever `--out` was given; without it `--check` would look next to the
+configuration file and check a different mailbox, or none. `checklist.txt` carries the same
+five steps, so the file kept for later says the same thing as the terminal did.
+
+`--non-interactive` changes nothing in this mode: the command asks nothing here in the first
+place.
+
+#### Output of the check mode
+
+```
+Checking mirror.example.org (state.json and the network only — no system file is read)
+  DNS A/AAAA     ok      mirror.example.org -> 203.0.113.7, 2001:db8::7
+  DNS MX         ok      MX 10 mirror.example.org.
+  SMTP banner    ok      220 mirror.example.org ESMTP Postfix
+  SMTP relay     ok      RCPT TO an outside address refused (550)
+  SMTP recipient ok      RCPT TO mirror-7f3a9c1d@mirror.example.org accepted (250)
+  IMAPS cert     ok      chain and host name valid, 84 days left
+  IMAPS login    ok      login succeeded, INBOX selectable
+  IMAPS 143      ok      cleartext IMAP is closed
+All checks passed.
+```
+
+The line format is fixed: two spaces, the check name padded to **14** characters, one space, the
+status padded to **7** characters, one space, the text. The names are exactly
+`DNS A/AAAA`, `DNS MX`, `SMTP banner`, `SMTP relay`, `SMTP recipient`, `IMAPS cert`,
+`IMAPS login`, `IMAPS 143` and — only with `--wait-for-mail` — `Mail`, in that order. The status
+is `ok`, `FAIL` or `skipped` (D8). On `ok` the text is the observation, on `FAIL` and `skipped`
+it is **one sentence saying what to do**. Every check runs and is printed even when an earlier
+one failed; there is no early exit.
+
+What each check does:
+
+| Check | Passes when | Text on failure |
+|---|---|---|
+| `DNS A/AAAA` | the domain resolves at all (`getaddrinfo`, both families). A resolved address that is loopback, link-local or private is still `ok`, with the stderr warning `<domain> resolves to a private address (<addr>) — the internet cannot deliver there.`; that is what lets the container probe of PLAN-SELFHOST-MAIL §7 map the domain to 127.0.0.1 | `<domain> does not resolve — create the A (and AAAA) record from <dir>/dns.txt.` |
+| `DNS MX` | an MX record of the domain names the domain itself | `the MX of <domain> does not point at <domain> — create the MX record from <dir>/dns.txt.` |
+| `SMTP banner` | `127.0.0.1:25` answers with a `220` banner naming the domain | `nothing answers on 127.0.0.1:25 with a banner for <domain> — check myhostname in <dir>/postfix.sh and that Postfix is running.` |
+| `SMTP relay` | `RCPT TO:<relay-test@example.com>` after `MAIL FROM:<probe@<domain>>` is **refused** (any 5xx) | `the server accepted mail for an outside address — that is an open relay; reapply <dir>/postfix.sh, which sets smtpd_relay_restrictions.` |
+| `SMTP recipient` | `RCPT TO:` the address from `state.json` is accepted (`250`) | `the server refuses its own mirror address — check virtual_mailbox_maps in <dir>/postfix.sh and reload Postfix.` |
+| `IMAPS cert` | `<domain>:993` presents a chain that `ssl.create_default_context()` accepts for that host name and that is not expired | `the certificate of <domain>:993 is not valid for this host — run certbot certonly --standalone -d <domain> and reload Dovecot.` |
+| `IMAPS login` | the login with the mailbox password succeeds and `INBOX` can be selected | `the login for <address> failed — read the IMAPS cert line first; if that one is ok, rerun apply.sh to set the mailbox password.` |
+| `IMAPS 143` | a connection to `<domain>:143` is refused or answers with no banner within 5 s | `cleartext IMAP on <domain>:143 is open — the port = 0 line from <dir>/dovecot.conf is missing; reapply it and reload Dovecot.` |
+| `Mail` | with `--wait-for-mail`: a mail arrives in `INBOX` within the timeout | `no mail arrived within <timeout> s — forward one mail to <address> and make sure port 25 is reachable from the internet (openssl s_client -starttls smtp -connect <domain>:25 from another machine).` |
+
+`<dir>` in these texts is the output directory of this run, as it was given. The `IMAPS login`
+line names the certificate line first for the same reason the three SMTP lines share a cause:
+if the TLS handshake is rejected, no login was even attempted, and a new mailbox password would
+change nothing — read `IMAPS cert` before acting on `IMAPS login`.
+
+The three SMTP checks share **one** dialogue, so a broken dialogue fails more than its own
+line: if nothing answers on 25, or the connection breaks mid-dialogue, all three report
+`FAIL`; if the dialogue stands but the `MAIL FROM` is refused, `SMTP banner` keeps its own
+result and the two `RCPT TO` lines report `FAIL` (an answer to a `RCPT TO` without an
+accepted sender would say nothing about the recipient rules — a `503 bad sequence` reads
+exactly like a relay refusal). The texts are the ones from the table in each case, so the
+relay line then names the case that could not be ruled out rather than one that was
+observed; `SMTP banner` carries the real cause and is printed first for that reason.
+
+Details of the probes, so that a test can be written against them: the SMTP dialogue is
+`EHLO <domain>`, `MAIL FROM`, the two `RCPT TO`, `RSET`, `QUIT` — `DATA` is never sent and no
+mail is delivered by the check. The IMAPS probe goes through the program's own `ImapClient`
+with the same `ssl.create_default_context()` the daemon uses, never through a second IMAP
+implementation. Socket timeout for SMTP and IMAPS is 10 s, for the port-143 probe 5 s, for the
+MX lookup 5 s. The one operation without a deadline is the A/AAAA lookup: `socket.getaddrinfo`
+offers no timeout, so against a black-holed resolver the first line takes as long as the
+system resolver's own retry budget. No check ever raises: whatever a counterpart does, the line
+is printed and the command ends with an exit code, never with a traceback.
+`--wait-for-mail` records `UIDNEXT` of `INBOX` before it starts waiting and then polls every 5 s
+until the timeout; mail that was already there does not count. On success the text is
+`from <sender> — "<subject>"`, the subject truncated to 60 characters and passed through the
+character allowlist of §2 like every other line that comes from a counterpart.
+
+**The MX check is optional.** It needs `dnspython`, which is not a runtime dependency of
+MailDigest (ADR-089, D4). Without it the line reads
+
+```
+  DNS MX         skipped install python3-dnspython (Debian) / python3-dns (Fedora) for the MX check
+```
+
+and the command continues; `skipped` alone never changes the exit code. A domain that is faked
+with an `/etc/hosts` entry (the probe setup of PLAN-SELFHOST-MAIL §7) cannot satisfy this check
+at all — a hosts file has no MX records — so there the check has to stay `skipped`: do not
+install dnspython for such a setup, or accept one permanently red line.
+
+**The certificate warning.** A valid certificate with fewer than 14 days left is still `ok`, and
+stderr additionally carries `Certificate for <domain> expires in <N> days — check the certbot
+timer.` That is how a silently failed renewal shows up in the one command people run when
+something looks off.
+
+**The password for the login test.** `--check` needs the mailbox password that was entered in
+`apply.sh`. It is taken from `MAILDIGEST_IMAP_PASSWORD` if that is set; otherwise the command
+asks `Mailbox password (for the login test; not stored): ` without screen echo. It is never
+written anywhere — not into `state.json`, not into the configuration file, not into a log. In
+`--non-interactive` mode without `MAILDIGEST_IMAP_PASSWORD` the command ends with exit code 2 and
+`Error: --check needs the mailbox password: set MAILDIGEST_IMAP_PASSWORD or run without
+--non-interactive.` End of input at that prompt — `Ctrl-D` on a terminal or an exhausted stdin —
+is the aborted input of §2: `Error: Input aborted (end of input reached). For runs without a
+terminal, use --non-interactive and pass the values as options.` and exit code **2**.
+
+#### When everything passes
+
+After a run in which no check reported `FAIL`, the command prints the block that `connect-mail`
+needs:
+
+```
+Mirror mailbox ready.
+  IMAP host:   mirror.example.org
+  Port:        993
+  Username:    mirror-7f3a9c1d@mirror.example.org
+  Forward to:  mirror-7f3a9c1d@mirror.example.org
+  Password:    the one you entered in apply.sh (not stored anywhere by MailDigest)
+
+Next: maildigest connect-mail --host mirror.example.org --username mirror-7f3a9c1d@mirror.example.org
+```
+
+Without `--wait-for-mail` the block is followed by
+
+```
+Not proved yet: that a forward from the internet really arrives. Forward one mail to
+mirror-7f3a9c1d@mirror.example.org and run: maildigest selfhost-mail --check --wait-for-mail
+```
+
+If any check reported `FAIL`, the block is not printed; stdout ends after the check lines and
+stderr carries `Error: <N> of <M> checks failed — see the lines above.`
+
+#### Exit codes
+
+Per §2, with no exception:
+
+* **0** — the files were generated, or every check reported `ok` (`skipped` included).
+* **1** — a runtime or configuration error: no configuration file and no `--out`; the output
+  directory already contains a `state.json` (`Error: <dir> already holds a mirror mailbox
+  (<address>) — remove the directory to generate a new address.`); the output directory exists
+  and is not empty (`Error: <dir> already exists and is not empty (<N> entries) — choose an
+  empty directory with --out, or remove this one.`); one of the six names in it is a symbolic
+  link (`Error: <path> is a symbolic link — remove it; the generated files are never written
+  through a link.`); the directory cannot be written; `--check` without a readable `state.json` (`Error: no state.json in <dir> — run
+  maildigest selfhost-mail --domain <your domain> first.`); a `state.json` that is not valid
+  JSON, carries an unknown key or a `version` other than `1`; **any** check with status `FAIL`,
+  the `--wait-for-mail` timeout included.
+* **2** — a usage error: `--domain` missing in generate mode; a domain that breaks the rules
+  above; a `--timeout` outside 10…3600; an option that belongs to the other mode
+  (`--domain`, `--allow-apex` or `--cert-dir` together with `--check`; `--wait-for-mail`
+  without `--check`; `--timeout` without `--wait-for-mail`); a `--cert-dir` that breaks the
+  rules above; `--check` without a password in `--non-interactive` mode; end of input at the
+  password prompt. `SIGINT` during the password prompt ends the command with
+  `Error: Aborted.` and exit code **1**, like every other prompt in §2.
+
+**Options**
+
+| Option | Value | Meaning |
+|---|---|---|
+| `--domain` | DOMAIN | The domain the mirror mailbox lives under. Mandatory in generate mode, forbidden with `--check` |
+| `--out` | DIR | Output directory. Default: `selfhost-mail/` next to the configuration file. With `--check` it is where `state.json` is read from |
+| `--allow-apex` | – | Allow an apex domain (two labels) instead of demanding a subdomain |
+| `--cert-dir` | DIR | Directory holding `fullchain.pem` and `privkey.pem`, subject to the rules above. Default `/etc/letsencrypt/live/<domain>`; an empty value falls back to that default. The generated files take it from here, which is what lets the container probe substitute a local certificate |
+| `--check` | – | Check an existing setup over the network instead of generating |
+| `--wait-for-mail` | – | With `--check`: wait for a real forwarded mail and print its sender and subject |
+| `--timeout` | SECONDS | Wait time for `--wait-for-mail`, 10…3600, default 600 |
+
+There is **deliberately no option for the password**, for the same reason as in `connect-mail`:
+it comes from the prompt or from `MAILDIGEST_IMAP_PASSWORD` and therefore never reaches the
+process list or the shell history.
+
+**Reach.** Debian 13 and newer and Fedora 43 and newer, the same reach as the packages
+(ADR-088), because the generated Dovecot configuration uses the 2.4 syntax. Step 2 of the
+checklist names the package command of both (`apt install postfix dovecot-imapd dovecot-lmtpd
+certbot` and `dnf install postfix dovecot certbot`). On Ubuntu 24.04
+(Dovecot 2.3) the commented 2.3 equivalents in `dovecot.conf` apply and nothing is verified.
+Inbound TLS is deliberately opportunistic (`smtpd_tls_security_level = may`), because forwarders
+that cannot negotiate otherwise would give up silently. The distribution packages list Postfix,
+Dovecot, certbot and dnspython under `Suggests` only — MailDigest itself needs none of them.
 
 ### `maildigest connect-llm`
 

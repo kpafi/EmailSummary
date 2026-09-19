@@ -1,0 +1,63 @@
+# MailDigest mirror mailbox — drop-in for /etc/dovecot/conf.d/99-maildigest.conf
+# Generated for {{domain}} (F-ING-4, ADR-089).
+#
+# Dovecot 2.4 syntax (Debian 13 and newer, Fedora 43 and newer). Where a key was spelled
+# differently in Dovecot 2.3 — Ubuntu 24.04, for instance — the 2.3 form stands as a
+# comment right under it. Those lines are not verified by anyone; on 2.3 you swap them in
+# by hand and delete their 2.4 counterparts.
+
+protocols = imap lmtp
+
+mail_driver = maildir
+# 2.3: mail_location = maildir:/var/mail/vmail/%d/%n
+mail_path = /var/mail/vmail/%{user | domain}/%{user | username}
+mail_inbox_path = /var/mail/vmail/%{user | domain}/%{user | username}
+mail_uid = vmail
+mail_gid = vmail
+
+# TLS is mandatory for every login; the certificate is certbot's, renewed by certbot.
+ssl = required
+ssl_server_cert_file = {{cert_dir}}/fullchain.pem
+ssl_server_key_file = {{cert_dir}}/privkey.pem
+# 2.3: ssl_cert = <{{cert_dir}}/fullchain.pem
+# 2.3: ssl_key = <{{cert_dir}}/privkey.pem
+
+auth_mechanisms = plain
+
+# One virtual user, kept in a passwd-file that holds a BLF-CRYPT hash and no cleartext.
+passdb passwd-file {
+  passwd_file_path = /etc/dovecot/users
+}
+userdb passwd-file {
+  passwd_file_path = /etc/dovecot/users
+}
+# 2.3: passdb { driver = passwd-file  args = /etc/dovecot/users }
+# 2.3: userdb { driver = passwd-file  args = /etc/dovecot/users }
+
+# The user name in this passwd-file *is* the mail address, and LMTP has to look it up that
+# way. Debian's own 20-lmtp.conf sets `auth_username_format = %{user | username | lower}`
+# inside `protocol lmtp`, which throws the domain away: the lookup for
+# mirror-…@{{domain}} then asks for `mirror-…`, finds nothing, and Postfix bounces the
+# mail with `550 5.1.1 User doesn't exist`. This drop-in is read after 20-lmtp.conf and
+# puts the domain back. Found in the probe of PLAN-SELFHOST-MAIL §7 on Debian 13.
+protocol lmtp {
+  auth_username_format = %{user | lower}
+}
+# 2.3: protocol lmtp { auth_username_format = %Lu }
+
+# No cleartext IMAP: port 143 stays closed. MailDigest connects over IMAPS (993) only,
+# and `maildigest selfhost-mail --check` fails when this listener comes back.
+service imap-login {
+  inet_listener imap {
+    port = 0
+  }
+}
+
+# Postfix hands the accepted mail over this socket; nothing else may use it.
+service lmtp {
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+    mode = 0600
+    user = postfix
+    group = postfix
+  }
+}

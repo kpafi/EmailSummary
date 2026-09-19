@@ -52,7 +52,8 @@ Details: [docs/SECURITY.md](docs/SECURITY.md). The full CLI and config contract 
 * Python ≥ 3.11 (runs on a small VPS or a Raspberry Pi)
 * a second, empty IMAP mailbox (the "mirror mailbox") — ideally with a different provider
   than your main mailbox, with its own single-purpose password or app password (which
-  providers work: see [The mirror mailbox](#the-mirror-mailbox))
+  providers work: see [The mirror mailbox](#the-mirror-mailbox); on a server of your own
+  you can host it yourself, see [Hosting it yourself](#hosting-it-yourself))
 * **optional**: access to a language model — MailDigest runs without one as well, but then
   delivers excerpts instead of summaries (see
   [With or without a language model](#with-or-without-a-language-model))
@@ -99,6 +100,22 @@ purpose-generated **app password** — a long string that is valid for this one 
 and can be revoked individually. By far the most common reason for "login failed" even
 though host, username and password appear to be correct. The username is nearly always the
 **full mail address**, not just the part in front of the `@`.
+
+### Hosting it yourself
+
+If you already run MailDigest on a server of your own, you can host the mirror mailbox
+there instead of renting one. `maildigest selfhost-mail --domain mirror.example.org`
+writes the Postfix and Dovecot configuration, the DNS records, an apply script and a
+checklist; you run the few privileged steps yourself with `sudo`, and
+`maildigest selfhost-mail --check --wait-for-mail` then proves the whole chain — DNS, port
+25, the certificate, the IMAPS login, and a real forwarded mail arriving — before you go
+on to `connect-mail`. MailDigest installs nothing, needs no privileges and never stores
+the mailbox password. Two requirements are hard: **a domain of your own** (a subdomain
+such as `mirror.example.org`) and **port 25 reachable from the internet**, which rules out
+nearly every home connection. Supported are Debian 13 and Fedora 43 and newer. The step by
+step is [docs/OPERATIONS.md §6](docs/OPERATIONS.md#6-self-hosted-mirror-mailbox); if this
+sounds like more than you want to own, the €1/month providers in the table above are the
+better answer.
 
 ## With or without a language model
 
@@ -493,12 +510,13 @@ In short: the README explains the tool, `docs/` explains the program.
 | [docs/SPEC-CLI.md](docs/SPEC-CLI.md) | The contract: every command, every prompt, every output line, every config field, all exit codes |
 | [docs/SECURITY.md](docs/SECURITY.md) | Attacker model, sanitizer rules, prompt hardening, invariants I1–I8 including review |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, data model, pipeline contract, error and retry policy |
-| [docs/OPERATIONS.md](docs/OPERATIONS.md) | systemd unit, cron, maintenance, log events |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | systemd unit, cron, maintenance, log events, the self-hosted mirror mailbox (§6) |
 | [docs/TESTING.md](docs/TESTING.md) | Test protocol and all findings logs, including the open findings (§7) |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Requirements with status |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | All design decisions as ADRs (ADR-001 to ADR-088) — *German* |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | All design decisions as ADRs (ADR-001 to ADR-089) — *German* |
 | docs/TESTRUNDE-*.md, docs/ABNAHME-FIXRUNDE.md | Records of the test rounds and the acceptance review, unchanged — *German* |
 | [docs/PLAN-PACKAGING.md](docs/PLAN-PACKAGING.md) | How MailDigest reaches apt and dnf: repository layout, signature, release flow, and the steps only the copyright holder can take |
+| [docs/PLAN-SELFHOST-MAIL.md](docs/PLAN-SELFHOST-MAIL.md) | The self-hosted mirror mailbox: why the command generates and checks instead of installing, and what it produces |
 | [PLAN.md](PLAN.md), [docs/PLAN-FIXRUNDE.md](docs/PLAN-FIXRUNDE.md) | How the project came about: work packages and the fix round, worked through by AI agents and decided by humans — *German* |
 
 The documents marked *German* are historical records of how the project was built and

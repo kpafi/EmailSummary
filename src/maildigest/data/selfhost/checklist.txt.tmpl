@@ -1,0 +1,36 @@
+MailDigest — self-hosted mirror mailbox on {{domain}}
+
+Mail address of the mailbox: {{address}}
+IMAP host / port:            {{domain}} / 993 (IMAPS)
+IMAP username:               {{address}}
+Certificate directory:       {{cert_dir}}
+
+Five steps. Everything privileged happens below with your own sudo; MailDigest itself
+neither installs nor changes anything on this system.
+
+{{steps}}
+
+What this mailbox is, and what it is not:
+
+  * It accepts exactly one recipient: {{address}}. Mail to any other address at
+    {{domain}} is refused at RCPT TO, so there is no backscatter and no mailbox for
+    root@{{domain}}. There is deliberately no postmaster@ and no abuse@ mailbox either,
+    although RFC 5321 expects one from a host that receives mail: this host is a private
+    sink for one person's forwarded mail. If your provider or your own policy insists on
+    a postmaster address, add it by hand to virtual_mailbox_maps in postfix.sh and apply
+    it again.
+  * The random local part is the spam defence — nobody guesses {{address}}. Rotate it by
+    deleting this directory and running `maildigest selfhost-mail --domain {{domain}}`
+    again; the old address stops working as soon as you apply the new files.
+  * Port 25 has to be reachable from the internet. Home connections almost never are:
+    inbound 25 is blocked and the address changes. From another machine:
+      openssl s_client -starttls smtp -connect {{domain}}:25
+  * Inbound TLS is opportunistic on purpose (smtpd_tls_security_level = may). Forwarders
+    that cannot negotiate would otherwise give up silently.
+  * Certificate renewal is certbot's job. apply.sh installs a deploy hook that reloads
+    both services; `maildigest selfhost-mail --check` warns below 14 days left.
+  * Nothing in this directory is a secret. apply.sh asks for the mailbox password and
+    stores only its BLF-CRYPT hash in /etc/dovecot/users, readable by root and Dovecot
+    and nobody else; MailDigest never writes the password anywhere.
+  * Supported: Debian 13 and newer, Fedora 43 and newer (Dovecot 2.4 syntax). On Ubuntu
+    24.04 the commented 2.3 lines in dovecot.conf apply, and nothing there is verified.
