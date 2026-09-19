@@ -4,6 +4,8 @@
 [![Release](https://img.shields.io/github/v/release/kpafi/maildigest)](https://github.com/kpafi/maildigest/releases)
 [![License: MIT](https://img.shields.io/github/license/kpafi/maildigest)](LICENSE)
 
+**The mail summariser you can hand a phishing mail to.**
+
 MailDigest reads a **mirror mailbox** that you forward your mail to, summarises every
 message with a language model, has a second, independent instance check it for phishing,
 and sends you the result as **plain text** on Telegram, Discord or Signal. You see what is
