@@ -402,8 +402,8 @@ decided; they are kept in their original language.
 
 Version 0.2.1 (see [CHANGELOG.md](CHANGELOG.md)): the first public program, 0.2.0, now
 installable and updatable through `apt` and `dnf`. Still little field experience and an
-honest list of open points, above and in docs/TESTING.md §7. Please report bugs and
-findings as a GitHub issue with reproduction steps, ideally in the format from
-docs/TESTING.md §3.
+honest list of open points, above and in docs/TESTING.md §7. Bugs and findings go in as a
+GitHub issue (the bug-report form has the right fields), security problems privately, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 Licence: MIT, see [LICENSE](LICENSE).

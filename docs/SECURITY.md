@@ -498,3 +498,21 @@ against an attacker. The black-box evidence is the cold round (docs/TESTING.md �
    `move_processed_to` does not exist — the error only shows up in production (as
    `imap_postprocess_failed`, without data loss). Named in ADR-065 as a sensible addition, not
    implemented.
+
+## 8. Reporting a vulnerability
+
+Report privately through a
+[GitHub security advisory](https://github.com/kpafi/maildigest/security/advisories/new),
+not as a public issue. Anything that breaks one of the invariants I1–I8 above counts: a
+link, attachment or markup reaching the messenger; mail content in a log at the default
+level; a mail disappearing without the fail-closed note; a way for mail content to reach
+anything other than the two model calls. Include a stripped-down `.eml` where you can —
+`maildigest test --eml file.eml --dry-run` reproduces the whole pipeline without a
+mailbox, a model or a messenger — and never a real mail, password or token.
+
+This is a one-person project. Expect an acknowledgement within a week; a fix for a
+confirmed finding goes out as a release with the finding named in the changelog, and
+credit is given unless you ask otherwise. Findings that are already listed as open in
+[TESTING.md](TESTING.md) §7 or under *Limitations* in the README (image phishing,
+encrypted mail, uncalibrated heuristics) are known and need no report.
+

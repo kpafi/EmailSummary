@@ -1,0 +1,52 @@
+name: Bug report
+description: Something behaves differently from what README or docs/SPEC-CLI.md say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. The fields follow the finding format from docs/TESTING.md §3 — a report
+        in that shape can usually be reproduced and fixed without a round trip.
+        **Never paste a real mail, a password, an API key or a bot token.** A mail that
+        triggers the bug: strip it to the minimum and replace names and addresses.
+  - type: input
+    id: version
+    attributes:
+      label: Version and installation route
+      description: Output of `maildigest --version`, and whether it came from apt, dnf, pipx or a checkout.
+      placeholder: "0.2.1, apt on Debian 13"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Commands in order. `maildigest test --eml file.eml --dry-run` reproduces most processing bugs without a mailbox or a messenger.
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed
+      description: What happened — the terminal output, the message that arrived, or the log lines (`log_level = "INFO"` contains no mail content).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What should have happened, ideally with the README section or the docs/SPEC-CLI.md paragraph that says so.
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity, as you see it
+      options:
+        - critical — content reached me unchecked, or something was lost silently
+        - high — a mail is not processed at all or wrongly warned about every time
+        - medium — wrong output, but nothing lost and nothing unchecked
+        - low — cosmetic, wording, help text
+    validations:
+      required: false

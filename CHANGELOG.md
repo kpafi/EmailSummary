@@ -60,6 +60,16 @@ All notable changes to MailDigest. The format follows
   `message_size_limit` follows `[limits] max_mail_bytes` instead of a hard-coded 25 MiB,
   so a mail that is too large bounces to the forwarder rather than vanishing later.
 
+### Repository
+- **OpenSSF Scorecard** runs on every push to `main` and weekly
+  (`.github/workflows/scorecard.yml`); the score is public at
+  scorecard.dev, the findings land under *Security → Code scanning*. Preparing for it:
+  every GitHub Action is pinned to a commit hash, every workflow token is read-only
+  except in the two release jobs that publish, and Dependabot keeps the pins and the
+  Python dependencies current with one grouped pull request a week.
+- `CONTRIBUTING.md`, a bug-report issue form in the finding format of docs/TESTING.md
+  §3, and docs/SECURITY.md §8 on how to report a vulnerability privately.
+
 ### Changed
 - **README shortened by a quarter and reordered.** Installation and quickstart now come
   right after the security model; the provider table, the app-password note and the
